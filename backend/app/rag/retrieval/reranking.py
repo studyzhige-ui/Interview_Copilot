@@ -12,6 +12,7 @@ from llama_index.core.schema import NodeWithScore, TextNode
 
 from app.rag.domain.models import SearchIntent
 from app.rag.policy import current_rag_policy
+from app.rag.retrieval.workers import pool
 from app.rag.retrieval.candidates import IntentCandidates
 from app.rag.retrieval.fusion import normalized_text_hash
 
@@ -59,13 +60,24 @@ async def rerank_groups(
 ) -> list[list[dict[str, Any]]]:
     """Rerank independent intents concurrently under one bounded deadline."""
 
-    tasks = [asyncio.to_thread(_rerank_group, reranker, group) for group in groups]
-    return list(
-        await asyncio.wait_for(
-            asyncio.gather(*tasks),
-            timeout=current_rag_policy().retrieval.rerank_timeout_seconds,
+    tasks = [
+        asyncio.create_task(pool("reranking").run(_rerank_group, reranker, group))
+        for group in groups
+    ]
+    try:
+        return list(
+            await asyncio.wait_for(
+                asyncio.gather(*tasks),
+                timeout=current_rag_policy().retrieval.rerank_timeout_seconds,
+            )
         )
-    )
+    finally:
+        # On failure/cancellation do not retain queued sibling work. Already
+        # running threads keep their capacity permits until actual completion.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def select_coverage_aware(

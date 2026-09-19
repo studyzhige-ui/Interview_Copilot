@@ -46,6 +46,10 @@ class StaleQuestionError(ValueError):
     concurrent submit already advanced the interview (MOCK-3)."""
 
 
+class PendingAnswerConflictError(ValueError):
+    """An unanswered persisted answer cannot be silently replaced on retry."""
+
+
 class QuestionBusyError(ValueError):
     """Another request is already generating the reply for this question."""
 
@@ -181,17 +185,16 @@ def _resolve_resume_reference(
 
 
 def get_owned_mock_record(
-    db: Session, record_id: str, username: str
+    db: Session, record_id: str, username: str, *, for_update: bool = False
 ) -> InterviewRecord | None:
-    return (
-        db.query(InterviewRecord)
-        .filter(
-            InterviewRecord.id == record_id,
-            InterviewRecord.user_id == resolve_user_pk(db, username),
-            InterviewRecord.source == "mock",
-        )
-        .first()
+    query = db.query(InterviewRecord).filter(
+        InterviewRecord.id == record_id,
+        InterviewRecord.user_id == resolve_user_pk(db, username),
+        InterviewRecord.source == "mock",
     )
+    if for_update:
+        query = query.with_for_update().populate_existing()
+    return query.first()
 
 
 # ── Run lifecycle ────────────────────────────────────────────────────────
@@ -341,7 +344,21 @@ async def submit_answer(
 
     Returns only the persisted interviewer fields needed by the live API.
     """
+    # Freeze scalar inputs before committing Phase A. Accessing an expired ORM
+    # row later would silently start a fresh transaction across the model await.
     conversation_id = runtime.conversation_id
+    record_id = runtime.interview_record_id
+    target_question_count = runtime.target_question_count
+    # Serialize lifecycle mutations in the same record -> runtime lock order.
+    active_record = (
+        db.query(InterviewRecord)
+        .filter_by(id=record_id, user_id=runtime.user_id, source="mock")
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+    if active_record is None or active_record.status != STATUS_MOCK_IN_PROGRESS:
+        raise StaleQuestionError("the mock interview is no longer active")
 
     if question_message_id != runtime.current_question_message_id:
         raise StaleQuestionError(
@@ -371,8 +388,18 @@ async def submit_answer(
     if claim == "busy":
         raise QuestionBusyError("the current question is already being answered")
 
+    claim_generation = runtime.answer_claim_generation
+
     # ── Phase A: persist the answer, commit ─────────────────────────
     last = _last_message(db, conversation_id)
+    if (
+        last is not None
+        and last.role == "user"
+        and (last.content or "").strip() != (answer_text or "").strip()
+    ):
+        raise PendingAnswerConflictError(
+            "a different answer is already saved for this question"
+        )
     dangling_retry = (
         last is not None
         and last.role == "user"
@@ -418,9 +445,8 @@ async def submit_answer(
         append_message(
             db, conversation_id, "user", answer_text, content_blocks_json=user_blocks
         )
-    db.commit()
-
     answered_turns = count_answered_turns(db, conversation_id)
+    db.commit()
 
     # ── LLM turn (no transaction open) ──────────────────────────────
     try:
@@ -431,18 +457,29 @@ async def submit_answer(
             conversation_messages=history,
             user_answer=answer_text,
             user_id=user_id,
-            length_warning_active=answered_turns >= runtime.target_question_count,
+            length_warning_active=answered_turns >= target_question_count,
         )
     except BaseException:
         mock_runtime_service.release_question_claim(
             db,
-            runtime.interview_record_id,
+            record_id,
             question_message_id=question_message_id,
+            claim_generation=claim_generation,
         )
         raise
 
     # ── Phase B: persist the reply + advance runtime, commit ────────
     try:
+        current = mock_runtime_service.lock_question_lease(
+            db,
+            interview_record_id=record_id,
+            question_message_id=question_message_id,
+            claim_generation=claim_generation,
+        )
+        if current is None:
+            raise StaleQuestionError(
+                "the answer lease changed while generating the next question"
+            )
         assistant_msg = append_message(
             db,
             conversation_id,
@@ -456,18 +493,19 @@ async def submit_answer(
 
         mock_runtime_service.advance_runtime(
             db,
-            runtime,
+            current,
             current_stage_key=turn.next_stage_key,
             current_question_message_id=assistant_msg.id,
             commit=False,
         )
-        runtime.answer_claimed_at = None
+        current.answer_claimed_at = None
         db.commit()
     except BaseException:
         mock_runtime_service.release_question_claim(
             db,
-            runtime.interview_record_id,
+            record_id,
             question_message_id=question_message_id,
+            claim_generation=claim_generation,
         )
         raise
     return SubmittedTurn(

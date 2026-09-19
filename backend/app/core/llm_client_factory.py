@@ -33,6 +33,7 @@ from app.core import user_model_selection
 from app.core.config import settings
 from app.core.internal_models import get_internal_model_profile
 from app.core.model_catalog import ModelProfile
+from app.core.model_connection_error import ModelConnectionUnavailable
 from app.core.model_readiness import (
     profile_ready,
     ready_profile_ids,
@@ -113,14 +114,13 @@ def _load_user_provider_overrides(
             organization_id=str(org_id) if org_id else None,
             extra_headers=parse_extra_headers(extra_headers_json),
         )
-    except Exception as exc:  # noqa: BLE001 — never crash chat on DB blip
+    except Exception as exc:  # noqa: BLE001 — outbound authority boundary
+        # A DB outage is not evidence that the user selected the default host.
+        # Do not send private context to a different destination or log headers.
         logger.warning(
-            "user_model_provider_settings lookup failed for user=%s provider=%s: %s",
-            user_id,
-            profile.provider,
-            exc,
+            "Provider connection lookup unavailable (%s)", type(exc).__name__
         )
-        return _NO_OVERRIDES
+        raise ModelConnectionUnavailable() from exc
 
 
 def _resolve_api_base(profile: ModelProfile, user_id: str | None = None) -> str:
@@ -394,6 +394,10 @@ def _build_llm_instance(
         is_chat_model=True,
         is_function_calling_model=profile.supports_function_calling,
         context_window=profile.context_window,
+        max_tokens=profile.max_output_tokens,
+        # Disable the wrapper retry decorator as well as the native SDK's retry.
+        # Callers distinguish a known malformed response from unknown transport.
+        max_retries=0,
         temperature=LLM_TEMPERATURE,
         additional_kwargs=dict(request_overrides or {}),
         default_headers=dict(overrides.extra_headers) or None,

@@ -156,9 +156,14 @@ def test_real_browser_response_loss_refresh_reads_receipt_without_reposting(
 
     def lose_response(route):
         response = route.fetch()  # Real POST completes on the real server FIRST.
-        assert response.status == 200, response.text()
-        commits.append(response.json()["operation_id"])
-        route.abort("failed")  # Browser never receives the successful response.
+        # This endpoint creates a resource and correctly returns 201. Always
+        # settle the intercepted request, even when asserting its response fails;
+        # otherwise the browser hangs and the real failure surfaces at teardown.
+        try:
+            assert response.status == 201, response.text()
+            commits.append(response.json()["operation_id"])
+        finally:
+            route.abort("failed")  # Browser never receives the successful response.
 
     page.route("**/career/interview-invitations/confirm", lose_response)
     form.get_by_role("button", name="确认并保存面试").click()
@@ -214,3 +219,110 @@ def test_real_browser_copilot_preserves_business_url_and_text_mode_needs_no_micr
     page.goto(address + "/mock")
     expect(page.get_by_text("文字面试", exact=True)).to_be_visible()
     assert page.evaluate("window.__microphoneRequests") == 0
+
+
+def test_real_browser_text_interview_refresh_requires_explicit_generation_retry(
+    browser_app,
+):
+    """Production UI/HTTP/SQL with a labeled synthetic model failure and reply."""
+    from playwright.sync_api import expect
+    from app.models.chat import ConversationMessage
+    from app.models.mock_interview_runtime import MockInterviewRuntime
+    from app.services.resume.resume_artifact_service import create_resume_artifact
+
+    address, context, factory = browser_app
+    with factory() as db:
+        owner = db.query(User).filter_by(username="browser-owner").one()
+        create_resume_artifact(
+            db,
+            user_pk=owner.id,
+            operation_key="browser-synthetic-resume",
+            title="合成测试简历",
+            file_asset_id=None,
+            raw_text="合成测试履历：负责 Python 后端与缓存接口。不包含真实个人资料。",
+            make_default=True,
+        )
+        db.commit()
+
+    page = context.new_page()
+    page.on("dialog", lambda dialog: dialog.accept())
+    errors, answer_requests = [], []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.on(
+        "request",
+        lambda request: (
+            answer_requests.append(request.post_data_json)
+            if request.method == "POST" and request.url.endswith("/answer")
+            else None
+        ),
+    )
+    page.add_init_script("""(() => {
+        window.__microphoneRequests = 0;
+        if (navigator.mediaDevices) navigator.mediaDevices.getUserMedia = async () => {
+            window.__microphoneRequests++;
+            throw new Error('Text-only test must not open a microphone');
+        };
+    })();""")
+    login(page, address)
+    page.goto(address + "/mock")
+    page.get_by_role("button", name="粘贴文本", exact=True).click()
+    page.get_by_placeholder("把 JD 全文粘贴到这里…（≥ 20 字才算有效）").fill(
+        "合成岗位：Python 后端工程师，负责接口、事务、缓存与可观察性。"
+    )
+    page.get_by_role("button", name="开始模拟面试", exact=True).click()
+    expect(
+        page.get_by_text(
+            "你好，我们开始吧。先请你结合目标岗位做一个简单的自我介绍。", exact=True
+        )
+    ).to_be_visible()
+    answer = "合成回答：我负责缓存接口，只测量了延迟，没有验证业务成效。"
+    page.get_by_placeholder("输入你的回答，Ctrl+Enter 提交").fill(answer)
+    page.get_by_role("button", name="提交", exact=True).click()
+    expect(
+        page.get_by_role("button", name="重试生成下一题", exact=True)
+    ).to_be_visible()
+    assert len(answer_requests) == 1
+    original = dict(answer_requests[0])
+    page.get_by_role("button", name="重新连接", exact=True).click()
+    expect(
+        page.get_by_role("button", name="重试生成下一题", exact=True)
+    ).to_be_visible()
+    assert len(answer_requests) == 1
+
+    page.reload()  # A real reload discards all component state.
+    page.get_by_role("button", name="继续", exact=True).click()
+    expect(page.get_by_text(answer, exact=True)).to_be_visible()
+    expect(
+        page.get_by_role("button", name="重试生成下一题", exact=True)
+    ).to_be_visible()
+    assert len(answer_requests) == 1
+    expect(page.get_by_role("button", name="提交", exact=True)).to_be_disabled()
+    page.get_by_role("button", name="重试生成下一题", exact=True).click()
+    expect(
+        page.get_by_text("合成测试追问：请说明你如何验证缓存优化的效果？", exact=True)
+    ).to_be_visible()
+    assert len(answer_requests) == 2
+    assert answer_requests[1] == original
+    assert page.evaluate("window.__microphoneRequests") == 0
+    with factory() as db:
+        record = db.query(InterviewRecord).filter_by(source="mock").one()
+        runtime = (
+            db.query(MockInterviewRuntime)
+            .filter_by(interview_record_id=record.id)
+            .one()
+        )
+        messages = (
+            db.query(ConversationMessage)
+            .filter_by(conversation_id=runtime.conversation_id)
+            .order_by(ConversationMessage.seq)
+            .all()
+        )
+        assert [message.role for message in messages] == [
+            "assistant",
+            "user",
+            "assistant",
+        ]
+        assert messages[1].content == answer
+        assert runtime.current_stage_key == "resume_project_deep_dive"
+        assert runtime.answer_claimed_at is None
+    assert not errors

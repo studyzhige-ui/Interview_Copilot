@@ -107,13 +107,16 @@ def claim_question(
             {
                 MockInterviewRuntime.answer_claimed_at: now,
                 MockInterviewRuntime.last_activity_at: now,
+                MockInterviewRuntime.answer_claim_generation: MockInterviewRuntime.answer_claim_generation
+                + 1,
             },
             synchronize_session=False,
         )
     )
     if updated:
-        runtime.answer_claimed_at = now
-        runtime.last_activity_at = now
+        # Fetch the committed-to-this-transaction generation, not a stale ORM
+        # value left by a previous request in the identity map.
+        db.refresh(runtime)
         return "claimed"
 
     db.expire_all()
@@ -128,14 +131,16 @@ def release_question_claim(
     interview_record_id: str,
     *,
     question_message_id: int,
+    claim_generation: int,
 ) -> None:
-    """Release a failed turn without disturbing a newer question."""
+    """Release only the exact lease, never a successor on the same question."""
     db.rollback()
     (
         db.query(MockInterviewRuntime)
         .filter(
             MockInterviewRuntime.interview_record_id == interview_record_id,
             MockInterviewRuntime.current_question_message_id == question_message_id,
+            MockInterviewRuntime.answer_claim_generation == claim_generation,
         )
         .update(
             {MockInterviewRuntime.answer_claimed_at: None},
@@ -143,6 +148,44 @@ def release_question_claim(
         )
     )
     db.commit()
+
+
+def lock_question_lease(
+    db: Session,
+    *,
+    interview_record_id: str,
+    question_message_id: int,
+    claim_generation: int,
+) -> MockInterviewRuntime | None:
+    """Lock in record -> runtime order before publishing an interviewer reply.
+
+    Finishing/deleting the interview or a newer claim invalidates this result.
+    Keep these locks until the reply and cursor are committed atomically.
+    """
+    from app.models.interview_record import InterviewRecord
+    from app.services.interview.interview_record_service import STATUS_MOCK_IN_PROGRESS
+
+    record = (
+        db.query(InterviewRecord)
+        .filter_by(id=interview_record_id)
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+    if record is None or record.status != STATUS_MOCK_IN_PROGRESS:
+        return None
+    return (
+        db.query(MockInterviewRuntime)
+        .filter(
+            MockInterviewRuntime.interview_record_id == interview_record_id,
+            MockInterviewRuntime.current_question_message_id == question_message_id,
+            MockInterviewRuntime.answer_claim_generation == claim_generation,
+            MockInterviewRuntime.answer_claimed_at.is_not(None),
+        )
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
 
 
 def advance_runtime(

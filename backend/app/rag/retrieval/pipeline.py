@@ -10,9 +10,14 @@ from typing import Any
 
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 
+from app.core.bounded_work import WorkCapacityExceeded
+from app.rag.retrieval.workers import pool
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.rag.domain.models import (
+    EMPTY_CAPACITY_EXHAUSTED,
+    EMPTY_RETRIEVAL_INCOMPLETE,
+    EMPTY_CANONICAL_UNAVAILABLE,
     EMPTY_ALL_BELOW_THRESHOLD,
     EMPTY_ALL_FILTERED_LIVE_CHECK,
     EMPTY_MILVUS_UNAVAILABLE,
@@ -151,7 +156,25 @@ class KnowledgeRetrievalPipeline:
             with SessionLocal() as db:
                 return resolve_user_pk(db, user_id)
 
-        user_pk = await asyncio.to_thread(resolve_principal)
+        try:
+            user_pk = await asyncio.wait_for(
+                pool("storage").run(resolve_principal), policy.search_timeout_seconds
+            )
+        except WorkCapacityExceeded:
+            return self._empty(
+                EMPTY_CAPACITY_EXHAUSTED,
+                intents=planned,
+                degraded=True,
+                diagnostics=finish(),
+            )
+        except Exception as exc:
+            logger.warning("RAG principal lookup unavailable (%s)", type(exc).__name__)
+            return self._empty(
+                EMPTY_CANONICAL_UNAVAILABLE,
+                intents=planned,
+                degraded=True,
+                diagnostics=finish(),
+            )
         diagnostics["timings_ms"]["principal"] = round(
             (perf_counter() - principal_started) * 1000,
             2,
@@ -178,17 +201,21 @@ class KnowledgeRetrievalPipeline:
         )
         groups: list[IntentCandidates] = []
         search_errors: dict[str, str] = {}
+        capacity_exhausted = False
         for intent, result in zip(planned, searched):
             if isinstance(result, asyncio.CancelledError):
                 raise result
             if isinstance(result, BaseException):
+                capacity_exhausted |= isinstance(result, WorkCapacityExceeded)
                 search_errors[intent.intent_id] = f"{type(result).__name__}: {result}"
                 continue
             groups.append(result)
+            capacity_exhausted |= result.capacity_exhausted
         diagnostics["timings_ms"]["candidate_search"] = round(
             (perf_counter() - search_started) * 1000,
             2,
         )
+        diagnostics["capacity_exhausted"] = capacity_exhausted
         diagnostics["search_failed_intents"] = len(search_errors)
         diagnostics["partial_channel_failures"] = sum(
             len(group.channel_errors) for group in groups
@@ -197,7 +224,9 @@ class KnowledgeRetrievalPipeline:
         diagnostics["candidate_count"] = sum(len(group.hits) for group in groups)
         if not groups:
             return self._empty(
-                EMPTY_MILVUS_UNAVAILABLE,
+                EMPTY_CAPACITY_EXHAUSTED
+                if capacity_exhausted
+                else EMPTY_MILVUS_UNAVAILABLE,
                 intents=planned,
                 degraded=True,
                 diagnostics={
@@ -207,7 +236,13 @@ class KnowledgeRetrievalPipeline:
             )
         if not any(group.hits for group in groups):
             return self._empty(
-                EMPTY_NO_CANDIDATES,
+                (
+                    EMPTY_CAPACITY_EXHAUSTED
+                    if capacity_exhausted
+                    else EMPTY_RETRIEVAL_INCOMPLETE
+                )
+                if search_degraded
+                else EMPTY_NO_CANDIDATES,
                 intents=planned,
                 degraded=search_degraded,
                 diagnostics=finish(),
@@ -253,6 +288,13 @@ class KnowledgeRetrievalPipeline:
             reranked = await rerank_groups(self._reranker, groups)
         except asyncio.CancelledError:
             raise
+        except WorkCapacityExceeded:
+            return self._empty(
+                EMPTY_CAPACITY_EXHAUSTED,
+                intents=planned,
+                degraded=True,
+                diagnostics=finish(),
+            )
         except Exception as exc:  # noqa: BLE001 — model/transport stage boundary
             logger.warning(
                 "RAG reranker unavailable (%s): %r",
@@ -298,13 +340,36 @@ class KnowledgeRetrievalPipeline:
 
         node_ids = [str(row.get("id") or "") for row in selected]
         hydrate_started = perf_counter()
-        hydrated = await asyncio.to_thread(
-            self._hydrate,
-            node_ids,
-            user_pk=user_pk,
-            source_kind=source_kind,
-            intents=planned,
-        )
+        try:
+            hydrated = await asyncio.wait_for(
+                pool("storage").run(
+                    self._hydrate,
+                    node_ids,
+                    user_pk=user_pk,
+                    source_kind=source_kind,
+                    intents=planned,
+                ),
+                policy.search_timeout_seconds,
+            )
+        except WorkCapacityExceeded:
+            return self._empty(
+                EMPTY_CAPACITY_EXHAUSTED,
+                intents=planned,
+                degraded=True,
+                diagnostics=finish(),
+            )
+        except Exception as exc:
+            # Never fall back to an untrusted index body when canonical
+            # ownership/current-version validation cannot be completed.
+            logger.warning(
+                "RAG canonical hydration unavailable (%s)", type(exc).__name__
+            )
+            return self._empty(
+                EMPTY_CANONICAL_UNAVAILABLE,
+                intents=planned,
+                degraded=True,
+                diagnostics=finish(),
+            )
         # A stale index must not redirect a restricted intent to another
         # canonical document, even when another intent has a wider scope.
         selected_scopes = {

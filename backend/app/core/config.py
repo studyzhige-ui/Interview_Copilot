@@ -184,6 +184,16 @@ class Settings(BaseSettings):
     RAG_RRF_K: int = 60
     RAG_SEARCH_TIMEOUT_SECONDS: float = 8.0
     RAG_RERANK_TIMEOUT_SECONDS: float = 30.0
+    # Per-process bounds. Queue permits survive cancellation of the async waiter.
+    # Reranker defaults to one worker: model instances need not be thread-safe.
+    RAG_STORAGE_WORKERS: int = Field(default=4, ge=1, le=32)
+    RAG_STORAGE_QUEUE: int = Field(default=8, ge=0, le=128)
+    RAG_SEARCH_WORKERS: int = Field(default=4, ge=1, le=32)
+    RAG_SEARCH_QUEUE: int = Field(default=16, ge=0, le=128)
+    RAG_EMBEDDING_WORKERS: int = Field(default=2, ge=1, le=16)
+    RAG_EMBEDDING_QUEUE: int = Field(default=8, ge=0, le=128)
+    RAG_RERANK_WORKERS: int = Field(default=1, ge=1, le=8)
+    RAG_RERANK_QUEUE: int = Field(default=8, ge=0, le=128)
     RAG_OUTPUT_TOKEN_RESERVE: int = 4_096
     CONTEXT_TOOL_OUTPUT_TOKENS: int = 10_000
     CONTEXT_AUTO_COMPACT_TOKEN_LIMIT: int = 0

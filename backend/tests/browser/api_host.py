@@ -1,7 +1,8 @@
 """Serve the production app + built frontend on loopback against a fresh test DB.
 
 No production startup/HTTP/auth/Operation handler is replaced. External model
-transport is forbidden in this browser campaign. Run via the guarded test fixture.
+transport is forbidden. Mock-interview model outputs below are explicitly synthetic;
+all real HTTP/auth/domain/SQL and structured-output validation remain in use.
 """
 
 import os
@@ -28,6 +29,53 @@ async def reject_live_model(*_args, **_kwargs):
 
 
 ModelProviderAdapter.start_stream = reject_live_model
+
+# This replaces only the paid mock-model adapter. It is guarded above and never
+# installed by the production app. The scenario tests behavior, not model quality.
+import json  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from app.services.interview import mock_interview_service  # noqa: E402
+
+
+class FixtureInterviewModel:
+    context_window = 128_000
+    max_tokens = 4096
+
+    def __init__(self):
+        self.turn_calls = 0
+
+    def complete(self, prompt, **kwargs):
+        return SimpleNamespace(
+            text=json.dumps(
+                {
+                    "guidance": {
+                        stage["key"]: f"合成测试引导：{stage['title']}。"
+                        for stage in mock_interview_service.BASE_INTERVIEW_STAGES
+                    }
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    async def acomplete(self, prompt, **kwargs):
+        self.turn_calls += 1
+        if self.turn_calls == 1:
+            raise TimeoutError("synthetic response loss; never a live provider")
+        return SimpleNamespace(
+            text=json.dumps(
+                {
+                    "message": "合成测试追问：请说明你如何验证缓存优化的效果？",
+                    "next_stage_key": "resume_project_deep_dive",
+                    "ready_to_finish": False,
+                },
+                ensure_ascii=False,
+            )
+        )
+
+
+fixture_interview_model = FixtureInterviewModel()
+mock_interview_service.get_llm_for_role = lambda *_a, **_k: fixture_interview_model
+
 from app.main import app  # noqa: E402
 from starlette.exceptions import HTTPException  # noqa: E402
 from starlette.staticfiles import StaticFiles  # noqa: E402

@@ -58,8 +58,15 @@ def eventually(probe, *, process=None, log=None, timeout=35):
     )
 
 
-@pytest.mark.parametrize("origin", ["fixture", "gmail"])
-@pytest.mark.parametrize("phase", ["waiting", "verifying", "committed"])
+@pytest.mark.parametrize(
+    ("origin", "phase"),
+    [
+        (origin, phase)
+        for origin in ("fixture", "gmail")
+        for phase in ("waiting", "verifying", "committed")
+    ]
+    + [("asserted", phase) for phase in ("verifying", "committed")],
+)
 def test_celery_worker_kill_resumes_same_decision_and_turn(
     database, tmp_path, monkeypatch, origin, phase
 ):
@@ -87,7 +94,53 @@ def test_celery_worker_kill_resumes_same_decision_and_turn(
     )
     monkeypatch.setattr(turn_executor.settings, "TURN_STALE_SECONDS", 60)
     with factory() as db:
-        if origin == "gmail":
+        if origin == "asserted":
+            from tests.test_agent_runtime.test_interview_invitation_tool import (
+                _seed_turn,
+            )
+            from app.agent_runtime.tools.interview_invitation import (
+                ConfirmAssertedInterviewInvitationArgs,
+            )
+            from app.services.chat.invitation_turn_recovery import (
+                recover_invitation_turn,
+            )
+
+            user, conversation, message, turn = _seed_turn(
+                db, "我已确认这份面试邀请，请按给定时间记录。"
+            )
+            conversation.active_turn_id = turn.id
+            turn.heartbeat_at = utc_now() - timedelta(minutes=5)
+            call = AgentToolCall(
+                call_id="saved-explicit-assertion",
+                turn_id=turn.id,
+                session_id=conversation.id,
+                user_id=user.id,
+                tool_name="confirm_interview_invitation",
+                effect="internal_write",
+                arguments_json=ConfirmAssertedInterviewInvitationArgs(
+                    source_message_id=message.id,
+                    facts=_facts(),
+                    opportunity={"kind": "create_new"},
+                ).model_dump(mode="json"),
+                timeout_seconds=30,
+                status="running",
+                dispatch_generation=1,
+                policy_decision="allow",
+                policy_reason="task_authorized_internal_write",
+            )
+            db.add(call)
+            db.commit()
+            # Start at an already-admitted model tool call, restored through the
+            # real controller. No second model is asked to reconstruct its input.
+            assert (
+                recover_invitation_turn(
+                    db, turn_id=turn.id, stale_before=utc_now() - timedelta(minutes=1)
+                )
+                == "pending"
+            )
+            turn_id, interaction_id = turn.id, None
+            asserted_source_message_id = message.id
+        elif origin == "gmail":
             user, _, _, proposal = _proposal(db)
             handoff = proposal.invitation_handoff
             turn_id, interaction_id = handoff["turn_id"], handoff["interaction_id"]
@@ -110,9 +163,14 @@ def test_celery_worker_kill_resumes_same_decision_and_turn(
             )
             turn_id, interaction_id = result.turn_id, result.interaction.id
         user_id = user.id
+        initial_recovery_attempts = int(
+            db.get(ConversationTurn, turn_id).recovery_attempts or 0
+        )
         db.commit()
 
     def resolve_saved_decision():
+        if interaction_id is None:
+            return  # The admitted current user message itself is the authority.
         with factory() as db:
             interaction = db.get(AgentInteraction, interaction_id)
             resolve_interaction(
@@ -146,7 +204,14 @@ def test_celery_worker_kill_resumes_same_decision_and_turn(
 
     def start(stage):
         Path(env["IC_CELERY_TEST_CONFIG"]).write_text(
-            json.dumps({"phase": stage, "queue": queue, "boundary_file": str(boundary)})
+            json.dumps(
+                {
+                    "phase": stage,
+                    "queue": queue,
+                    "boundary_file": str(boundary),
+                    "origin": origin,
+                }
+            )
         )
         log = tmp_path / f"{stage or 'recovered'}.log"
         output = log.open("w")
@@ -193,8 +258,11 @@ def test_celery_worker_kill_resumes_same_decision_and_turn(
         assert worker.returncode == -signal.SIGKILL
         with factory() as db:
             assert db.query(InterviewRecord).count() == int(phase == "committed")
-            decision = db.get(AgentInteraction, interaction_id)
-            assert decision.status == ("pending" if phase == "waiting" else "resolved")
+            if interaction_id is not None:
+                decision = db.get(AgentInteraction, interaction_id)
+                assert decision.status == (
+                    "pending" if phase == "waiting" else "resolved"
+                )
         if phase == "waiting":
             resolve_saved_decision()
         else:
@@ -223,12 +291,22 @@ def test_celery_worker_kill_resumes_same_decision_and_turn(
         time.sleep(0.3)
         with factory() as db:
             turn = db.get(ConversationTurn, turn_id)
-            assert turn.recovery_attempts == int(phase != "waiting")
-            assert turn.assistant_message_seq is not None
-            assert (
-                db.get(AgentInteraction, interaction_id).resolution_identity
-                == "original-user-decision"
+            assert turn.recovery_attempts == initial_recovery_attempts + int(
+                phase != "waiting"
             )
+            assert turn.assistant_message_seq is not None
+            if interaction_id is not None:
+                assert (
+                    db.get(AgentInteraction, interaction_id).resolution_identity
+                    == "original-user-decision"
+                )
+            else:
+                call = db.query(AgentToolCall).filter_by(turn_id=turn_id).one()
+                assert (
+                    call.arguments_json["source_message_id"]
+                    == asserted_source_message_id
+                )
+                assert call.arguments_json["facts"] == _facts().model_dump(mode="json")
             assert db.query(InterviewRecord).count() == 1
             assert db.query(NextAction).count() == 0
             assert (

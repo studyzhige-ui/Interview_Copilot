@@ -124,13 +124,17 @@ export function MockPage() {
   };
 
   const discardInProgress = async () => {
-    if (!inProgress) return;
+    if (!inProgress || starting) return;
+    setStarting(true);
     try {
       await abandonMockInterview(inProgress.recordId);
+      setInProgress(null);
     } catch {
-      /* non-fatal */
+      // A failed/unknown deletion is not proof that the active run vanished.
+      toast.error('尚未确认放弃成功，原面试仍保留在列表中，请核实后重试。');
+    } finally {
+      setStarting(false);
     }
-    setInProgress(null);
   };
 
   const handleReady = async (payload: {

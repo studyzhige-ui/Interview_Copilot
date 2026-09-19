@@ -104,6 +104,7 @@ async def test_pipeline_preserves_missing_intent_for_grounding_gate(monkeypatch)
     policy = SimpleNamespace(
         retrieval=SimpleNamespace(
             max_intents=4,
+            search_timeout_seconds=1,
             candidate_count=10,
             final_count=3,
             min_score=0.5,
@@ -230,6 +231,7 @@ async def test_pipeline_reranker_failure_fails_closed(monkeypatch):
     policy = SimpleNamespace(
         retrieval=SimpleNamespace(
             max_intents=4,
+            search_timeout_seconds=1,
             candidate_count=10,
             final_count=3,
             min_score=0.5,

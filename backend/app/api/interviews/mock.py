@@ -15,7 +15,6 @@ runtime rows in ``mock_runtime_service``.
   live-state    -> authoritative user-facing transcript for resume/recovery
 """
 
-import asyncio
 import io
 import logging
 import os
@@ -80,9 +79,11 @@ router = APIRouter(tags=["mock"])
 
 
 def _owned_mock_record_or_404(
-    db: Session, record_id: str, username: str
+    db: Session, record_id: str, username: str, *, for_update: bool = False
 ) -> InterviewRecord:
-    record = mock_flow.get_owned_mock_record(db, record_id, username)
+    record = mock_flow.get_owned_mock_record(
+        db, record_id, username, for_update=for_update
+    )
     if record is None:
         raise HTTPException(status_code=404, detail="Mock interview not found")
     return record
@@ -225,8 +226,8 @@ async def submit_mock_answer(
             question_message_id=body.question_message_id,
         )
     except mock_flow.StaleQuestionError as exc:
-        # Raised before any write — rollback only clears the (uncommitted)
-        # clip consumption from above.
+        # May also be a late model result fenced after Phase A committed. Only
+        # the current transaction is rolled back; the saved answer survives.
         db.rollback()
         raise HTTPException(
             status_code=409,
@@ -237,6 +238,12 @@ async def submit_mock_answer(
         raise HTTPException(
             status_code=409,
             detail="正在生成下一道问题，请勿重复提交",
+        ) from exc
+    except mock_flow.PendingAnswerConflictError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="上一次回答已保存，请先核实或重试生成下一题，不能替换已保存的回答。",
         ) from exc
     except mock_interview_service.NextTurnGenerationError as exc:
         db.rollback()
@@ -268,7 +275,7 @@ async def submit_mock_answer(
 
 @router.post("/mock-interviews/{record_id}/finish", response_model=MockFinishResp)
 @limiter.limit(RATE_EXPENSIVE)
-async def finish_mock_interview(
+def finish_mock_interview(
     request: Request,
     response: Response,
     record_id: str,
@@ -277,7 +284,9 @@ async def finish_mock_interview(
 ):
     """Move the record into processing_review and dispatch the review task,
     which parses structured QA from the conversation messages and scores it."""
-    record = _owned_mock_record_or_404(db, record_id, current_user.username)
+    record = _owned_mock_record_or_404(
+        db, record_id, current_user.username, for_update=True
+    )
     # MOCK-3: only an in-progress run can finish — a double-click or a stale
     # tab must not re-dispatch a review that is already running/done.
     if record.status != STATUS_MOCK_IN_PROGRESS:
@@ -297,11 +306,10 @@ async def finish_mock_interview(
     if mock_flow.count_answered_turns(db, runtime.conversation_id) == 0:
         raise HTTPException(status_code=400, detail="至少回答一题才能生成复盘")
     record.status = STATUS_PROCESSING_REVIEW
-    await asyncio.to_thread(db.commit)
+    db.commit()
 
     try:
-        await asyncio.to_thread(
-            mock_flow.dispatch_review,
+        mock_flow.dispatch_review(
             db,
             record_id,
             delete_live_runtime=True,
@@ -319,7 +327,7 @@ async def finish_mock_interview(
     "/mock-interviews/{record_id}/retry-review", response_model=MockRetryReviewResp
 )
 @limiter.limit(RATE_EXPENSIVE)
-async def retry_mock_review(
+def retry_mock_review(
     request: Request,
     response: Response,
     record_id: str,
@@ -328,16 +336,17 @@ async def retry_mock_review(
 ):
     """Re-run review generation from the preserved conversation messages after
     a review_failed (or stuck processing_review)."""
-    record = _owned_mock_record_or_404(db, record_id, current_user.username)
+    record = _owned_mock_record_or_404(
+        db, record_id, current_user.username, for_update=True
+    )
     if record.status not in (STATUS_REVIEW_FAILED, STATUS_PROCESSING_REVIEW):
         raise HTTPException(status_code=400, detail="当前状态不可重试复盘")
 
     record.status = STATUS_PROCESSING_REVIEW
-    await asyncio.to_thread(db.commit)
+    db.commit()
 
     try:
-        await asyncio.to_thread(
-            mock_flow.dispatch_review,
+        mock_flow.dispatch_review(
             db,
             record_id,
             rollback_status=STATUS_REVIEW_FAILED,
@@ -356,7 +365,7 @@ async def retry_mock_review(
 
 @router.delete("/mock-interviews/{record_id}", response_model=MockAbandonResp)
 @limiter.limit(RATE_DEFAULT)
-async def abandon_mock_interview(
+def abandon_mock_interview(
     request: Request,
     response: Response,
     record_id: str,
@@ -366,7 +375,9 @@ async def abandon_mock_interview(
     """Actively abandon an unfinished mock: delete its conversation + messages,
     runtime, mock audio assets and the draft record (abandon = this never
     happened)."""
-    record = _owned_mock_record_or_404(db, record_id, current_user.username)
+    record = _owned_mock_record_or_404(
+        db, record_id, current_user.username, for_update=True
+    )
     if record.status != STATUS_MOCK_IN_PROGRESS:
         raise HTTPException(status_code=400, detail="只能放弃进行中的模拟面试")
 
@@ -376,7 +387,7 @@ async def abandon_mock_interview(
 
     try:
         mock_flow.abandon_mock(db, record, runtime)
-        await asyncio.to_thread(db.commit)
+        db.commit()
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         logger.exception("abandon mock failed for %s: %s", record_id, exc)

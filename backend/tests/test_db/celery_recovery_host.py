@@ -96,7 +96,12 @@ if config.get("phase") == "verifying":
 elif config.get("phase") == "committed":
     from app.agent_runtime.tools import interview_invitation as tool
 
-    original = tool._review_candidate_sync
+    handler_name = (
+        "_confirm_asserted_sync"
+        if config.get("origin") == "asserted"
+        else "_review_candidate_sync"
+    )
+    original = getattr(tool, handler_name)
 
     def committed(*args, **kwargs):
         result = original(*args, **kwargs)
@@ -105,4 +110,4 @@ elif config.get("phase") == "committed":
         stop_at_boundary()
         return result
 
-    tool._review_candidate_sync = committed
+    setattr(tool, handler_name, committed)

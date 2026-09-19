@@ -15,8 +15,14 @@ def test_vs01_manifest_targets_new_blueprint_and_registers_all_scenarios() -> No
 
     assert result["scenario_count"] == 15
     assert set(result["scenario_ids"]) == VS01_SCENARIOS
-    assert result["incomplete_scenarios"] == ["VS01-S09", "VS01-S14"]
-    assert result["release_ready"] is False
+    # "covered" only means executable coverage is registered. run_gate still
+    # needs fresh passing backend + frontend JUnit, including every Pg/Worker case.
+    assert result["incomplete_scenarios"] == []
+    assert result["release_ready"] is True
+    assert (
+        "backend/tests/test_db/test_celery_invitation_recovery.py"
+        in result["backend_tests"]
+    )
     assert (
         "backend/tests/test_career/test_interview_invitation_operations.py"
         in result["backend_tests"]

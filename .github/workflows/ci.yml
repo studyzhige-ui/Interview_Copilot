@@ -231,11 +231,15 @@ jobs:
           VITE_API_BASE: /api/v1
       - name: Real browser response-loss and product interaction campaign
         run: python -m pytest backend/tests/browser -v --tb=short --junitxml=test-results/browser.xml
+      - name: VS-01 full deterministic contract gate
+        run: python -m evaluation.career_agent_os_eval --report test-results/vs01.json
       - name: Preserve real browser campaign results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: browser-results
-          path: test-results/browser.xml
+          path: |
+            test-results/browser.xml
+            test-results/vs01.json
           if-no-files-found: warn
           retention-days: 7

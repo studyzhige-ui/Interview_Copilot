@@ -2,8 +2,9 @@
 
 One model call at interview start creates stage-specific guidance from the
 resume and JD. Each candidate answer then generates the next interviewer line
-from the frozen guidance and conversation history. A malformed or transient
-model response is retried once; question counts do not drive stage progression.
+from the frozen guidance and conversation history. A completed but malformed
+model response can be repaired once; ambiguous transport failures are not
+retried. Question counts do not drive stage progression.
 
 Post-interview scoring remains in ``InterviewAnalysisOrchestrator``.
 """
@@ -16,6 +17,8 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any
+
+from app.core.context_budget import ContextCapacityError, RequestBudget, request_tokens
 
 from app.prompts.interview import (
     INTERVIEWER_STYLES,
@@ -126,11 +129,13 @@ class NextTurn:
 
 
 class NextTurnGenerationError(RuntimeError):
-    """The interviewer model failed twice without producing a valid turn."""
+    """No valid interviewer turn was received; no transcript cursor may advance."""
 
 
 def _clean_json(raw_text: str) -> dict[str, Any]:
-    raw = (raw_text or "").strip()
+    if not isinstance(raw_text, str) or len(raw_text) > 64_000:
+        raise ValueError("Model JSON must be bounded text")
+    raw = raw_text.strip()
     if raw.startswith("```json"):
         raw = raw[7:]
     elif raw.startswith("```"):
@@ -149,11 +154,62 @@ def _guidance_from_response(data: dict[str, Any]) -> dict[str, str]:
         raise ValueError("Plan output must contain a guidance object")
     guidance: dict[str, str] = {}
     for key in _BASE_STAGE_KEYS:
-        value = str(raw.get(key) or "").strip()
-        if not value:
+        value = raw.get(key)
+        if not isinstance(value, str) or not value.strip():
             raise ValueError(f"Plan guidance is missing stage {key}")
-        guidance[key] = value[:1200]
+        if len(value.strip()) > 1200:
+            raise ValueError(f"Plan guidance exceeds the stage limit: {key}")
+        guidance[key] = value.strip()
     return guidance
+
+
+def _guard_prompt(llm: Any, prompt: str, *, output: int) -> int:
+    """Preserve full interview evidence or stop before dispatch; never clip it."""
+    window = getattr(llm, "context_window", None)
+    if type(window) is not int or window < 1:
+        raise ContextCapacityError(
+            "模拟面试模型未提供可验证的上下文上限，请检查模型配置。"
+        )
+    configured_output = getattr(llm, "max_tokens", None)
+    if type(configured_output) is int and configured_output > 0:
+        output = min(output, configured_output)
+    budget = RequestBudget.resolve(window, output)
+    if request_tokens([{"role": "user", "content": prompt}]) > budget.input_limit:
+        raise ContextCapacityError(
+            "模拟面试的完整资料与对话超过当前模型的上下文容量；未删减回答或发送模型请求。"
+            "请选择容量足够的模型，或结束当前面试后使用较精简的资料重新开始。"
+        )
+    return budget.output
+
+
+def _validated_turn(
+    data: dict[str, Any], *, current_stage: str, stage_keys: list[str]
+) -> NextTurn:
+    message = data.get("message")
+    if not isinstance(message, str) or not 1 <= len(message.strip()) <= 800:
+        raise ValueError("message must be nonempty text of at most 800 characters")
+    message = message.strip()
+    if message.count("?") + message.count("？") > 2:
+        raise ValueError(
+            "message must focus on one question with at most two question marks"
+        )
+    index = stage_keys.index(current_stage)
+    allowed = stage_keys[index : index + 2]
+    stage = data.get("next_stage_key")
+    if not isinstance(stage, str) or stage not in allowed:
+        raise ValueError(
+            "next_stage_key must be the current or immediately following stage"
+        )
+    ready = data.get("ready_to_finish")
+    if type(ready) is not bool:
+        raise ValueError("ready_to_finish must be a JSON boolean")
+    return NextTurn(
+        interviewer_message=message,
+        next_stage_key=stage,
+        is_ready_to_finish=ready
+        and current_stage == stage_keys[-1]
+        and stage == stage_keys[-1],
+    )
 
 
 def generate_plan(
@@ -170,8 +226,11 @@ def generate_plan(
         style=_style_brief(interviewer_style),
     )
     llm = get_llm_for_role("primary", user_id=user_id)
-    response = llm.complete(prompt, response_format={"type": "json_object"})
-    guidance = _guidance_from_response(_clean_json(str(response.text)))
+    output_limit = _guard_prompt(llm, prompt, output=4096)
+    response = llm.complete(
+        prompt, response_format={"type": "json_object"}, max_tokens=output_limit
+    )
+    guidance = _guidance_from_response(_clean_json(response.text))
 
     stages = _base_stages()
     for stage in stages:
@@ -197,7 +256,7 @@ def _conversation_history_block(messages: list[dict[str, str]]) -> str:
     for message in messages:
         role = message.get("role") or ""
         who = "面试官" if role.lower().startswith(("assistant", "agent")) else "候选人"
-        content = (message.get("content") or "").strip()[:2000]
+        content = (message.get("content") or "").strip()
         if content:
             lines.append(f"  {who}: {content}")
     return "\n".join(lines) or "（暂无历史对话）"
@@ -215,14 +274,14 @@ async def generate_next_turn(
 ) -> NextTurn:
     """Generate one interviewer line from the frozen guidance and full history."""
     stage_keys = [stage["key"] for stage in stages]
-    current_stage = (
-        current_stage_key
-        if current_stage_key in stage_keys
-        else (stage_keys[0] if stage_keys else "self_intro")
-    )
-    current_index = (
-        stage_keys.index(current_stage) if current_stage in stage_keys else 0
-    )
+    if (
+        not stage_keys
+        or len(stage_keys) != len(set(stage_keys))
+        or current_stage_key not in stage_keys
+    ):
+        raise ValueError("Stored interview stage state is inconsistent")
+    current_stage = current_stage_key
+    current_index = stage_keys.index(current_stage)
     stage_list = "\n".join(
         f"  {index + 1}. {stage['key']} — {stage.get('title', stage['key'])}\n"
         f"     guidance: {stage.get('guidance') or '围绕当前阶段目标选择有代表性的问题。'}"
@@ -260,59 +319,44 @@ async def generate_next_turn(
 
     llm = get_llm_for_role("primary", user_id=user_id)
     last_error: Exception | None = None
-    data: dict[str, Any] | None = None
     for attempt in range(2):
+        correction = (
+            "\n<retry_correction>上一完整输出违反结构契约："
+            + str(last_error)
+            + "。请重新输出完整 JSON；保持一个主要问题，不要解释或截断内容。</retry_correction>"
+            if attempt
+            else ""
+        )
+        request = prompt + correction
+        output_limit = _guard_prompt(llm, request, output=1600)
         try:
             response = await llm.acomplete(
-                (
-                    prompt
-                    if attempt == 0
-                    else prompt
-                    + "\n<retry_correction>上一输出不符合单一问题契约。请只保留一个判断点，全文最多两个问号。</retry_correction>"
-                ),
+                request,
                 response_format={"type": "json_object"},
+                max_tokens=output_limit,
             )
-            candidate = _clean_json(str(response.text))
-            candidate_message = str(candidate.get("message") or "").strip()
-            question_marks = candidate_message.count("?") + candidate_message.count(
-                "？"
+        except Exception as exc:
+            # No receipt was returned. A transport timeout may already be billed;
+            # do not disguise a second request as malformed-output repair.
+            raise NextTurnGenerationError(
+                "未获得完整的面试官响应；已保留回答，未自动重发请求。"
+            ) from exc
+        try:
+            return _validated_turn(
+                _clean_json(response.text),
+                current_stage=current_stage,
+                stage_keys=stage_keys,
             )
-            if not candidate_message or question_marks > 2:
-                raise ValueError(
-                    "interviewer message violates the single-question contract"
-                )
-            data = candidate
-            break
-        except Exception as exc:  # noqa: BLE001 - normalized below
+        except (ValueError, TypeError, RecursionError) as exc:
             last_error = exc
             logger.warning(
-                "generate_next_turn attempt %d failed: %s",
+                "Invalid completed mock response at attempt %d (%s)",
                 attempt + 1,
-                exc,
+                type(exc).__name__,
             )
-    if data is None:
-        raise NextTurnGenerationError("无法生成下一道面试问题") from last_error
-
-    message = str(data["message"]).strip()[:800]
-
-    allowed_stages = {current_stage}
-    if current_index + 1 < len(stage_keys):
-        allowed_stages.add(stage_keys[current_index + 1])
-    next_stage = str(data.get("next_stage_key") or "").strip()
-    if next_stage not in allowed_stages:
-        next_stage = current_stage
-
-    # Entering the final stage is not the same as completing it. The candidate
-    # must first have a chance to ask questions.
-    in_final_stage = bool(stage_keys) and current_stage == stage_keys[-1]
-    stays_in_final_stage = in_final_stage and next_stage == stage_keys[-1]
-    ready_to_finish = data.get("ready_to_finish") is True and stays_in_final_stage
-
-    return NextTurn(
-        interviewer_message=message,
-        next_stage_key=next_stage,
-        is_ready_to_finish=ready_to_finish,
-    )
+    raise NextTurnGenerationError(
+        "模型未生成符合契约的下一道问题；当前面试进度未推进。"
+    ) from last_error
 
 
 __all__ = [

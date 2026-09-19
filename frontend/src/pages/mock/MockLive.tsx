@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Mic, Square, CornerUpRight, Loader2, Volume2, VolumeX } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { Modal } from '@/components/ui/Modal';
@@ -58,6 +58,15 @@ function findLatestInterviewer(messages: MockLiveMessage[]) {
     .find((message) => message.speaker === 'interviewer');
 }
 
+const SAVED_ANSWER_NOTICE = '你的回答已保存，尚未获得下一题。重新连接只同步现场；重试生成会发起新的模型请求，可能产生额外费用。';
+
+function pendingFromMessages(messages: MockLiveMessage[]): PendingAnswer | null {
+  const question = findLatestInterviewer(messages);
+  const last = messages.at(-1);
+  if (!question || last?.speaker !== 'candidate' || last.id <= 0) return null;
+  return { text: last.text, questionMessageId: question.id, optimisticMessageId: last.id };
+}
+
 export function MockLive({
   recordId,
   initialMessages = [],
@@ -71,8 +80,16 @@ export function MockLive({
   const [operation, setOperation] = useState<LiveOperation>(
     initialMessages.length > 0 ? 'idle' : 'recovering',
   );
-  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
-  const pendingAnswerRef = useRef<PendingAnswer | null>(null);
+  const initialPending = pendingFromMessages(initialMessages);
+  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(initialPending ? SAVED_ANSWER_NOTICE : null);
+  const [canRetryGeneration, setCanRetryGeneration] = useState(Boolean(initialPending));
+  const pendingAnswerRef = useRef<PendingAnswer | null>(initialPending);
+  const [hasPendingAnswer, setHasPendingAnswer] = useState(Boolean(initialPending));
+  const setPendingAnswer = useCallback((pending: PendingAnswer | null) => {
+    // Immediate event guard + reactive UI state; rendering never reads a ref.
+    pendingAnswerRef.current = pending;
+    setHasPendingAnswer(Boolean(pending));
+  }, []);
   const isMounted = useIsMounted();
   // The model may suggest wrapping up, but the candidate keeps control of
   // when the interview actually ends.
@@ -117,7 +134,10 @@ export function MockLive({
       .then((state) => {
         if (active) {
           setMessages(state.messages);
-          setRecoveryNotice(null);
+          const pending = pendingFromMessages(state.messages);
+          setPendingAnswer(pending);
+          setCanRetryGeneration(Boolean(pending));
+          setRecoveryNotice(pending ? SAVED_ANSWER_NOTICE : null);
         }
       })
       .catch(() => {
@@ -129,14 +149,15 @@ export function MockLive({
         if (active) setOperation('idle');
       });
     return () => { active = false; };
-  }, [initialMessages.length, recordId]);
+  }, [initialMessages.length, recordId, setPendingAnswer]);
 
   const acceptInterviewerMessage = (
     message: MockLiveMessage,
     endSuggested: boolean,
   ) => {
     setMessages((current) => [...current, message]);
-    pendingAnswerRef.current = null;
+    setPendingAnswer(null);
+    setCanRetryGeneration(false);
     setVoiceDraft(null);
     setVoiceError(null);
     setRetryRecording(null);
@@ -149,75 +170,62 @@ export function MockLive({
 
   const recoverPendingAnswer = async (pending: PendingAnswer) => {
     setOperation('recovering');
+    setCanRetryGeneration(false);
     try {
-      let canonical = await syncMessages();
+      const canonical = await syncMessages();
       const latest = findLatestInterviewer(canonical);
       if (latest && latest.id !== pending.questionMessageId) {
-        pendingAnswerRef.current = null;
+        setPendingAnswer(null);
         setVoiceDraft(null);
         setRecoveryNotice(null);
         return;
       }
-
       const last = canonical.at(-1);
       if (last?.speaker !== 'candidate' || last.text.trim() !== pending.text.trim()) {
-        pendingAnswerRef.current = null;
-        setTyping((current) => current.trim() ? current : pending.text);
-        setVoiceDraft(
-          pending.audioAssetId ? { audioAssetId: pending.audioAssetId } : null,
-        );
-        setRecoveryNotice('回答没有成功提交，内容已恢复到输入框。');
-        return;
-      }
-
-      // The server has already persisted this answer (and consumed its audio
-      // asset). Keep the id only in ``pending`` for response recovery; it must
-      // not leak into whatever the user types next.
-      setVoiceDraft(null);
-
-      try {
-        const response = await submitMockAnswer(recordId, {
-          answer_text: pending.text,
-          ...(pending.audioAssetId
-            ? { answer_audio_file_asset_id: pending.audioAssetId }
-            : {}),
-          question_message_id: pending.questionMessageId,
-        });
-        setMessages([...canonical, response.message]);
-        pendingAnswerRef.current = null;
-        setVoiceDraft(null);
-        setRecoveryNotice(null);
-        if (response.end_suggested) setEndSuggested(true);
-        return;
-      } catch {
-        // The original request may still be finishing. Give it one short
-        // reconciliation window before asking the user to do anything.
-        await new Promise((resolve) => setTimeout(resolve, 600));
-        canonical = await syncMessages();
-        const recovered = findLatestInterviewer(canonical);
-        if (recovered && recovered.id !== pending.questionMessageId) {
-          pendingAnswerRef.current = null;
-          setVoiceDraft(null);
-          setRecoveryNotice(null);
-          return;
+        // Keep a different already persisted answer rather than authorizing an
+        // overwrite. The service also enforces this immutable-answer boundary.
+        const retained = pendingFromMessages(canonical);
+        setPendingAnswer(retained);
+        setCanRetryGeneration(Boolean(retained));
+        if (!retained) {
+          setTyping((current) => current.trim() ? current : pending.text);
+          setVoiceDraft(pending.audioAssetId ? { audioAssetId: pending.audioAssetId } : null);
         }
+        setRecoveryNotice(retained ? SAVED_ANSWER_NOTICE : '回答没有成功提交，内容已恢复到输入框。');
+        return;
       }
-
-      setRecoveryNotice(
-        '你的回答已经保留，但面试官暂时没有响应。可以重新连接，或稍后继续面试。',
-      );
+      setVoiceDraft(null);
+      setCanRetryGeneration(true);
+      setRecoveryNotice(SAVED_ANSWER_NOTICE);
     } catch {
-      setRecoveryNotice(
-        '连接暂时中断，回答仍保留在当前页面。恢复连接后可以继续同步。',
-      );
+      setRecoveryNotice('连接暂时中断，回答仍保留在当前页面。恢复连接后可以继续同步。');
     } finally {
       if (isMounted.current) setOperation('idle');
     }
   };
 
+  const retryAnswerGeneration = async () => {
+    const pending = pendingAnswerRef.current;
+    if (!pending || !canRetryGeneration || operation !== 'idle') return;
+    setCanRetryGeneration(false);
+    setOperation('submitting');
+    try {
+      // This mutation is only initiated by the clearly labelled user action,
+      // never by a network catch/reload/read-only reconciliation path.
+      const response = await submitMockAnswer(recordId, {
+        answer_text: pending.text,
+        question_message_id: pending.questionMessageId,
+      });
+      acceptInterviewerMessage(response.message, response.end_suggested);
+      if (isMounted.current) setOperation('idle');
+    } catch {
+      await recoverPendingAnswer(pending);
+    }
+  };
+
   const pushUserAnswer = async (answer: string, audioAssetId?: string) => {
     const text = answer.trim();
-    if (!text || operation !== 'idle') return;
+    if (!text || operation !== 'idle' || pendingAnswerRef.current) return;
     const question = findLatestInterviewer(messages);
     if (!question) {
       setRecoveryNotice('当前问题尚未恢复，请先重新连接面试现场。');
@@ -230,7 +238,7 @@ export function MockLive({
       questionMessageId: question.id,
       optimisticMessageId: -Date.now(),
     };
-    pendingAnswerRef.current = pending;
+    setPendingAnswer(pending);
     setTyping('');
     setRecoveryNotice(null);
     setOperation('submitting');
@@ -296,8 +304,8 @@ export function MockLive({
     : 'idle';
   const inputBusy = micPhase !== 'idle';
   const operationBusy = operation !== 'idle';
-  const canSubmit = !operationBusy && !inputBusy;
-  const micDisabled = operationBusy || micPhase === 'preparing' || micPhase === 'requesting';
+  const canSubmit = !operationBusy && !inputBusy && !hasPendingAnswer;
+  const micDisabled = operationBusy || hasPendingAnswer || micPhase === 'preparing' || micPhase === 'requesting';
   const modalBusy = operation === 'finishing' || operation === 'abandoning';
   const micLabel =
     micPhase === 'recording'
@@ -388,8 +396,11 @@ export function MockLive({
     }
     setOperation('recovering');
     try {
-      await syncMessages();
-      setRecoveryNotice(null);
+      const canonical = await syncMessages();
+      const retained = pendingFromMessages(canonical);
+      setPendingAnswer(retained);
+      setCanRetryGeneration(Boolean(retained));
+      setRecoveryNotice(retained ? SAVED_ANSWER_NOTICE : null);
     } catch {
       setRecoveryNotice('仍然无法连接面试现场，请稍后再试。');
     } finally {
@@ -434,7 +445,7 @@ export function MockLive({
             tts.stop();
             setConfirmingFinish(true);
           }}
-          disabled={!canSubmit}
+          disabled={operationBusy || inputBusy}
           loading={operation === 'finishing'}
         >
           结束面试
@@ -556,6 +567,11 @@ export function MockLive({
               >
                 重新连接
               </button>
+              {canRetryGeneration && <button
+                type="button"
+                onClick={() => void retryAnswerGeneration()}
+                className="shrink-0 text-xs font-medium text-amber-800 hover:text-amber-950"
+              >重试生成下一题</button>}
               <button
                 type="button"
                 onClick={() => navigate('/mock')}

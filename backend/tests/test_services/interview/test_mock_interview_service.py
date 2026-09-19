@@ -57,6 +57,7 @@ def _plan_payload() -> dict:
 def test_generate_plan_uses_resume_and_jd_to_personalize_guidance():
     response = MagicMock(text=json.dumps(_plan_payload(), ensure_ascii=False))
     with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.context_window = 128_000
         factory.return_value.complete.return_value = response
         plan = generate_plan(
             resume_context="负责 Redis 缓存平台",
@@ -78,6 +79,7 @@ def test_generate_plan_uses_resume_and_jd_to_personalize_guidance():
 def test_generate_plan_opening_varies_by_style_formality():
     response = MagicMock(text=json.dumps(_plan_payload(), ensure_ascii=False))
     with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.context_window = 128_000
         factory.return_value.complete.return_value = response
         casual = generate_plan(interviewer_style="friendly").opening_message
         formal = generate_plan(interviewer_style="pressure").opening_message
@@ -88,6 +90,7 @@ def test_generate_plan_opening_varies_by_style_formality():
 def test_generate_plan_rejects_incomplete_guidance():
     response = MagicMock(text=json.dumps({"guidance": {"self_intro": "x"}}))
     with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.context_window = 128_000
         factory.return_value.complete.return_value = response
         with pytest.raises(ValueError, match="missing stage"):
             generate_plan()
@@ -113,6 +116,7 @@ def test_generate_next_turn_uses_full_history_and_length_warning():
         *[{"role": "assistant", "content": f"后续问题 {index}"} for index in range(10)],
     ]
     with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.context_window = 128_000
         factory.return_value.acomplete = AsyncMock(return_value=response)
         turn = asyncio.run(
             generate_next_turn(
@@ -145,6 +149,7 @@ def test_generate_next_turn_rejects_unknown_backward_and_jump_stages():
             )
         )
         with patch.object(mod, "get_llm_for_role") as factory:
+            factory.return_value.context_window = 128_000
             factory.return_value.acomplete = AsyncMock(return_value=response)
             return await generate_next_turn(
                 prefix="P",
@@ -154,12 +159,9 @@ def test_generate_next_turn_rejects_unknown_backward_and_jump_stages():
                 user_answer="answer",
             )
 
-    assert asyncio.run(run("made_up")).next_stage_key == "resume_project_deep_dive"
-    assert asyncio.run(run("self_intro")).next_stage_key == "resume_project_deep_dive"
-    assert (
-        asyncio.run(run("candidate_questions")).next_stage_key
-        == "resume_project_deep_dive"
-    )
+    for invalid in ("made_up", "self_intro", "candidate_questions"):
+        with pytest.raises(NextTurnGenerationError):
+            asyncio.run(run(invalid))
     assert (
         asyncio.run(run("role_technical_assessment")).next_stage_key
         == "role_technical_assessment"
@@ -178,6 +180,7 @@ def test_generate_next_turn_only_finishes_after_candidate_questions_started():
             )
         )
         with patch.object(mod, "get_llm_for_role") as factory:
+            factory.return_value.context_window = 128_000
             factory.return_value.acomplete = AsyncMock(return_value=response)
             return await generate_next_turn(
                 prefix="P",
@@ -191,12 +194,8 @@ def test_generate_next_turn_only_finishes_after_candidate_questions_started():
         run("role_technical_assessment", "candidate_questions", True)
     )
     assert entering.is_ready_to_finish is False
-    assert (
-        asyncio.run(
-            run("candidate_questions", "candidate_questions", "false")
-        ).is_ready_to_finish
-        is False
-    )
+    with pytest.raises(NextTurnGenerationError):
+        asyncio.run(run("candidate_questions", "candidate_questions", "false"))
     assert (
         asyncio.run(
             run("candidate_questions", "candidate_questions", True)
@@ -208,6 +207,7 @@ def test_generate_next_turn_only_finishes_after_candidate_questions_started():
 def test_generate_next_turn_retries_then_surfaces_generation_failure():
     response = MagicMock(text="not json at all")
     with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.context_window = 128_000
         factory.return_value.acomplete = AsyncMock(return_value=response)
         with pytest.raises(NextTurnGenerationError):
             asyncio.run(
@@ -244,6 +244,7 @@ def test_generate_next_turn_retries_a_question_list_as_one_focus():
         ),
     ]
     with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.context_window = 128_000
         factory.return_value.acomplete = AsyncMock(side_effect=responses)
         turn = asyncio.run(
             generate_next_turn(
@@ -259,3 +260,107 @@ def test_generate_next_turn_retries_a_question_list_as_one_focus():
     assert factory.return_value.acomplete.await_count == 2
     retry_prompt = factory.return_value.acomplete.await_args_list[1].args[0]
     assert "retry_correction" in retry_prompt
+
+
+@pytest.mark.parametrize("message", [17, True, {"question": "q"}, "x" * 801])
+def test_invalid_message_cannot_be_coerced_or_silently_truncated(message):
+    response = MagicMock(
+        text=json.dumps(
+            {
+                "message": message,
+                "next_stage_key": "self_intro",
+                "ready_to_finish": False,
+            }
+        )
+    )
+    with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.context_window = 128_000
+        factory.return_value.acomplete = AsyncMock(return_value=response)
+        with pytest.raises(NextTurnGenerationError):
+            asyncio.run(
+                generate_next_turn(
+                    prefix="P",
+                    stages=_stages(),
+                    current_stage_key="self_intro",
+                    conversation_messages=[],
+                    user_answer="answer",
+                )
+            )
+    assert factory.return_value.acomplete.await_count == 2
+
+
+def test_no_automatic_transport_retry():
+    with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.context_window = 128_000
+        factory.return_value.acomplete = AsyncMock(
+            side_effect=TimeoutError("unknown remote result")
+        )
+        with pytest.raises(NextTurnGenerationError):
+            asyncio.run(
+                generate_next_turn(
+                    prefix="P",
+                    stages=_stages(),
+                    current_stage_key="self_intro",
+                    conversation_messages=[],
+                    user_answer="answer",
+                )
+            )
+    assert factory.return_value.acomplete.await_count == 1
+
+
+def test_tail_of_long_answer_reaches_next_question():
+    response = MagicMock(
+        text=json.dumps(
+            {
+                "message": "这项限制影响了什么？",
+                "next_stage_key": "self_intro",
+                "ready_to_finish": False,
+            }
+        )
+    )
+    with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.context_window = 128_000
+        factory.return_value.acomplete = AsyncMock(return_value=response)
+        asyncio.run(
+            generate_next_turn(
+                prefix="P",
+                stages=_stages(),
+                current_stage_key="self_intro",
+                conversation_messages=[
+                    {
+                        "role": "user",
+                        "content": "前文。" * 1000
+                        + "最后限制：这些是计划，并未实际部署。",
+                    }
+                ],
+                user_answer="补充回答",
+            )
+        )
+        request = factory.return_value.acomplete.await_args.args[0]
+        assert "最后限制：这些是计划，并未实际部署。" in request
+
+
+def test_required_history_overflow_stops_before_model_dispatch():
+    from app.core.context_budget import ContextCapacityError
+
+    with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.context_window = 200
+        factory.return_value.acomplete = AsyncMock()
+        with pytest.raises(ContextCapacityError):
+            asyncio.run(
+                generate_next_turn(
+                    prefix="P",
+                    stages=_stages(),
+                    current_stage_key="self_intro",
+                    conversation_messages=[],
+                    user_answer="answer",
+                )
+            )
+        factory.return_value.acomplete.assert_not_awaited()
+
+
+def test_plan_guidance_is_not_silently_cut_at_1200_characters():
+    data = _plan_payload()
+    data["guidance"]["self_intro"] = "x" * 1201
+    with pytest.raises(ValueError, match="exceeds"):
+        mod._guidance_from_response(data)

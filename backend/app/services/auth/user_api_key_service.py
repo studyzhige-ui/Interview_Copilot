@@ -33,11 +33,13 @@ working (they only see #2).
 from __future__ import annotations
 
 import logging
+import hashlib
 from contextlib import contextmanager
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.model_connection_error import ModelConnectionUnavailable
 from app.core.secrets import decrypt_secret, encrypt_secret, encrypted_with_primary
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
@@ -75,16 +77,9 @@ def _session(db: Session | None):
         owned.close()
 
 
-# Tiny in-process cache so resolve_api_key doesn't hit DB + decrypt on every
-# LLM call. Cleared on set / delete. Bounded by LRU + TTL because the
-# values are PLAINTEXT API keys — long-lived caching of decrypted
-# secrets is a memory-disclosure risk if a process gets cored/dumped.
-# TTL also bounds staleness in the unlikely event that an external
-# process rotates the underlying row (e.g. another worker's set call
-# would invalidate this worker's cache via _decrypt_cache.pop — but
-# cross-process invalidation isn't wired). 5 min is short enough that
-# any externally-rotated key reaches the new worker quickly, long
-# enough that a chatty LLM-call burst still benefits from caching.
+# The DB row is read on every resolution: another process may rotate/delete it.
+# This LRU only avoids repeated Fernet decryption of the exact same ciphertext;
+# it never grants permission to reuse a secret without checking current storage.
 import time as _time  # noqa: E402
 from collections import OrderedDict as _OrderedDict  # noqa: E402
 from threading import Lock as _Lock  # noqa: E402
@@ -92,9 +87,9 @@ from threading import Lock as _Lock  # noqa: E402
 _DECRYPT_CACHE_MAX = 256
 _DECRYPT_CACHE_TTL_S = 300
 
-# Entries are (plaintext, expires_at_monotonic). monotonic() so a system
+# Entries are (plaintext, expires_at_monotonic, ciphertext_digest). monotonic() so a system
 # clock jump doesn't corrupt expiry math.
-_decrypt_cache: "_OrderedDict[tuple[str, str], tuple[str, float]]" = _OrderedDict()
+_decrypt_cache: "_OrderedDict[tuple[str, str], tuple[str, float, str]]" = _OrderedDict()
 # OrderedDict operations are individually GIL-atomic but the composite
 # sequences ``get → branch → pop/move_to_end`` and ``set → while-evict``
 # inside _cache_get / _cache_put are not. Without this lock, a worker
@@ -106,22 +101,29 @@ _decrypt_cache: "_OrderedDict[tuple[str, str], tuple[str, float]]" = _OrderedDic
 _decrypt_cache_lock = _Lock()
 
 
-def _cache_get(key: tuple[str, str]) -> Optional[str]:
+def _cache_get(key: tuple[str, str], ciphertext: str) -> Optional[str]:
     with _decrypt_cache_lock:
         entry = _decrypt_cache.get(key)
         if entry is None:
             return None
-        plaintext, exp = entry
-        if _time.monotonic() > exp:
+        plaintext, exp, digest = entry
+        if (
+            _time.monotonic() > exp
+            or digest != hashlib.sha256(ciphertext.encode()).hexdigest()
+        ):
             _decrypt_cache.pop(key, None)
             return None
         _decrypt_cache.move_to_end(key)  # MRU
         return plaintext
 
 
-def _cache_put(key: tuple[str, str], plaintext: str) -> None:
+def _cache_put(key: tuple[str, str], plaintext: str, ciphertext: str) -> None:
     with _decrypt_cache_lock:
-        _decrypt_cache[key] = (plaintext, _time.monotonic() + _DECRYPT_CACHE_TTL_S)
+        _decrypt_cache[key] = (
+            plaintext,
+            _time.monotonic() + _DECRYPT_CACHE_TTL_S,
+            hashlib.sha256(ciphertext.encode()).hexdigest(),
+        )
         _decrypt_cache.move_to_end(key)
         while len(_decrypt_cache) > _DECRYPT_CACHE_MAX:
             _decrypt_cache.popitem(last=False)  # evict LRU
@@ -174,7 +176,7 @@ def set_user_api_key(
             row.last_validated_at = None
             row.last_validation_error = None
         s.commit()
-    _cache_put((user_id, provider), plaintext)
+    _cache_put((user_id, provider), plaintext, ciphertext)
     return {"provider": provider, "masked": masked, "set": True}
 
 
@@ -197,10 +199,9 @@ def delete_user_api_key(
             .delete(synchronize_session=False)
         )
         s.commit()
-    # Hold the lock for the cache invalidation so this delete-on-revoke
-    # path doesn't race against a concurrent _cache_get (GIL-atomic dict
-    # ops were safe, but the lock guarantees ordering: callers can't see
-    # plaintext for a key that's already been deleted from the DB).
+    # Invalidate this process's decryption cache. Every future lookup also reads
+    # the authoritative row, including in other workers. Already-dispatched
+    # provider requests cannot be retroactively cancelled by deleting a key.
     with _decrypt_cache_lock:
         _decrypt_cache.pop((user_id, provider), None)
     return bool(rows)
@@ -239,13 +240,11 @@ def get_user_api_key_plaintext(
     call so the migration completes without a maintenance window.
     """
     cache_key = (user_id, provider)
-    cached = _cache_get(cache_key)
-    if cached:
-        return cached
-
     with _session(db) as s:
         user_pk = resolve_user_pk(s, user_id)
         if user_pk is None:
+            with _decrypt_cache_lock:
+                _decrypt_cache.pop(cache_key, None)
             return None
         row = (
             s.query(UserModelCredential)
@@ -253,11 +252,18 @@ def get_user_api_key_plaintext(
                 UserModelCredential.user_id == user_pk,
                 UserModelCredential.provider == provider,
             )
+            .populate_existing()
             .first()
         )
         if row is None:
+            with _decrypt_cache_lock:
+                _decrypt_cache.pop(cache_key, None)
             return None
 
+        ciphertext = row.key_ciphertext
+        cached = _cache_get(cache_key, ciphertext)
+        if cached:
+            return cached
         plaintext = decrypt_secret(row.key_ciphertext)
         if plaintext is None:
             logger.error(
@@ -266,30 +272,42 @@ def get_user_api_key_plaintext(
                 user_id,
                 provider,
             )
-            return None
+            with _decrypt_cache_lock:
+                _decrypt_cache.pop(cache_key, None)
+            raise ModelConnectionUnavailable()
 
         # Lazy migration: if a legacy key decrypted us, re-write under the
-        # current primary. Best-effort — even if the commit fails we still
-        # return the plaintext for the caller.
-        if not encrypted_with_primary(row.key_ciphertext):
+        # current primary. Compare the old ciphertext so a concurrent rotation
+        # cannot be overwritten with the older secret. Failure stops dispatch.
+        if not encrypted_with_primary(ciphertext):
+            rotated_ciphertext = encrypt_secret(plaintext)
             try:
-                row.key_ciphertext = encrypt_secret(plaintext)
-                s.commit()
-                logger.info(
-                    "Re-encrypted user_api_key under new SECRET_KEY: user=%s provider=%s",
-                    user_id,
-                    provider,
+                updated = (
+                    s.query(UserModelCredential)
+                    .filter(
+                        UserModelCredential.id == row.id,
+                        UserModelCredential.key_ciphertext == ciphertext,
+                    )
+                    .update(
+                        {"key_ciphertext": rotated_ciphertext},
+                        synchronize_session=False,
+                    )
                 )
-            except Exception as exc:  # noqa: BLE001
+                if not updated:
+                    s.rollback()
+                    raise ModelConnectionUnavailable()
+                s.commit()
+                ciphertext = rotated_ciphertext
+            except ModelConnectionUnavailable:
+                raise
+            except Exception as exc:
                 logger.warning(
-                    "Lazy re-encrypt failed for user=%s provider=%s: %s",
-                    user_id,
-                    provider,
-                    exc,
+                    "Credential re-encryption unavailable (%s)", type(exc).__name__
                 )
                 s.rollback()
+                raise ModelConnectionUnavailable() from exc
 
-        _cache_put(cache_key, plaintext)
+        _cache_put(cache_key, plaintext, ciphertext)
         return plaintext
 
 

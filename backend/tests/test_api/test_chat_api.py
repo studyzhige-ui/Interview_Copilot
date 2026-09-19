@@ -974,6 +974,8 @@ def test_mock_start_creates_record_conversation_runtime(
     }
 
     class _PlanningLLM:
+        context_window = 128_000
+
         def complete(self, *args, **kwargs):
             return type(
                 "PlanningResponse",

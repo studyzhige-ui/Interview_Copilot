@@ -13,106 +13,174 @@
       "id": "VS01-S01",
       "coverage": "covered",
       "claim": "Direct UI explicit intake creates an Opportunity through the shared verified Operation without a second confirmation, NextAction, or external action.",
-      "backend_tests": ["backend/tests/test_api/test_interview_invitations_api.py", "backend/tests/test_career/test_interview_invitation_operations.py"],
-      "frontend_tests": ["src/pages/interviews/ManualInvitationForm.test.tsx"]
+      "backend_tests": [
+        "backend/tests/test_api/test_interview_invitations_api.py",
+        "backend/tests/test_career/test_interview_invitation_operations.py"
+      ],
+      "frontend_tests": [
+        "src/pages/interviews/ManualInvitationForm.test.tsx"
+      ]
     },
     {
       "id": "VS01-S02",
       "coverage": "covered",
       "claim": "The Agent adapter preserves the current user assertion source, links an explicit Opportunity, and returns the shared verified result.",
-      "backend_tests": ["backend/tests/test_agent_runtime/test_interview_invitation_tool.py"],
-      "frontend_tests": ["src/pages/chat/GeneralChatPage.test.tsx"]
+      "backend_tests": [
+        "backend/tests/test_agent_runtime/test_interview_invitation_tool.py"
+      ],
+      "frontend_tests": [
+        "src/pages/chat/GeneralChatPage.test.tsx"
+      ]
     },
     {
       "id": "VS01-S03",
       "coverage": "covered",
       "claim": "Fixture Observation stops at a deduplicated candidate and durable fact confirmation with no canonical write.",
-      "backend_tests": ["backend/tests/test_api/test_interview_invitations_api.py"],
-      "frontend_tests": ["src/pages/today/TodayPage.test.tsx"]
+      "backend_tests": [
+        "backend/tests/test_api/test_interview_invitations_api.py"
+      ],
+      "frontend_tests": [
+        "src/pages/today/TodayPage.test.tsx"
+      ]
     },
     {
       "id": "VS01-S04",
       "coverage": "covered",
       "claim": "Correct-and-confirm preserves candidate evidence and commits corrected user facts once through the atomic Operation.",
-      "backend_tests": ["backend/tests/test_career/test_interview_invitation_operations.py"],
-      "frontend_tests": ["src/pages/review/chat/InteractionCard.test.tsx"]
+      "backend_tests": [
+        "backend/tests/test_career/test_interview_invitation_operations.py"
+      ],
+      "frontend_tests": [
+        "src/pages/review/chat/InteractionCard.test.tsx"
+      ]
     },
     {
       "id": "VS01-S05",
       "coverage": "covered",
       "claim": "Reject terminates the candidate without changing Opportunity, Interview, ProcessEvent, or NextAction state.",
-      "backend_tests": ["backend/tests/test_career/test_interview_invitation_operations.py"],
-      "frontend_tests": ["src/pages/review/chat/InteractionCard.test.tsx"]
+      "backend_tests": [
+        "backend/tests/test_career/test_interview_invitation_operations.py"
+      ],
+      "frontend_tests": [
+        "src/pages/review/chat/InteractionCard.test.tsx"
+      ]
     },
     {
       "id": "VS01-S06",
       "coverage": "covered",
       "claim": "Idempotent replay returns one logical Opportunity, Interview, ProcessEvent, and Domain Event set.",
-      "backend_tests": ["backend/tests/test_career/test_interview_invitation_operations.py", "backend/tests/test_api/test_interview_invitations_api.py"],
+      "backend_tests": [
+        "backend/tests/test_career/test_interview_invitation_operations.py",
+        "backend/tests/test_api/test_interview_invitations_api.py"
+      ],
       "frontend_tests": []
     },
     {
       "id": "VS01-S07",
       "coverage": "covered",
       "claim": "Stale Interaction, candidate, and Opportunity versions fail closed without a partial write.",
-      "backend_tests": ["backend/tests/test_career/test_interview_invitation_operations.py", "backend/tests/test_api/test_interactions_api.py"],
-      "frontend_tests": ["src/pages/review/chat/InteractionCard.test.tsx"]
+      "backend_tests": [
+        "backend/tests/test_career/test_interview_invitation_operations.py",
+        "backend/tests/test_api/test_interactions_api.py"
+      ],
+      "frontend_tests": [
+        "src/pages/review/chat/InteractionCard.test.tsx"
+      ]
     },
     {
       "id": "VS01-S08",
       "coverage": "covered",
       "claim": "Cross-user object references fail closed and do not disclose the foreign object.",
-      "backend_tests": ["backend/tests/test_career/test_interview_invitation_operations.py", "backend/tests/test_api/test_interview_invitations_api.py", "backend/tests/test_api/test_interactions_api.py"],
+      "backend_tests": [
+        "backend/tests/test_career/test_interview_invitation_operations.py",
+        "backend/tests/test_api/test_interview_invitations_api.py",
+        "backend/tests/test_api/test_interactions_api.py"
+      ],
       "frontend_tests": []
     },
     {
       "id": "VS01-S09",
-      "coverage": "partial",
-      "claim": "Waiting and same-call resume are covered; a VS-01-specific worker-kill and verifying-state recovery scenario is still required.",
-      "backend_tests": ["backend/tests/test_agent_runtime/test_interview_invitation_tool.py", "backend/tests/test_services/chat/test_turn_executor.py"],
+      "coverage": "covered",
+      "claim": "Same-Turn recovery preserves the original user decision across waiting, verifying and post-COMMIT SIGKILL of a real Celery worker; duplicate broker deliveries do not duplicate local effects. Model responses are offline fixtures, never live-quality evidence.",
+      "backend_tests": [
+        "backend/tests/test_agent_runtime/test_interview_invitation_tool.py",
+        "backend/tests/test_services/chat/test_turn_executor.py",
+        "backend/tests/test_services/chat/test_invitation_turn_recovery.py",
+        "backend/tests/test_db/test_celery_invitation_recovery.py"
+      ],
       "frontend_tests": []
     },
     {
       "id": "VS01-S10",
       "coverage": "covered",
       "claim": "Preparation Client Action acknowledgement or failure changes only handoff state and never Domain verification.",
-      "backend_tests": ["backend/tests/test_agent_runtime/test_interview_invitation_tool.py", "backend/tests/test_services/chat/test_client_action_service.py", "backend/tests/test_api/test_client_actions_api.py"],
-      "frontend_tests": ["src/components/layout/ClientActionBridge.test.tsx"]
+      "backend_tests": [
+        "backend/tests/test_agent_runtime/test_interview_invitation_tool.py",
+        "backend/tests/test_services/chat/test_client_action_service.py",
+        "backend/tests/test_api/test_client_actions_api.py"
+      ],
+      "frontend_tests": [
+        "src/components/layout/ClientActionBridge.test.tsx"
+      ]
     },
     {
       "id": "VS01-S11",
       "coverage": "covered",
       "claim": "Untrusted source instructions remain reference-only evidence and cannot broaden Context Package policy or Tool scope.",
-      "backend_tests": ["backend/tests/test_api/test_interview_invitations_api.py", "backend/tests/test_career/test_interview_invitation_operations.py"],
+      "backend_tests": [
+        "backend/tests/test_api/test_interview_invitations_api.py",
+        "backend/tests/test_career/test_interview_invitation_operations.py"
+      ],
       "frontend_tests": []
     },
     {
       "id": "VS01-S12",
       "coverage": "covered",
       "claim": "Confirmation creates no NextAction and Today reads only already-established NextAction records.",
-      "backend_tests": ["backend/tests/test_career/test_interview_invitation_operations.py", "backend/tests/test_agent_runtime/test_interview_invitation_tool.py"],
-      "frontend_tests": ["src/pages/today/TodayPage.test.tsx"]
+      "backend_tests": [
+        "backend/tests/test_career/test_interview_invitation_operations.py",
+        "backend/tests/test_agent_runtime/test_interview_invitation_tool.py"
+      ],
+      "frontend_tests": [
+        "src/pages/today/TodayPage.test.tsx"
+      ]
     },
     {
       "id": "VS01-S13",
       "coverage": "covered",
       "claim": "Confirmation records only the confirmed Interview and ProcessEvent and does not invent future application phases.",
-      "backend_tests": ["backend/tests/test_career/test_interview_invitation_operations.py"],
+      "backend_tests": [
+        "backend/tests/test_career/test_interview_invitation_operations.py"
+      ],
       "frontend_tests": []
     },
     {
       "id": "VS01-S14",
-      "coverage": "partial",
-      "claim": "Durable unknown and reconciliation records exist in schema, but commit-ambiguity recovery is not yet wired through every VS-01 adapter.",
-      "backend_tests": ["backend/tests/test_career/test_interview_invitation_operations.py"],
-      "frontend_tests": []
+      "coverage": "covered",
+      "claim": "Exact durable ingress and local Operation receipts reconcile unknown submissions and verification-boundary process loss; user-asserted, fixture and Gmail candidate tools resume the original identity, never an unknown paid model request or external mutation.",
+      "backend_tests": [
+        "backend/tests/test_career/test_interview_invitation_operations.py",
+        "backend/tests/test_api/test_invitation_submission_recovery.py",
+        "backend/tests/test_db/test_budget_and_invitation_recovery_postgres.py",
+        "backend/tests/test_db/test_celery_invitation_recovery.py",
+        "backend/tests/test_services/chat/test_invitation_turn_recovery.py"
+      ],
+      "frontend_tests": [
+        "src/pages/interviews/ManualInvitationForm.test.tsx"
+      ]
     },
     {
       "id": "VS01-S15",
       "coverage": "covered",
       "claim": "Today has no seed or fallback facts and projects real NextAction, Interaction, confirmed Domain Event, and Harness activity owners.",
-      "backend_tests": ["backend/tests/test_api/test_interactions_api.py", "backend/tests/test_api/test_interview_invitations_api.py"],
-      "frontend_tests": ["src/pages/today/TodayPage.test.tsx", "src/pages/activities/ActivityCenterPage.test.tsx"]
+      "backend_tests": [
+        "backend/tests/test_api/test_interactions_api.py",
+        "backend/tests/test_api/test_interview_invitations_api.py"
+      ],
+      "frontend_tests": [
+        "src/pages/today/TodayPage.test.tsx",
+        "src/pages/activities/ActivityCenterPage.test.tsx"
+      ]
     }
   ]
 }

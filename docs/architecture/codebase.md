@@ -237,3 +237,55 @@ Model placement is a separate choice. Either launch topology can use remote
 providers, local models, or a per-capability hybrid; do not describe these as
 additional launch modes. `scripts/init_models.py` owns interactive local model
 selection and persists the resulting provider/model settings in `.env`.
+
+
+## Retrieval admission and model-connection authority
+
+`core/bounded_work.py` is a small synchronous-work admission primitive, not a
+new scheduler framework. `rag/retrieval/workers.py` owns four process-local
+pools for canonical storage, vector search, embedding and reranking. A permit
+belongs to the actual concurrent Future: cancellation of an async waiter does
+not free a slot while its Python thread still runs. Pending jobs can be cancelled;
+running jobs drain. The default single reranker worker avoids assuming that a
+local model instance is thread-safe. Prefork children create their own pools;
+API/Celery shutdown closes admission and pending work. No live Session is passed
+into these pools: storage functions create and close their own sessions.
+
+The limits multiply by the number of API/worker processes. They are not a
+fleet-wide quota, a CPU sandbox or a way to kill hung native code. SDK/network/DB
+deadlines and operator process supervision remain necessary. A closed pool
+cannot be reopened until its previous work has drained.
+
+Retrieval preserves `capacity_exhausted`, `retrieval_incomplete` and
+`canonical_unavailable` instead of misreporting `no_candidates`. Partial results
+keep `degraded=true`; the Agent tool receives that flag and the exact outcome.
+Canonical ownership checks never fall back to index text when PostgreSQL is
+unavailable. These operational limits do not alter the ranking threshold or
+pretend to improve factual recall without an evaluation.
+
+Model connection resolution distinguishes verified absence from lookup failure.
+No stored override/key/selection may still use the existing documented deployment
+fallback; a database/decryption error stops construction with
+`ModelConnectionUnavailable` instead of changing the destination or credential.
+The user-facing error is stable and does not contain the underlying storage error.
+The plaintext LRU is only a decryption optimization: every lookup rechecks the
+current encrypted row. Cross-worker rotation/deletion invalidates reuse on the
+next lookup; lazy re-encryption uses a ciphertext compare-and-swap. Already-sent
+provider requests cannot be retrospectively revoked by this mechanism.
+
+## Evidence levels used by CI
+
+The same repository has three distinct kinds of tests, not interchangeable claims:
+
+1. Unit/service/component tests exercise contracts with controlled dependencies.
+2. PostgreSQL/Redis/Celery SIGKILL and Chromium campaigns exercise real process,
+   transport, transaction and UI behavior. Only heavyweight/live-model boundaries
+   use labeled fixtures, and every test owns an isolated database/queue.
+3. `evaluation/` live semantic/learning evaluations require explicit model/data
+   configuration. Their results are not inferred from (1) or (2).
+
+`career_agent_os_eval` binds all 15 VS-01 scenarios to fresh backend and frontend
+JUnit. A static manifest or a skipped required case is not acceptance. CI runs
+that full deterministic gate after the real browser campaign. The gate covers
+invitation intake/confirmation/handoff only: it does not certify all future
+career journeys, memory quality, real OAuth accounts or financial accounting.

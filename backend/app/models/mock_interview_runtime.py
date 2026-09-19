@@ -44,6 +44,11 @@ class MockInterviewRuntime(Base):
     # the next interviewer turn. A timestamp (rather than a boolean) lets a
     # later retry reclaim a lease left behind by a killed API process.
     answer_claimed_at = Column(DateTime, nullable=True)
+    # Monotonic fence: expiry permits takeover, not late results or cleanup
+    # from an older request. Never reset on successful completion.
+    answer_claim_generation = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     # Personalized stage guidance, needed only while generating live turns.
     plan_json = Column(JSONValue, nullable=False)
     interviewer_style = Column(String, nullable=False)

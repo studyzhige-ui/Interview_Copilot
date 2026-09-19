@@ -8,6 +8,8 @@ from typing import Any
 
 from llama_index.core import Settings
 
+from app.core.bounded_work import WorkCapacityExceeded
+from app.rag.retrieval.workers import pool
 from app.rag.domain.models import SearchIntent
 from app.rag.index.identity import current_index_identity
 from app.rag.index.vector_validation import validate_vector
@@ -24,6 +26,7 @@ class IntentCandidates:
     intent: SearchIntent
     hits: list[dict[str, Any]] = field(default_factory=list)
     channel_errors: list[str] = field(default_factory=list)
+    capacity_exhausted: bool = False
 
 
 def _in_scope(
@@ -44,7 +47,9 @@ def _in_scope(
 
 
 async def _query_embedding(query: str) -> list[float]:
-    vector = await asyncio.to_thread(Settings.embed_model.get_query_embedding, query)
+    vector = await pool("embedding").run(
+        Settings.embed_model.get_query_embedding, query
+    )
     return validate_vector(
         vector,
         expected_dim=current_index_identity().embedding_dim,
@@ -72,7 +77,7 @@ async def search_intent_candidates(
         filters["document_id"] = sorted(document_ids)
 
     async def sparse() -> list[dict[str, Any]]:
-        return await asyncio.to_thread(
+        return await pool("search").run(
             lambda: milvus_hybrid.sparse_search(
                 milvus_hybrid.KNOWLEDGE,
                 query_text=intent.sparse_query,
@@ -84,7 +89,7 @@ async def search_intent_candidates(
 
     async def dense(query: str) -> list[dict[str, Any]]:
         vector = await _query_embedding(query)
-        return await asyncio.to_thread(
+        return await pool("search").run(
             lambda: milvus_hybrid.dense_search(
                 milvus_hybrid.KNOWLEDGE,
                 query_dense=vector,
@@ -105,11 +110,13 @@ async def search_intent_candidates(
     ranked_lists: list[list[dict[str, Any]]] = []
     weights: list[float] = []
     errors: list[str] = []
+    capacity_exhausted = False
     dense_variant_weight = policy.dense_weight / max(1, len(intent.dense_queries))
     for index, result in enumerate(raw):
         if isinstance(result, asyncio.CancelledError):
             raise result
         if isinstance(result, BaseException):
+            capacity_exhausted |= isinstance(result, WorkCapacityExceeded)
             errors.append(f"{type(result).__name__}: {result}")
             continue
         scoped = [
@@ -127,6 +134,8 @@ async def search_intent_candidates(
         ranked_lists.append(scoped)
         weights.append(policy.sparse_weight if index == 0 else dense_variant_weight)
     if not ranked_lists:
+        if capacity_exhausted:
+            raise WorkCapacityExceeded("retrieval channels have no capacity")
         raise CandidateSearchUnavailable("; ".join(errors) or "all channels failed")
     hits = reciprocal_rank_fusion(
         ranked_lists,
@@ -136,7 +145,12 @@ async def search_intent_candidates(
     )
     for hit in hits:
         hit["intent_ids"] = [intent.intent_id]
-    return IntentCandidates(intent=intent, hits=hits, channel_errors=errors)
+    return IntentCandidates(
+        intent=intent,
+        hits=hits,
+        channel_errors=errors,
+        capacity_exhausted=capacity_exhausted,
+    )
 
 
 __all__ = [

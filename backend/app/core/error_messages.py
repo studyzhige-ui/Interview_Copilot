@@ -84,6 +84,10 @@ def humanize_error(exc: Exception) -> str:
     win first (balance → auth → rate limit → not-found → context → network
     → server → bad-request → generic).
     """
+    from app.core.model_connection_error import ModelConnectionUnavailable
+
+    if isinstance(exc, ModelConnectionUnavailable):
+        return str(exc)
     from app.core.context_budget import ContextCapacityError
 
     if isinstance(exc, ContextCapacityError):

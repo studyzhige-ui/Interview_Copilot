@@ -141,16 +141,23 @@ async def lifespan(app: FastAPI):
     # duplicate embedding + reranker copy in memory. The diagnostic /rag/query
     # endpoint initializes its own process lazily when explicitly requested.
     logger.info(">>> Heavy AI runtimes are owned by their worker queues.")
+    from app.rag.retrieval.workers import open_pools, close_pools
+
+    open_pools()
     safe_background_task(monitor_orphaned_turns(), name="orphan-turn-monitor")
     logger.info("====== Interview Copilot startup sequence complete ======")
-    yield
+    try:
+        yield
+    finally:
+        logger.info("Draining background tasks before shutdown...")
+        close_pools()
+        try:
+            await cancel_and_wait_all(timeout=10.0)
+        finally:
+            from app.agent_runtime.mcp import manager
 
-    logger.info("Draining background tasks before shutdown...")
-    await cancel_and_wait_all(timeout=10.0)
-    from app.agent_runtime.mcp import manager
-
-    await manager.close_all()
-    logger.info("====== Interview Copilot shutdown sequence complete ======")
+            await manager.close_all()
+        logger.info("====== Interview Copilot shutdown sequence complete ======")
 
 
 app = FastAPI(
@@ -205,6 +212,22 @@ import traceback as _tb
 
 from fastapi import Request as _Request
 from fastapi.responses import JSONResponse as _JSONResponse
+
+
+from app.core.model_connection_error import ModelConnectionUnavailable
+
+
+@app.exception_handler(ModelConnectionUnavailable)
+async def model_connection_unavailable(
+    _request: _Request, exc: ModelConnectionUnavailable
+):
+    from app.core.request_id import get_request_id
+
+    return _JSONResponse(
+        status_code=503,
+        content={"detail": str(exc), "code": "model_connection_unavailable"},
+        headers={"X-Request-ID": get_request_id()},
+    )
 
 
 @app.exception_handler(Exception)

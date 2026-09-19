@@ -3,7 +3,12 @@ from threading import Lock
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import task_prerun, worker_process_init
+from celery.signals import (
+    task_prerun,
+    worker_process_init,
+    worker_process_shutdown,
+    worker_shutdown,
+)
 
 from app.core.config import settings
 
@@ -290,3 +295,12 @@ def ensure_task_runtime(task=None, **kwargs):
         reranker=task_name == "tasks.process_conversation_turn",
         voice=task_name == "tasks.process_interview_analysis",
     )
+
+
+@worker_process_shutdown.connect
+@worker_shutdown.connect
+def close_retrieval_workers(**_kwargs):
+    """Stop admissions and cancel only queued RAG work on orderly shutdown."""
+    from app.rag.retrieval.workers import close_pools
+
+    close_pools()

@@ -77,3 +77,14 @@ it('transitions from setup to live when React reuses the same route', async () =
   expect(await screen.findByText('Live new-record')).toBeInTheDocument();
   expect(api.reportMockClientActionUiResult).toHaveBeenCalledWith('live-new', { outcome: 'acknowledged' });
 });
+
+
+it('retains the active interview after an unconfirmed discard', async () => {
+  api.getInProgressMock.mockResolvedValue({ has_in_progress: true, record_id: 'saved-run', title: '已保存的面试' });
+  api.abandonMockInterview.mockRejectedValue(new Error('response lost'));
+  render(<MemoryRouter><MockPage /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: '放弃' }));
+  await waitFor(() => expect(api.abandonMockInterview).toHaveBeenCalledWith('saved-run'));
+  await waitFor(() => expect(screen.getByRole('button', { name: '继续' })).toBeEnabled());
+  expect(screen.getByText('你有一个未完成的模拟面试')).toBeInTheDocument();
+});

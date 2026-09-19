@@ -2,14 +2,16 @@
 
 import asyncio
 
-from sqlalchemy import create_engine
+from sqlalchemy import MetaData, Table, create_engine
+from uuid import uuid4
+
+from app.db.types import utc_now
 from sqlalchemy.orm import sessionmaker
 from alembic import command
 from app.agent_runtime import tool_call_executor as runtime
 from app.agent_runtime.tool_policy import ToolEffect
 from app.models.agent_execution import AgentToolCall
 from app.models.chat import Conversation
-from app.models.conversation_turn import ConversationTurn
 from app.models.user import User
 from tests.test_db.test_alembic_migrations import fresh_pg_db, _make_alembic_config  # noqa: F401
 
@@ -30,19 +32,37 @@ def test_tool_identity_upgrade_preserves_audit_and_fences_concurrent_execution(
             conversation = Conversation(user_id=user.id)
             db.add(conversation)
             db.flush()
-            turn = ConversationTurn(
-                conversation_id=conversation.id,
-                user_id=user.id,
-                mode="agent",
-                message="run",
-            )
-            db.add(turn)
-            db.flush()
-            # Core INSERT does not mention the not-yet-existing digest column.
+            # Seed the actual historical schema. Current ORM defaults/columns
+            # (e.g. dispatch_requested_at introduced after 0045) cannot be used
+            # to manufacture pre-upgrade data. Reflection keeps this fixture
+            # independent of future model additions without weakening the gate.
+            metadata = MetaData()
+            turns = Table("conversation_turns", metadata, autoload_with=db.connection())
+            calls = Table("agent_tool_calls", metadata, autoload_with=db.connection())
+            turn_id = str(uuid4())
             db.execute(
-                AgentToolCall.__table__.insert().values(
+                turns.insert().values(
+                    id=turn_id,
+                    conversation_id=conversation.id,
+                    user_id=user.id,
+                    mode="agent",
+                    execution_mode="standard",
+                    message="run",
+                    question_indexes_json=[],
+                    attachments_json=[],
+                    object_references_json=[],
+                    status="pending",
+                    dispatch_generation=1,
+                    tool_snapshot_json={},
+                    loaded_tool_schemas_json=[],
+                    budget_json={},
+                    created_at=utc_now(),
+                )
+            )
+            db.execute(
+                calls.insert().values(
                     call_id="legacy",
-                    turn_id=turn.id,
+                    turn_id=turn_id,
                     session_id=conversation.id,
                     user_id=user.id,
                     tool_name="read",
@@ -50,6 +70,14 @@ def test_tool_identity_upgrade_preserves_audit_and_fences_concurrent_execution(
                     timeout_seconds=1,
                     status="completed",
                     result_json={"ok": True},
+                    effect="read",
+                    dispatch_generation=1,
+                    policy_decision="allow",
+                    policy_reason="test_read",
+                    timeline_json=[],
+                    receipt_refs_json=[],
+                    resource_identities_json=[],
+                    started_at=utc_now(),
                 )
             )
             db.commit()
@@ -72,7 +100,7 @@ def test_tool_identity_upgrade_preserves_audit_and_fences_concurrent_execution(
 
             args = dict(
                 call_id="concurrent",
-                turn_id=turn.id,
+                turn_id=turn_id,
                 session_id=conversation.id,
                 user_id=user.id,
                 tool_name="read",
