@@ -1,0 +1,28 @@
+name: Refactor locked codegen tools
+on:
+  push:
+    branches: [refactor/product-runtime-convergence]
+    paths: [.github/workflows/refactor-codegen-tools.yml]
+permissions:
+  contents: read
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install only pinned generator dependencies
+        run: |
+          npm ci --prefix scripts/contract_codegen --ignore-scripts --no-audit --no-fund
+          tar -czf "$RUNNER_TEMP/codegen-tools.tar.gz" -C scripts/contract_codegen node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: locked-codegen-tools
+          path: ${{ runner.temp }}/codegen-tools.tar.gz
+          retention-days: 1
+          if-no-files-found: error
