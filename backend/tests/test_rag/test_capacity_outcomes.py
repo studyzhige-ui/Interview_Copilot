@@ -5,6 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.bounded_work import WorkCapacityExceeded
+from app.core.execution_errors import (
+    ConsumptionSettlementUnconfirmedError,
+    ModelOutcomeUnknownError,
+)
+from app.usage.service import ModelBudgetExceededError
 from app.rag.retrieval import pipeline as module
 from app.rag.retrieval.candidates import IntentCandidates
 
@@ -109,3 +114,43 @@ async def test_canonical_database_failure_never_falls_back_to_index_text(
     assert result.chunks == []
     assert result.state.degraded
     assert result.state.empty_reason == "canonical_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["search", "rerank"])
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        ConsumptionSettlementUnconfirmedError,
+        ModelOutcomeUnknownError,
+        ModelBudgetExceededError,
+    ],
+)
+async def test_pipeline_propagates_consumption_errors(
+    pipeline, monkeypatch, stage, error_type
+):
+    error = error_type("synthetic consumption boundary")
+    calls = []
+
+    async def search(intent, **_kwargs):
+        calls.append("search")
+        if stage == "search":
+            raise error
+        return IntentCandidates(
+            intent, [{"id": "n1", "text": "evidence", "document_id": "d1"}]
+        )
+
+    async def rerank(*_args):
+        calls.append("rerank")
+        raise error
+
+    def hydrate(*_args, **_kwargs):
+        pytest.fail("must not continue after an unconfirmed paid outcome")
+
+    monkeypatch.setattr(module, "search_intent_candidates", search)
+    monkeypatch.setattr(module, "rerank_groups", rerank)
+    monkeypatch.setattr(pipeline, "_hydrate", hydrate)
+    with pytest.raises(error_type) as caught:
+        await pipeline.retrieve(intents=[{"query": "redis"}], user_id="alice")
+    assert caught.value is error
+    assert calls == (["search"] if stage == "search" else ["search", "rerank"])

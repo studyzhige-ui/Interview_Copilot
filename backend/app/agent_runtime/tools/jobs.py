@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 from app.usage.external import request as metered_request
 from app.usage.service import ModelBudgetExceededError
+from app.core.execution_errors import ModelOutcomeUnknownError
 from pydantic import BaseModel, Field
 
 from app.agent_runtime.tool_registry import (
@@ -145,7 +146,7 @@ async def _search_jobs_handler(
             "count": len(jobs),
             "jobs": jobs,
         }
-    except ModelBudgetExceededError:
+    except (ModelBudgetExceededError, ModelOutcomeUnknownError):
         raise
     except Exception as exc:
         logger.warning("search_jobs failed (%s)", type(exc).__name__)
@@ -225,7 +226,7 @@ async def _fetch_detail(job_id: str, sites: list[str]) -> dict[str, Any]:
                 }
     except httpx.TimeoutException:
         return {"error": "Lever API request timed out", "job_id": job_id}
-    except ModelBudgetExceededError:
+    except (ModelBudgetExceededError, ModelOutcomeUnknownError):
         raise
     except Exception as exc:
         logger.warning("search_jobs detail fetch failed (%s)", type(exc).__name__)

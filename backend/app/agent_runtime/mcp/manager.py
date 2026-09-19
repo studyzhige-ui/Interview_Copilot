@@ -397,24 +397,32 @@ class MCPManager:
         runtime.pending += 1
         runtime.queue.put_nowait(request)
         try:
-            async with asyncio.timeout(settings.AGENT_TOOL_TIMEOUT_SECONDS):
-                result = await future
-                if receipt is not None:
-                    await accounting.finish_async(
-                        receipt, "completed", {"requests": 1, "tool_invocations": 1}
-                    )
-                return result
-        except BaseException as exc:
-            # Cancelling a queued request must not abort another caller's
-            # currently executing operation on the shared server session.
-            if request.started:
-                await self._discard(runtime)
+            try:
+                async with asyncio.timeout(settings.AGENT_TOOL_TIMEOUT_SECONDS):
+                    result = await future
+            except BaseException as exc:
+                # Cancelling a queued request must not abort another caller's
+                # currently executing operation on the shared server session.
+                try:
+                    if request.started:
+                        await self._discard(runtime)
+                finally:
+                    if receipt is not None:
+                        await accounting.finish_async(
+                            receipt,
+                            accounting.failure_outcome(exc)
+                            if request.started
+                            else "rejected",
+                        )
+                raise
+            # Success at the provider and success at the accounting COMMIT are
+            # distinct. Never discard a healthy session or settle again because
+            # the local COMMIT acknowledgement was lost.
             if receipt is not None:
                 await accounting.finish_async(
-                    receipt,
-                    accounting.failure_outcome(exc) if request.started else "rejected",
+                    receipt, "completed", {"requests": 1, "tool_invocations": 1}
                 )
-            raise
+            return result
         finally:
             runtime.pending -= 1
             runtime.last_used = time.monotonic()

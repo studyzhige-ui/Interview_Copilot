@@ -11,6 +11,8 @@ from typing import Any
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 
 from app.core.bounded_work import WorkCapacityExceeded
+from app.core.execution_errors import ModelOutcomeUnknownError
+from app.usage.service import ModelBudgetExceededError
 from app.rag.retrieval.workers import pool
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
@@ -206,7 +208,14 @@ class KnowledgeRetrievalPipeline:
             search_errors: dict[str, str] = {}
             capacity_exhausted = False
             for intent, result in zip(planned, searched):
-                if isinstance(result, asyncio.CancelledError):
+                if isinstance(
+                    result,
+                    (
+                        asyncio.CancelledError,
+                        ModelBudgetExceededError,
+                        ModelOutcomeUnknownError,
+                    ),
+                ):
                     raise result
                 if isinstance(result, BaseException):
                     capacity_exhausted |= isinstance(result, WorkCapacityExceeded)
@@ -297,7 +306,11 @@ class KnowledgeRetrievalPipeline:
             rerank_started = perf_counter()
             try:
                 reranked = await rerank_groups(self._reranker, groups)
-            except asyncio.CancelledError:
+            except (
+                asyncio.CancelledError,
+                ModelBudgetExceededError,
+                ModelOutcomeUnknownError,
+            ):
                 raise
             except WorkCapacityExceeded:
                 return self._empty(

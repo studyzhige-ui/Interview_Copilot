@@ -9,6 +9,8 @@ from typing import Any
 from llama_index.core import Settings
 
 from app.core.bounded_work import WorkCapacityExceeded
+from app.core.execution_errors import ModelOutcomeUnknownError
+from app.usage.service import ModelBudgetExceededError
 from app.rag.retrieval.workers import pool
 from app.rag.domain.models import SearchIntent
 from app.rag.index.identity import current_index_identity
@@ -113,7 +115,14 @@ async def search_intent_candidates(
     capacity_exhausted = False
     dense_variant_weight = policy.dense_weight / max(1, len(intent.dense_queries))
     for index, result in enumerate(raw):
-        if isinstance(result, asyncio.CancelledError):
+        if isinstance(
+            result,
+            (
+                asyncio.CancelledError,
+                ModelBudgetExceededError,
+                ModelOutcomeUnknownError,
+            ),
+        ):
             raise result
         if isinstance(result, BaseException):
             capacity_exhausted |= isinstance(result, WorkCapacityExceeded)

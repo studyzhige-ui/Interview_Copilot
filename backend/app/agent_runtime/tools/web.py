@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 import httpx
 from app.usage.external import request as metered_request, stream as metered_stream
 from app.usage.service import ModelBudgetExceededError
+from app.core.execution_errors import ModelOutcomeUnknownError
 from pydantic import BaseModel, Field
 
 from app.agent_runtime.tool_registry import (
@@ -151,7 +152,7 @@ async def _search_duckduckgo(args: WebSearchArgs) -> dict[str, Any]:
             "provider": "duckduckgo",
             "query": args.query,
         }
-    except ModelBudgetExceededError:
+    except (ModelBudgetExceededError, ModelOutcomeUnknownError):
         raise
     except Exception as exc:
         logger.warning("DuckDuckGo request failed (%s)", type(exc).__name__)
@@ -185,7 +186,7 @@ async def _search_duckduckgo(args: WebSearchArgs) -> dict[str, Any]:
             )
             if len(results) >= args.limit:
                 break
-    except ModelBudgetExceededError:
+    except (ModelBudgetExceededError, ModelOutcomeUnknownError):
         raise
     except Exception as exc:
         logger.warning("DuckDuckGo response parse failed (%s)", type(exc).__name__)
@@ -240,7 +241,7 @@ async def _web_search_handler(
         result = await _search_duckduckgo(args)
         result["fallback_from"] = "tavily_timeout"
         return result
-    except ModelBudgetExceededError:
+    except (ModelBudgetExceededError, ModelOutcomeUnknownError):
         raise
     except Exception as exc:
         logger.warning("Tavily request failed (%s)", type(exc).__name__)
@@ -400,7 +401,7 @@ async def _read_url_handler(
 
     except httpx.TimeoutException:
         return {"error": "Request timed out", "url": args.url}
-    except ModelBudgetExceededError:
+    except (ModelBudgetExceededError, ModelOutcomeUnknownError):
         raise
     except Exception as exc:
         logger.warning("read_url request failed (%s)", type(exc).__name__)

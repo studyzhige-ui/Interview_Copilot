@@ -197,6 +197,22 @@ second settlement or provider resend is performed. Usage validation cannot
 rewrite admission attempt counts or provide inconsistent logical/disjoint token
 buckets. Operator quiescence is a real boolean attestation, not a truthy string.
 
+The same rule is enforced outside the ledger, at each transport and fallback
+boundary. HTTP stream success settles after the stream's cleanup scope; MCP
+success settles outside its transport-error handler, without discarding the
+healthy session. Cloud parsing propagates the settlement error rather than
+calling settlement a second time. Web/job search and parser-selection fallbacks
+propagate non-retryable consumption errors. The optional conversation planner,
+parallel candidate fusion and retrieval/reranking orchestrator preserve that
+same stop signal rather than recasting it as degraded evidence. Already-started
+parallel channels still complete their accounting; success in another channel
+cannot hide an unconfirmed paid result. An ordinary read timeout or local parser
+failure still follows its documented fallback. Tests inject failure both
+before COMMIT and after a successful COMMIT with a lost acknowledgement, checking
+one provider completion, one settlement attempt, unchanged receipt identity,
+resource cleanup and the actual persisted balance. A green ledger-unit test
+alone is not evidence that outer adapters preserve its contract.
+
 `0052` uses `jsonb_build_object`, not colon-containing JSON SQL literals. Its
 PostgreSQL campaign checks every old status (`reserved`, `unknown`, `settled`,
 `estimated`, `rejected`) across owners and UTC days, a user with no past calls,
@@ -221,6 +237,10 @@ reading a newer patch's documentation does not silently upgrade production):
 - [PostgreSQL 15 JSON construction](https://www.postgresql.org/docs/15/functions-json.html)
   and [row locking](https://www.postgresql.org/docs/15/explicit-locking.html):
   JSON constructors and transactional row locks, tested against the actual CI database.
+- [Python context-manager exception propagation](https://docs.python.org/3.13/library/contextlib.html)
+  and [HTTPX async streaming](https://www.python-httpx.org/async/):
+  exceptions from a caller's block return at `yield`; response cleanup must
+  complete, but a later accounting failure must not re-enter transport recovery.
 - [Python 3.13 cancellation shielding](https://docs.python.org/3.13/library/asyncio-task.html#shielding-from-cancellation):
   protecting the short accounting task is not cancellation of an already-sent
   remote operation or an already-running thread.

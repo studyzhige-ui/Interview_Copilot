@@ -92,7 +92,9 @@ async def stream(
             size = getattr(response, "num_bytes_downloaded", None)
             if type(size) is int:
                 measured["bytes"] = size
-            await runtime.finish_async(receipt, outcome, measured)
     except BaseException as exc:
         await runtime.finish_async(receipt, runtime.failure_outcome(exc))
         raise
+    # Transport and response cleanup have finished. A settlement COMMIT failure
+    # is not a network failure and must not enter the transport recovery branch.
+    await runtime.finish_async(receipt, outcome, measured)

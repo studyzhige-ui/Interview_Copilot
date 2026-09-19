@@ -86,6 +86,7 @@ def parse(file_path: str) -> ParsedDocument:
     output_key = "text" if settings.CLOUD_PARSE_TIER == "fast" else "markdown"
     accepted = False
     job_completed = False
+    observed_units = None
     try:
         deadline = time.monotonic() + settings.CLOUD_PARSE_DEADLINE_SECONDS
         with httpx.Client(
@@ -147,13 +148,13 @@ def parse(file_path: str) -> ParsedDocument:
                     raise ValueError("cloud_parse_page_number_invalid")
                 page_numbers.add(number)
                 parsed.append(ParsedPage(text=page[output_key], number=number))
-            runtime.finish(receipt, "completed", {**units, "pages": len(parsed)})
+            observed_units = {**units, "pages": len(parsed)}
             # Refuse silent truncation instead of recording a partial file as complete.
             if (known_pages is not None and len(parsed) != known_pages) or (
                 known_pages is None and len(parsed) >= limit
             ):
                 raise ValueError("cloud_parse_coverage_incomplete")
-            return ParsedDocument(
+            document = ParsedDocument(
                 pages=parsed,
                 parser_id="llamaparse",
                 content_kind="text" if output_key == "text" else "markdown",
@@ -166,7 +167,11 @@ def parse(file_path: str) -> ParsedDocument:
             if accepted
             else runtime.failure_outcome(exc)
         )
-        runtime.finish(receipt, outcome)
+        runtime.finish(receipt, outcome, observed_units)
         if outcome == "unknown" and isinstance(exc, Exception):
             raise ModelOutcomeUnknownError("cloud_parse_outcome_unknown") from exc
         raise
+    # Result validation and HTTP client cleanup precede settlement. A lost
+    # settlement acknowledgement must not re-enter the provider failure path.
+    runtime.finish(receipt, "completed", observed_units)
+    return document
