@@ -1,0 +1,123 @@
+name: Publish verified engineering and ownership tree
+on:
+  push:
+    branches: [refactor/product-runtime-convergence]
+    paths: [.github/workflows/engineering-apply.yml]
+permissions:
+  contents: write
+concurrency:
+  group: engineering-verified-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'studyzhige-ui/Interview_Copilot' && github.ref == 'refs/heads/refactor/product-runtime-convergence'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install pinned source checker
+        run: python -m pip install ruff==0.16.2
+      - name: Validate baseline and reproduce the exact locally tested tree
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 08d6469454bdb7d575b4cf5ff45e38b3d516f490 HEAD
+          git fetch origin refs/heads/refactor/product-runtime-convergence
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          python - <<'PY'
+          import ast, base64, hashlib, json, lzma, subprocess
+          from pathlib import Path
+          BASE = '08d6469454bdb7d575b4cf5ff45e38b3d516f490'
+          allowed = {f'.engineering-transfer/{i:02}.txt' for i in range(1,17)}
+          allowed.add('.github/workflows/engineering-apply.yml')
+          changes = subprocess.check_output(['git','diff','--name-only',BASE,'HEAD']).decode().splitlines()
+          assert set(changes) == allowed, 'unexpected source changes: refuse to overwrite'
+          encoded = ''.join(Path(f'.engineering-transfer/{i:02}.txt').read_text() for i in range(1,17))
+          assert len(encoded) == 100000
+          packed = base64.b64decode(encoded, validate=True)
+          assert hashlib.sha256(packed).hexdigest() == '4f3b8609ce5070a687eea19e1a5a935d4de58b220ba3219f8888ef49e6390981'
+          decoder = lzma.LZMADecompressor(memlimit=128*1024*1024)
+          raw = decoder.decompress(packed, max_length=2*1024*1024)
+          assert decoder.eof and not decoder.unused_data
+          assert hashlib.sha256(raw).hexdigest() == '5f6f5c698869dd4f66b68f49d9e7c85dff7045fab30a0165e54c4ad17580d6e6'
+          data = json.loads(raw)
+          M = data['mapping']['modules']
+          physical = data['mapping']['files']
+          def rewrite(s,source):
+           if source.endswith('.py'):
+            def moved(name):
+             for old in sorted(M,key=len,reverse=True):
+              if name==old or name.startswith(old+'.'):return M[old]+name[len(old):]
+             return name
+            lines=s.splitlines(keepends=True);edits=[]
+            for n in ast.walk(ast.parse(s)):
+             if isinstance(n,ast.ImportFrom) and n.level==0 and n.module:
+              changed=False;decl=[]
+              for a in n.names:
+               child=n.module+'.'+a.name;newchild=moved(child);parent=moved(n.module)
+               if parent!=n.module:
+                decl.append(' '*n.col_offset+f'from {parent} import {a.name}'+(f' as {a.asname}' if a.asname else ''));changed=True
+               elif newchild!=child:
+                par,_,leaf=newchild.rpartition('.');binding=a.asname or a.name
+                decl.append(' '*n.col_offset+f'from {par} import {leaf}'+(f' as {binding}' if leaf!=binding or a.asname else ''));changed=True
+               else:decl.append(' '*n.col_offset+f'from {n.module} import {a.name}'+(f' as {a.asname}' if a.asname else ''))
+              if changed:edits.append((n.lineno-1,n.end_lineno,'\n'.join(decl)+'\n'))
+            for a,b,t in sorted(edits,reverse=True):lines[a:b]=[t]
+            s=''.join(lines)
+           for old in sorted(M,key=len,reverse=True):s=s.replace(old,M[old])
+           if not source.endswith('.py'):
+            for old,new in sorted(physical.items(),key=lambda x:-len(x[0])):s=s.replace(old,new).replace(old.removeprefix('backend/'),new.removeprefix('backend/'))
+           return s
+          def safe(name):
+              p=Path(name)
+              assert not p.is_absolute() and not {'.git','..'} & set(p.parts)
+              assert all(not part.is_symlink() for part in [p,*p.parents])
+              return p
+          pending={}
+          assert len(data['records']) == 538
+          for source,target,edits in data['records']:
+              path=safe(target)
+              assert target not in pending
+              if edits is None:
+                  assert path.is_file()
+                  pending[target]=None
+                  continue
+              before=''
+              if source is not None:
+                  safe(source)
+                  before=subprocess.check_output(['git','show',BASE+':'+source]).decode('utf-8')
+                  before=rewrite(before,source)
+              lines=before.splitlines(keepends=True)
+              end=len(lines)
+              for start,stop,text in reversed(edits):
+                  assert 0 <= start <= stop <= end
+                  lines[start:stop]=[text]
+                  end=start
+              pending[target]=''.join(lines).encode('utf-8')
+          for name,after in pending.items():
+              p=safe(name)
+              if after is None:p.unlink()
+              else:
+                  p.parent.mkdir(parents=True,exist_ok=True)
+                  p.write_bytes(after)
+          print('Reproduced 538 source path changes from the fixed baseline.')
+          PY
+          git rm -r .engineering-transfer .github/workflows/engineering-apply.yml
+          git add -A
+          test "$(git write-tree)" = '25059b4b9cbdde10d83df5295d83324c197f0b2d'
+          ruff format --check backend/app backend/tests evaluation scripts
+          ruff check backend/app backend/tests evaluation scripts
+          python -m compileall -q backend/app backend/tests evaluation scripts
+          git diff --cached --check
+      - name: Publish only the verified source on the existing draft branch
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor: unify production consumption and retire duplicate business service owners' -m 'Exact source tree verified against local regression tests and migration contracts. All currently enabled billable categories share a durable account ledger with versioned prices and evidence-based reconciliation. Business owners replace the old services tree; real dependency checks enforce the boundaries. Main, production data, credentials and paid services remain untouched. Real-service CI and product quality gates are separate.'
+          git push origin HEAD:refs/heads/refactor/product-runtime-convergence
