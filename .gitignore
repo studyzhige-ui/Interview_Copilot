@@ -25,6 +25,9 @@ dist/
 *.egg-info/
 *.egg
 
+# Node development dependencies (including isolated contract tooling)
+node_modules/
+
 # Runtime data
 data/
 backend/data/

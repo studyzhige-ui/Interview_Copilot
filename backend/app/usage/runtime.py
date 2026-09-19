@@ -19,7 +19,10 @@ from threading import Lock
 from typing import Any, Callable
 
 from app.core.config import settings
-from app.core.execution_errors import ModelOutcomeUnknownError
+from app.core.execution_errors import (
+    ModelOutcomeUnknownError,
+    ConsumptionSettlementUnconfirmedError,
+)
 from app.core.provider_usage import accumulate, ledger_units
 from sqlalchemy import select
 from app.db.database import SessionLocal
@@ -172,29 +175,42 @@ def begin(
 
 
 def finish(receipt: Receipt, outcome: str, units: dict | None = None) -> None:
-    logical_tokens = (
-        None
-        if units is None or not {"input_tokens", "output_tokens"}.issubset(units)
-        else sum(
-            units.get(k, 0)
-            for k in (
-                "input_tokens",
-                "output_tokens",
-                "cache_read_tokens",
-                "cache_write_tokens",
+    """Finish accounting without turning a lost COMMIT ack into a new dispatch.
+
+    The provider may already have completed. If validation, persistence or the
+    COMMIT acknowledgement fails, expose a non-retryable execution error and
+    retain the original receipt for readback/reconciliation. Do not start a
+    second settlement transaction or resend the provider request here.
+    """
+    try:
+        logical_tokens = (
+            None
+            if units is None or not {"input_tokens", "output_tokens"}.issubset(units)
+            else sum(
+                units.get(k, 0)
+                for k in (
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_read_tokens",
+                    "cache_write_tokens",
+                )
             )
         )
-    )
-    with SessionLocal() as db:
-        service.settle_identity(
-            db,
-            user_id=receipt.user_id,
-            identity=receipt.identity,
-            outcome=outcome,
-            observed_tokens=logical_tokens,
-            observed_units=units,
-        )
-        db.commit()
+        with SessionLocal() as db:
+            service.settle_identity(
+                db,
+                user_id=receipt.user_id,
+                identity=receipt.identity,
+                outcome=outcome,
+                observed_tokens=logical_tokens,
+                observed_units=units,
+            )
+            db.commit()
+
+    except Exception as exc:
+        raise ConsumptionSettlementUnconfirmedError(
+            "consumption_settlement_unconfirmed"
+        ) from exc
 
 
 def failure_outcome(exc: BaseException) -> str:

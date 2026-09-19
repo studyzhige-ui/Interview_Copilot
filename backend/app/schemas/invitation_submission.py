@@ -11,11 +11,15 @@ from app.schemas.interview_invitation import (
 
 
 class SubmissionKey(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
     idempotency_key: str = Field(min_length=1, max_length=200)
 
 
 class InvitationSubmissionReceipt(SubmissionKey):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
     status: Literal["not_received", "pending", "committed", "rejected", "cancelled"]
     command: ConfirmInterviewInvitation | None = None
     result: ConfirmInterviewInvitationResult | None = None

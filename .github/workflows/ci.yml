@@ -79,6 +79,9 @@ jobs:
       - name: Compile check
         run: python -m compileall -q backend/app evaluation scripts
 
+      - name: Verify canonical shared protocol snapshot
+        run: python scripts/export_shared_contracts.py --check
+
       - name: Apply and verify database migrations
         run: |
           alembic upgrade head
@@ -165,6 +168,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+
+      - name: Check generated Python-TypeScript protocols
+        run: |
+          npm ci --prefix ../scripts/contract_codegen --ignore-scripts --no-audit --no-fund
+          npm run --prefix ../scripts/contract_codegen check
 
       - name: Type check
         run: npx tsc --noEmit

@@ -376,9 +376,9 @@ export interface FactConfirmationInteraction extends AgentInteractionBase {
   kind: 'fact_confirmation';
   request: {
     protocol: string;
-    invitation_facts: Partial<import('@/api/interviewInvitations').InvitationFacts>;
+    invitation_facts: Partial<import('./generated/shared-protocols').components['schemas']['InterviewInvitationCandidateFactsResponseContract']>;
     expected_candidate_version: number;
-    candidate_reference: { kind: string; id: string; version: number };
+    candidate_reference: { kind: string; id: string; version: number | null };
     missing_or_uncertain_fields: string[];
     conflicts: string[];
     source_and_evidence_references: Array<{ kind: string; identity: string; version?: string | null }>;

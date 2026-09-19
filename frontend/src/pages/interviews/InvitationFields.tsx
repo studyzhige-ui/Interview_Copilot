@@ -11,9 +11,12 @@ const fields: Array<[keyof InvitationFacts, string, number, boolean]> = [
   ['meeting_url', '会议链接', 4000, false], ['contact_name', '联系人', 200, false],
   ['contact_email', '联系邮箱', 320, false],
 ];
-export function invitationDraft(facts: Partial<InvitationFacts> = {}): InvitationDraft {
-  return Object.fromEntries(fields.map(([key]) => [key, facts[key] ?? (
-    key === 'source_timezone' ? Intl.DateTimeFormat().resolvedOptions().timeZone : ''
+type NullableInvitationFacts = Partial<{ [K in keyof InvitationFacts]: InvitationFacts[K] | null }>;
+export function invitationDraft(facts?: NullableInvitationFacts): InvitationDraft {
+  // A new manual form may suggest the user's zone. A candidate whose zone is
+  // unknown must remain unknown until explicitly corrected, not inherit it.
+  return Object.fromEntries(fields.map(([key]) => [key, facts?.[key] ?? (
+    facts === undefined && key === 'source_timezone' ? Intl.DateTimeFormat().resolvedOptions().timeZone : ''
   )])) as InvitationDraft;
 }
 export function checkedFacts(draft: InvitationDraft): InvitationFacts {

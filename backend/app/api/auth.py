@@ -10,8 +10,8 @@ Security model:
   registration deliberately returns an explicit duplicate-account conflict.
 
 Thin router: token/code protocol flow + HTTP status mapping. The
-``users``-table work lives in ``services.auth.user_account_service``; the
-avatar storage logic in ``services.auth.avatar_service``.
+``users``-table work lives in ``identity.application.user_account_service``; the
+avatar storage logic in ``identity.application.avatar_service``.
 """
 
 from __future__ import annotations

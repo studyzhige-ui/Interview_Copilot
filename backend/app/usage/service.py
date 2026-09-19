@@ -316,8 +316,30 @@ def settle_identity(
         return
     if row.status == "unknown" and outcome != "unknown" and not reconciliation_ref:
         return
-    window = _window(db, user_id, row.window_date)
     reserved = row.reserved_units_json or {}
+    # Physical-attempt counters are established by admission, not a provider's
+    # usage payload. Missing metrics are permitted; conflicting ones are not.
+    for key in ("requests", "external_requests", "tool_invocations"):
+        if observed_units is not None and key in observed_units:
+            if observed_units[key] != reserved.get(key, 0):
+                raise ValueError("settlement_cannot_change_admitted_attempts")
+    if (
+        observed_tokens is not None
+        and observed_units is not None
+        and {"input_tokens", "output_tokens"} <= observed_units.keys()
+        and observed_tokens
+        != sum(
+            observed_units.get(key, 0)
+            for key in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+            )
+        )
+    ):
+        raise ValueError("inconsistent_settlement_token_buckets")
+    window = _window(db, user_id, row.window_date)
     if outcome == "unknown":
         merged = {
             k: max(v, (observed_units or {}).get(k, 0)) for k, v in reserved.items()

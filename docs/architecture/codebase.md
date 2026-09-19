@@ -47,6 +47,43 @@ under `data/` and are not source code. Python bytecode and system-style
 temporary files are redirected there by the supported launchers; application
 code uses `core/runtime_files.py` for temporary files and bounded JSONL output.
 
+## Shared wire schemas and compatibility gate
+
+`backend/app/schemas/` owns versioned Operation, Verification, Interaction,
+Client Action, Context Package and Activity contracts. Do not independently
+change a frontend mirror. The schema export imports only these DTOs, not the
+application, database, model clients or user configuration. Validation and
+serialization schemas are separate: clients may omit defaults while the current
+response serializers include them. Validation-only ORM aliases such as
+`request_json` must not leak into the response contract.
+
+```sh
+python scripts/export_shared_contracts.py
+npm ci --prefix scripts/contract_codegen --ignore-scripts
+npm run --prefix scripts/contract_codegen generate
+# CI checks both snapshots and TypeScript consumer compatibility:
+python scripts/export_shared_contracts.py --check
+npm run --prefix scripts/contract_codegen check
+npm run --prefix frontend typecheck
+```
+
+The committed OpenAPI 3.1 snapshot has local component references only. The
+pinned official `openapi-typescript` generator is a development tool, not a
+runtime HTTP client replacement. Its 7.13.0 TypeScript-5 peer is isolated in its
+own lockfile (5.9.3); the frontend keeps its existing TypeScript 6.0.3. Generated
+source is checked, not silently regenerated during CI. Compile-time directional
+checks ensure requests fit server inputs and responses fit UI projections;
+negative controls prevent an empty check from appearing successful. The UI can
+omit unused response fields, but cannot invent non-nullability or a supported
+action enum. Nullable candidate fields remain unknown; only a new manual form
+suggests the browser timezone.
+
+These checks do not implement semantic validators in TypeScript: permissions,
+aware dates, field dependencies, exact decisions and unknown schema versions
+still require runtime validation and behavior tests. Official generation APIs:
+[Pydantic JSON Schema](https://docs.pydantic.dev/latest/concepts/json_schema/) and
+[openapi-typescript CLI](https://openapi-ts.dev/cli), checked 2026-09-19.
+
 ## Runtime flow
 
 ```text
@@ -148,6 +185,45 @@ window. No provider request runs inside the accounting transaction. Deleting a
 conversation cannot reset usage. An unresolved call retains its allowance across
 restart/day boundaries; an account-wide unresolved-count cap prevents unlimited
 accumulation. Replaying an existing dispatch is not a second admission.
+
+### Settlement and upgrade closeout
+
+The application must not infer another network-send permission from a failed
+accounting COMMIT. `ConsumptionSettlementUnconfirmedError` is non-retryable and
+explicitly distinguishes unconfirmed **local settlement** from an unknown
+**provider result**. The original receipt remains the recovery anchor, whether
+COMMIT rolled back or committed but its acknowledgement was lost. No automatic
+second settlement or provider resend is performed. Usage validation cannot
+rewrite admission attempt counts or provide inconsistent logical/disjoint token
+buckets. Operator quiescence is a real boolean attestation, not a truthy string.
+
+`0052` uses `jsonb_build_object`, not colon-containing JSON SQL literals. Its
+PostgreSQL campaign checks every old status (`reserved`, `unknown`, `settled`,
+`estimated`, `rejected`) across owners and UTC days, a user with no past calls,
+original timestamps/evidence/identities/balances, later reconciliation against the
+same old receipt, and safe refusal of destructive rollback. Logical token totals
+are preserved without inventing an input/output/cache split for historical rows.
+
+An additional shared-command call-site guard inspects actual API and Agent calls
+for the current profile, opportunity, action, artifact, JD, interview and RAG
+owners. Import and timestamp guards both assert a non-empty application scan.
+Static wiring is not a substitute for the behavioral ownership, CAS and recovery
+suites; it prevents a second independent implementation from replacing only one
+entry point unnoticed. Historical test directory names and append-only migration
+history are not executable compatibility service owners.
+
+Official semantics checked on 2026-09-19 (dependencies remain pinned and tested;
+reading a newer patch's documentation does not silently upgrade production):
+
+- [SQLAlchemy 2.0 text/bind parameters](https://docs.sqlalchemy.org/en/20/core/sqlelement.html#sqlalchemy.sql.expression.text)
+  and [Alembic execute](https://alembic.sqlalchemy.org/en/latest/ops.html#alembic.operations.Operations.execute):
+  SQL string execution uses TextClause bind parsing, including literal colons.
+- [PostgreSQL 15 JSON construction](https://www.postgresql.org/docs/15/functions-json.html)
+  and [row locking](https://www.postgresql.org/docs/15/explicit-locking.html):
+  JSON constructors and transactional row locks, tested against the actual CI database.
+- [Python 3.13 cancellation shielding](https://docs.python.org/3.13/library/asyncio-task.html#shielding-from-cancellation):
+  protecting the short accounting task is not cancellation of an already-sent
+  remote operation or an already-running thread.
 
 ### Rated costs and supplier evidence are different
 

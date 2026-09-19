@@ -93,12 +93,18 @@ def humanize_error(exc: Exception) -> str:
     if isinstance(exc, ContextCapacityError):
         return str(exc)
     from app.usage.service import ModelBudgetExceededError
-    from app.conversation.application.model_dispatch_service import (
+    from app.core.execution_errors import (
         ModelOutcomeUnknownError,
+        ConsumptionSettlementUnconfirmedError,
     )
 
     if isinstance(exc, ModelBudgetExceededError):
         return str(exc)
+    if isinstance(exc, ConsumptionSettlementUnconfirmedError):
+        return (
+            "调用可能已完成，但本地用量结算尚未确认；已保留原调用身份，未自动重发。"
+            "请在用量记录中核对原收据，必要时由运维依据供应商证据对账。"
+        )
     if isinstance(exc, ModelOutcomeUnknownError):
         return (
             "模型请求的远端结果未知，已保留当前记录和额度；未自动重发可能已计费的请求。"

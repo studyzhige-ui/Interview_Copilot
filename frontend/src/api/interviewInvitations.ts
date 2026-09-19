@@ -1,6 +1,7 @@
 /** VS-01 transport only. All writes go through the existing shared Operation. */
 import { apiClient } from './client';
 import type { AgentInteraction } from '@/types/api';
+import type { components } from '@/types/generated/shared-protocols';
 
 export interface InvitationFacts {
   company_name: string; job_title: string; scheduled_start_at: string;
@@ -16,11 +17,8 @@ export interface OperationVerification {
 }
 export type OpportunityResolution = { kind: 'create_new' }
   | { kind: 'link_existing'; opportunity_id: string; expected_version: number };
-export interface ConfirmInvitationCommand {
-  schema_version: 1; idempotency_key: string; actor_kind: 'user'; asserted_at: string;
-  confirmation_basis: { kind: 'explicit_user_assertion'; source: { kind: 'manual'; identity: string } };
-  facts: InvitationFacts; opportunity: OpportunityResolution;
-}
+/** Canonical command schema; this UI always supplies actor_kind=user. */
+export type ConfirmInvitationCommand = components['schemas']['ConfirmInterviewInvitationRequestContract'];
 export interface ConfirmInvitationResult {
   operation_id: string; replayed: boolean;
   opportunity: ObjectReference; interview: ObjectReference;

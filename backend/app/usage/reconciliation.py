@@ -64,6 +64,8 @@ def reconcile(
     ):
         if not isinstance(text, str) or not 1 <= len(text.strip()) <= bound:
             raise ValueError("invalid_reconciliation_identity")
+    if type(quiesced) is not bool:
+        raise ValueError("quiesced_requires_boolean_attestation")
     if type(expected_revision) is not int or expected_revision < 0:
         raise ValueError("invalid_reconciliation_revision")
     if outcome not in {"completed", "rejected"}:

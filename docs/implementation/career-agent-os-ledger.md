@@ -1,17 +1,42 @@
 # Career Agent OS Implementation Ledger
 
-> 状态：现行实施账本；Gate A 已批准，VS-01 实施中  
-> 日期：2026-08-26  
+> 状态：现行实施账本；工程实现与现行架构收口，按提交验收；不合并 main、不宣称生产发布
+> 日期：2026-09-19
 > 规范来源：[`Career Agent OS Blueprint`](../architecture/career-agent-os-blueprint.md)  
 > 当前切片：[`VS-01 面试邀请接收、确认与准备交接生命周期`](../architecture/vertical-slices/vs-01-interview-invitation-intake-confirmation-handoff.md)
 
 
 
-## 2026-09-19 工程能力与现行架构迁移完成批次（验收绑定后续提交）
+## 当前工程收尾与状态优先级（2026-09-19）
+
+本轮完成的是用户指定的两类工作：**现有已启用产品能力的统一消耗治理，以及现行业务实现/入口/协议的架构迁移**。
+不是用新服务替换旧服务后永久双轨运行，也不是把后续九个未启动产品切片预写成完成。
+第 3、6、10 节和本节为当前状态；下方带日期的旧批次及 Gate A 资产表均为历史取证。
+它们中的旧路径、当时失败/跳过数字、`partial` 和“仅主模型”不是当前代码结论。
+
+| 收尾项 | 当前实现与保护 | 必须绑定的验收 |
+|---|---|---|
+| 0052 迁移 | JSON 构造不经过冒号绑定；修正旧用户夹具；不清空已有余额/原请求 | `test_unified_usage_postgres.py`：全部五种旧状态、两用户两日、无调用用户、同原收据后续对账、禁止破坏性回滚 |
+| 统一用量 | 所有当前生产类别共用账户锁/窗口/余额；调用次数和分离 token 维度必须自洽；不能用完成反馈改写尝试次数 | `test_usage/`；Pg 跨类别争抢额度、业务锁隔离、对账 CAS 和同调用身份多连接竞争 |
+| 结算不明 | 供应商返回后本地 COMMIT 失败或响应丢失，保留原收据并返回专门的不可自动重试状态 | 同步/异步 × COMMIT 前失败/提交后丢响应；供应商只调用一次；已结算和仍预留分别保持 |
+| 业务 owner | 116 个旧实现迁入相应 owner；运行树无 `app.services`；HTTP/Agent/Worker 使用现行共享实现 | 真实非空导入图、无环检查、禁止越层写入和实际共享业务调用表达式检查；原行为全量回归 |
+| Shared schemas | Pydantic 的输入/输出分别生成 OpenAPI 3.1 快照；固定 openapi-typescript 生成 TypeScript；手工 UI 投影由方向性兼容检查保护 | Python 快照与全部本地引用一致；生成文件 `--check`；tsc 兼容及负对照；未知版本仍由运行时拒绝 |
+| 空值和来源忠实 | 候选 `null` 不变成用户事实；仅全新手动表单建议本机时区，候选缺失时区保持空值 | 前端 nullable/时区回归；既有确认、更正、拒绝和版本冲突测试 |
+| 真实执行门禁 | 维持实际 PostgreSQL/Redis/Celery SIGKILL、浏览器 HTTP 和完整 VS01-S01…S15 gate | 两个 Python 环境、前端、浏览器、schema/迁移检查必须以**最终提交**结果为准，不继承旧绿灯 |
+
+首次修复提交 `838ea20a…` 已通过真实升级、`alembic check`、浏览器和 VS-01 门禁，但后端旧数据夹具遗漏必填字段而失败。
+该结果不记作全绿。当前夹具与扩展场景已修正，完整最终 CI/JUnit 的具体 SHA、计数和产物以 PR #2 收尾记录绑定。
+代码在既有分支交付，合并/生产迁移未获本任务要求，也未执行。
+
+官方依据及可重现命令在 `docs/architecture/codebase.md`。TypeScript 生成器使用独立开发依赖锁：
+openapi-typescript 7.13.0 的 peer dependency 是 TypeScript 5.x，因此工具固定 5.9.3；应用仍保持 6.0.3，
+不用 `--force` 或 `--legacy-peer-deps` 绕过声明，也不把生成器加入产品运行时。
+
+## 历史批次：2026-09-19 工程能力与现行架构迁移实现
 
 本批次基于 `701957c6…`，针对用户要求先完成的工程实现及架构迁移；不扩大到
 真实模型效果、生产容量或未来全部 Blueprint 功能。下方旧路径和“仅主模型”是
-历史阶段记录，当前实现以本节及 `docs/architecture/codebase.md` 为准。
+历史阶段记录，当前实现以顶部收尾节及 `docs/architecture/codebase.md` 为准。
 
 | 范围 | 实施状态 | 验收入口 |
 |---|---|---|
@@ -34,7 +59,7 @@
 生产，也不会宣称完整学习效果或生产压力验收已经完成。
 
 
-## 2026-09-19 全面续作：面试一致性、RAG容量和真实验收
+## 历史批次：2026-09-19 全面续作：面试一致性、RAG容量和真实验收
 
 当前实施基线 `2f2dddfc44c62c606a7d7da5f9d0f489482cb890`；仍只修改
 `refactor/product-runtime-convergence`，不合并 main。本节优先于下方历史批次的
@@ -62,7 +87,7 @@
 没有修改金标和模型质量分数，也没有调用真实付费模型、外部消息或生产数据库。
 
 
-## 2026-09-19 中断续作：额度、原请求恢复与 Gmail 事实确认
+## 历史批次：2026-09-19 中断续作：额度、原请求恢复与 Gmail 事实确认
 
 状态：本节记录 `refactor/product-runtime-convergence` 在 `562c4b1b…` 基线后的
 续作实现；不是另一套 Blueprint，也不是完整产品发布。此前章节的数字是对应
@@ -115,7 +140,7 @@ CI 设置 `REQUIRE_TEST_POSTGRES=1`，数据库不可用必须失败而不是变
 本轮隔离环境已执行后端全套 **1581 passed / 11 skipped**（包括本地无 PostgreSQL 的测试），前端 **61 files / 205 tests passed**，类型检查、lint、生产构建通过。
 最后提交及 Python 3.11/3.13 + PostgreSQL 的验证以 PR 检查为准；本段数字不代表真实模型、浏览器端到端或生产供应商验收。
 
-### 未关闭的发布条件
+### 当时未关闭的发布条件（历史）
 
 VS01-S09（真实 worker-kill / verifying recovery）和 VS01-S14（全部 adapter 的 commit-ambiguity recovery）仍为 partial，`release_ready` 保持 false。
 旧 Gmail invitation auto-apply 路径尚未切换，不能把手动/Agent/fixture 的共享操作写成全部外部入口已迁移。
@@ -158,15 +183,16 @@ VS01-S09（真实 worker-kill / verifying recovery）和 VS01-S14（全部 adapt
 | 字段 | 当前值 |
 |---|---|
 | Slice | VS-01 — Interview Invitation Intake, Confirmation, and Preparation Handoff Lifecycle |
-| Product decisions | PDR-01、PDR-02 已批准并归位；PDR-03 不阻塞核心路径 |
-| Current phase | Gate D / Gate E 并行实施；Gate F 场景门禁保持红灯 |
-| Business code | Gate B/C 主干已实现；Harness 与三入口适配仍有未完成项 |
-| Database/migration | 已创建 migration `0043`；静态门禁通过，真实 PostgreSQL up/down 尚未执行 |
-| Tests/evaluation | 新 manifest 已登记 VS01-S01…S15；13 项 covered，S09/S14 partial，故 release gate 为 false |
-| Entry gate for coding | **已于 2026-08-26 通过 Gate A** |
-| Core exit gate | VS-01 Definition of Done 与 VS01-S01 至 S15 全部满足 |
+| Product decisions | PDR-01/PDR-02 保持批准语义；PDR-03 是未来外部日程支线，不扩展到本次 |
+| Current phase | 工程实现、入口切换及旧实现退出已落地；最终按提交运行 Gate F，不以本地 skip 代替服务验证 |
+| Business code | 共享 Operation / fact confirmation / 同 Turn 恢复 / UI 与 Agent 及 Gmail 候选入口使用同一业务规则 |
+| Database/migration | 当前 head 为 0052，数据与用量身份保留；升级及一致性检查必须通过最终 CI |
+| Tests/evaluation | VS01-S01…S15 均登记可执行绑定；完整门禁要求 fresh JUnit，缺失/失败/跳过不可通过 |
+| Experience | 页面内 Copilot、Today 待确认、唯一 CareerProcess board、真实 Interview handoff、独立 Activity 投影 |
+| Entry gate for coding | 已于 2026-08-26 通过 Gate A |
+| Product release | 本任务只交付分支；真实供应商/模型效果、生产数据审计及部署另行验收，不由工程测试认证 |
 
-### 3.1 本轮实施证据
+### 3.1 Gate D/E 首轮历史实施证据（2026-08-26，不是当前状态）
 
 | 能力 | 当前实现证据 | 当前结论 |
 |---|---|---|
@@ -249,50 +275,54 @@ VS01-S09（真实 worker-kill / verifying recovery）和 VS01-S14（全部 adapt
 
 ## 6. VS-01 实施工作项
 
+本节的 `gated` 表示实现/目标 owner/入口切换已具备确定性回归，最终以当前提交 CI 验收；
+不代表已经执行生产部署、回滚观察窗口或真实模型语义质量验收。迁移起点列保留历史位置。
+本轮不把外部发布条目改成 `done`，也不将未来全部产品能力纳入当前范围。
+
 ### 6.1 Schema、Owner 与 Domain
 
-| ID | Target owner | Requirement / target change | Current assets | Dependencies | Acceptance gate | Migration / deletion condition | Status |
+| ID | Target owner | Requirement / target change | Migration baseline (historical) | Dependencies | Acceptance gate | Migration / deletion condition | Status |
 |---|---|---|---|---|---|---|---|
-| VS01-SCH-01 | Shared Contract Schemas | 为 Operation/Event/Interaction/Verification/Client Action 建立可生成、版本化 schema | Pydantic schemas 与手工 TS types | DOC-02…05 approved | schema snapshots；Python/TS compatibility；unknown version tests | 手工重复类型退出或由生成一致性 gate 保护 | `implemented_unverified` |
-| VS01-DAT-01 | Source/Candidate owner | provider-neutral Invitation Source/Observation/Candidate，字段 Evidence、version、dedupe、lifecycle | GmailObservation/Snapshot/ReviewCard | SCH-01 | immutable/dedupe/provenance/reject/supersede tests | Gmail adapter 只做 provider ingress；不再拥有邀请业务确认 | `implemented_unverified` |
-| VS01-DAT-02 | Interview owner | Interview 能表达已确认 schedule、original time/timezone、Opportunity link 与 version | InterviewRecord + migration 0022 | Product Spec；SCH-01 | create/update/CAS/source tests | 不保留第二份可独立漂移的 schedule owner | `implemented_unverified` |
-| VS01-OP-01 | Shared Operation runtime | Operation envelope、idempotency/fingerprint、actor/owner/policy、typed result | 分散 service/API/tool semantics | SCH-01 | generic Operation Contract tests | UI/API/Tool 不再各自实现幂等与领域写入 | `implemented_unverified` |
-| VS01-OP-02 | Domain Kernel Operation | 实现 intake/register/confirm/reject/query/handoff Operations | career/gmail/interview services | DAT-01/02；OP-01 | PDR-02 原子性；forbidden effects；owner/CAS/idempotency | 旧 approval/apply 邀请写路径汇入或封闭 | `implemented_unverified` |
-| VS01-DOM-01 | Domain Event/Outbox | 在 confirm 事务产生 Domain Events 与 projection invalidation identities | ProcessEvent/outbox patterns | OP-02；EVT-01 | transaction/outbox/replay/dedupe tests | 不允许 API/Tool 在事务外拼事件 | `implemented_unverified` |
+| VS01-SCH-01 | Shared Contract Schemas | 为 Operation/Event/Interaction/Verification/Client Action 建立可生成、版本化 schema | Pydantic → OpenAPI → 固定生成 TS；UI 投影由编译一致性门禁保护 | DOC-02…05 approved | schema snapshots；Python/TS compatibility；unknown version tests | 手工重复类型退出或由生成一致性 gate 保护 | `gated` |
+| VS01-DAT-01 | Source/Candidate owner | provider-neutral Invitation Source/Observation/Candidate，字段 Evidence、version、dedupe、lifecycle | GmailObservation/Snapshot/ReviewCard | SCH-01 | immutable/dedupe/provenance/reject/supersede tests | Gmail adapter 只做 provider ingress；不再拥有邀请业务确认 | `gated` |
+| VS01-DAT-02 | Interview owner | Interview 能表达已确认 schedule、original time/timezone、Opportunity link 与 version | InterviewRecord + migration 0022 | Product Spec；SCH-01 | create/update/CAS/source tests | 不保留第二份可独立漂移的 schedule owner | `gated` |
+| VS01-OP-01 | Shared Operation runtime | Operation envelope、idempotency/fingerprint、actor/owner/policy、typed result | 分散 service/API/tool semantics | SCH-01 | generic Operation Contract tests | UI/API/Tool 不再各自实现幂等与领域写入 | `gated` |
+| VS01-OP-02 | Domain Kernel Operation | 实现 intake/register/confirm/reject/query/handoff Operations | career/gmail/interview services | DAT-01/02；OP-01 | PDR-02 原子性；forbidden effects；owner/CAS/idempotency | 旧 approval/apply 邀请写路径汇入或封闭 | `gated` |
+| VS01-DOM-01 | Domain Event/Outbox | 在 confirm 事务产生 Domain Events 与 projection invalidation identities | ProcessEvent/outbox patterns | OP-02；EVT-01 | transaction/outbox/replay/dedupe tests | 不允许 API/Tool 在事务外拼事件 | `gated` |
 
 ### 6.2 Harness、Policy、Context 与 Verification
 
-| ID | Target owner | Requirement / target change | Current assets | Dependencies | Acceptance gate | Migration / deletion condition | Status |
+| ID | Target owner | Requirement / target change | Migration baseline (historical) | Dependencies | Acceptance gate | Migration / deletion condition | Status |
 |---|---|---|---|---|---|---|---|
-| VS01-INT-01 | Interaction Runtime | 新增 `fact_confirmation@1` typed request/resolution 与 version migration | AgentInteraction + interaction_service | SCH-01；DAT-01 | one pending/Turn；CAS；confirm/correct/reject；ordinary-input no-resolve | Gmail review 与 Chat Interaction 不再形成两套用户确认协议 | `implemented_unverified` |
-| VS01-TURN-01 | Turn Runtime | resolution 记录 + same-Turn resume；decision 与业务执行分离 | turn_executor、PendingSubmission、ConversationTurn | INT-01；OP-02 | worker kill、disconnect、duplicate resolution、interrupt tests | 保留现有耐久核心，删除专用绕行恢复 | `in_progress` |
-| VS01-POL-01 | Permission Runtime | 按 Operation effect/argument/resource/version 做 execution-time recheck | tool_policy | OP-01 | UI/Agent/Automation parity；hard deny；unknown fail-closed | Tool-only隐藏 policy traits 退出 | `in_progress` |
-| VS01-EVT-01 | Event Runtime | 统一 Domain/Harness/Experience envelope、schema、cursor 和 replay | harness_events、SSE wire | SCH-01 | ordering、replay、version、reconnect tests | 前端不再靠字段猜事件；旧 event mapper 退出 | `in_progress` |
-| VS01-CTX-01 | Context Compiler | VS-01 typed Package、authority/source manifest、不可压缩字段和最小 scope | context_assembly_pipeline、compactor、source acquisition | DAT-01；INT-01；OP-01 | injection、stale state、compact/reconnect、scope tests | 邀请 prompt 拼接路径汇入 Compiler | `implemented_unverified` |
-| VS01-VER-01 | Verification Runtime | durable-reference VerificationResult；local read-back；unknown/reconciliation | idempotency/audit/outbox patterns | OP-02；DOM-01；EVT-01 | postconditions、ambiguity、retry、no false success tests | service return/文案不再独立宣称完成 | `in_progress` |
-| VS01-AGT-01 | Agent Adapter | 薄 Tool Adapter + 首个 Skill/recipe，调用 Shared Operations | agent loop、turn tool catalog、career/gmail tools | OP-02；CTX-01；POL-01；VER-01 | correct operation selection；no macro side effects；truthful final answer | 旧 career tool 中邀请写逻辑删除或改为 adapter | `in_progress` |
+| VS01-INT-01 | Interaction Runtime | 新增 `fact_confirmation@1` typed request/resolution 与 version migration | AgentInteraction + interaction_service | SCH-01；DAT-01 | one pending/Turn；CAS；confirm/correct/reject；ordinary-input no-resolve | Gmail review 与 Chat Interaction 不再形成两套用户确认协议 | `gated` |
+| VS01-TURN-01 | Turn Runtime | resolution 记录 + same-Turn resume；decision 与业务执行分离 | turn_executor、PendingSubmission、ConversationTurn | INT-01；OP-02 | worker kill、disconnect、duplicate resolution、interrupt tests | 保留现有耐久核心，删除专用绕行恢复 | `gated` |
+| VS01-POL-01 | Permission Runtime | 按 Operation effect/argument/resource/version 做 execution-time recheck | tool_policy | OP-01 | UI/Agent/Automation parity；hard deny；unknown fail-closed | Tool-only隐藏 policy traits 退出 | `gated` |
+| VS01-EVT-01 | Event Runtime | 统一 Domain/Harness/Experience envelope、schema、cursor 和 replay | harness_events、SSE wire | SCH-01 | ordering、replay、version、reconnect tests | 前端不再靠字段猜事件；旧 event mapper 退出 | `gated` |
+| VS01-CTX-01 | Context Compiler | VS-01 typed Package、authority/source manifest、不可压缩字段和最小 scope | context_assembly_pipeline、compactor、source acquisition | DAT-01；INT-01；OP-01 | injection、stale state、compact/reconnect、scope tests | 邀请 prompt 拼接路径汇入 Compiler | `gated` |
+| VS01-VER-01 | Verification Runtime | durable-reference VerificationResult；local read-back；unknown/reconciliation | idempotency/audit/outbox patterns | OP-02；DOM-01；EVT-01 | postconditions、ambiguity、retry、no false success tests | service return/文案不再独立宣称完成 | `gated` |
+| VS01-AGT-01 | Agent Adapter | 薄 Tool Adapter + 首个 Skill/recipe，调用 Shared Operations | agent loop、turn tool catalog、career/gmail tools | OP-02；CTX-01；POL-01；VER-01 | correct operation selection；no macro side effects；truthful final answer | 旧 career tool 中邀请写逻辑删除或改为 adapter | `gated` |
 
 ### 6.3 Experience 与 Automation
 
-| ID | Target owner | Requirement / target change | Current assets | Dependencies | Acceptance gate | Migration / deletion condition | Status |
+| ID | Target owner | Requirement / target change | Migration baseline (historical) | Dependencies | Acceptance gate | Migration / deletion condition | Status |
 |---|---|---|---|---|---|---|---|
-| VS01-UI-01 | Today Projection | “待我确认”读取真实 Interaction；动态读取真实 events；删除 seed/fallback | TodayPage、InteractionCard | INT-01；EVT-01 | empty account、CAS/multi-client、four-category tests | `SEED_TASKS`、fake companies、local confirm 删除 | `implemented_unverified` |
-| VS01-UI-02 | Career Projection | Opportunity timeline 读取 confirmed Interview/ProcessEvent，typed deep link | CareerPage + CareerProcessPage | OP-02；DOM-01 | same object/version；no duplicate business rule | 新浅层/旧深层双 board 收敛到一个 owner | `in_progress` |
-| VS01-UI-03 | Interview Projection | 安排详情、Evidence、Opportunity 与 preparation entry | InterviewHubPage + existing interview pages | DAT-02；OP-02 | confirmed-only display；source/view tests | marketing shell 不再作为数据页；prompt query handoff 退出 | `in_progress` |
-| VS01-UI-04 | Activity Projection | Turn/Interaction/Operation/Verification 状态摘要 | PersistentTasks/Activity alias | EVT-01；VER-01 | waiting/verifying/terminal/reconnect tests | 活动中心不复制任务状态 | `implemented_unverified` |
-| VS01-UI-05 | Copilot Experience | 当前 object context、Interaction、verified result 与 typed recovery | ChatPanel/useChatStream | EVT-01；CTX-01；AGT-01 | truthful state copy；no query-string prompt loss | 页面私有 chat hooks 逐步变共享边界 | `in_progress` |
-| VS01-CA-01 | Client Action Runtime | 通用 `interview.preparation.open@1`，持久化、affinity、takeover、ack | mock client action service/bridge | SCH-01；DAT-02；EVT-01 | idempotent delivery；ack/fail；Domain independence | Mock-specific protocol 变 adapter，通用 runtime 单 owner | `implemented_unverified` |
-| VS01-AUTO-01 | Observation Adapter | fixture/manual ingress → candidate → fact confirmation；第一版 no auto-apply | Gmail observation sync/service/tool | DAT-01；INT-01；TURN-01 | dedupe、retraction、no canonical write before confirmation | Gmail-specific apply path 不再处理目标邀请语义 | `implemented_unverified` |
+| VS01-UI-01 | Today Projection | “待我确认”读取真实 Interaction；动态读取真实 events；删除 seed/fallback | TodayPage、InteractionCard | INT-01；EVT-01 | empty account、CAS/multi-client、four-category tests | `SEED_TASKS`、fake companies、local confirm 删除 | `gated` |
+| VS01-UI-02 | Career Projection | Opportunity timeline 读取 confirmed Interview/ProcessEvent，typed deep link | CareerPage + CareerProcessPage | OP-02；DOM-01 | same object/version；no duplicate business rule | 新浅层/旧深层双 board 收敛到一个 owner | `gated` |
+| VS01-UI-03 | Interview Projection | 安排详情、Evidence、Opportunity 与 preparation entry | InterviewHubPage + existing interview pages | DAT-02；OP-02 | confirmed-only display；source/view tests | marketing shell 不再作为数据页；prompt query handoff 退出 | `gated` |
+| VS01-UI-04 | Activity Projection | Turn/Interaction/Operation/Verification 状态摘要 | PersistentTasks/Activity alias | EVT-01；VER-01 | waiting/verifying/terminal/reconnect tests | 活动中心不复制任务状态 | `gated` |
+| VS01-UI-05 | Copilot Experience | 当前 object context、Interaction、verified result 与 typed recovery | ChatPanel/useChatStream | EVT-01；CTX-01；AGT-01 | truthful state copy；no query-string prompt loss | 页面私有 chat hooks 逐步变共享边界 | `gated` |
+| VS01-CA-01 | Client Action Runtime | 通用 `interview.preparation.open@1`，持久化、affinity、takeover、ack | mock client action service/bridge | SCH-01；DAT-02；EVT-01 | idempotent delivery；ack/fail；Domain independence | Mock-specific protocol 变 adapter，通用 runtime 单 owner | `gated` |
+| VS01-AUTO-01 | Observation Adapter | fixture/manual ingress → candidate → fact confirmation；第一版 no auto-apply | Gmail observation sync/service/tool | DAT-01；INT-01；TURN-01 | dedupe、retraction、no canonical write before confirmation | Gmail-specific apply path 不再处理目标邀请语义 | `gated` |
 
 ### 6.4 Evaluation、Migration 与 Cutover
 
 | ID | Target owner | Requirement / target change | Dependencies | Acceptance gate | Exit condition | Status |
 |---|---|---|---|---|---|---|
-| VS01-EVAL-01 | Career OS Evaluation | 新 manifest 登记 VS01-S01…S15，绑定 deterministic tests 与 scenario runner | 所有实现工作项 | 所有场景通过；无旧蓝图语义替代 | 新场景成为 VS-01 发布门禁 | `in_progress` |
-| VS01-MIG-01 | Data Migration | 新/扩展 schema、backfill、downgrade、旧记录隔离和一致性扫描 | DAT-01/02；OP-02 | Alembic up/down；fixture；owner/source consistency | 所有活动用户数据可由新 owner 读取或明确 quarantine | `in_progress` |
-| VS01-CUT-01 | Entry Cutover | UI/Agent/Automation 三入口逐一切到 Shared Operations | UI/AGT/AUTO；EVAL | shadow/read compare；write owner 单一；feature gate | 无旧独立邀请写入流量 | `in_progress` |
-| VS01-DEL-01 | Legacy Exit | 删除 seed、mock-only branching、重复邀请 apply/write 路径与死代码 | CUT-01 | import/use scan；full test/eval；rollback window | 旧 owner 不再可达，文档同步 | `in_progress` |
-| VS01-REL-01 | Slice Release | 完成 Spec §17 Definition of Done | EVAL/MIG/CUT/DEL | deterministic + integration + experience + recovery gates | VS-01 标记 `done` | `planned` |
+| VS01-EVAL-01 | Career OS Evaluation | 新 manifest 登记 VS01-S01…S15，绑定 deterministic tests 与 scenario runner | 所有实现工作项 | 所有场景通过；无旧蓝图语义替代 | 新场景成为 VS-01 发布门禁 | `gated` |
+| VS01-MIG-01 | Data Migration | 新/扩展 schema、backfill、downgrade、旧记录隔离和一致性扫描 | DAT-01/02；OP-02 | Alembic up/down；fixture；owner/source consistency | 所有活动用户数据可由新 owner 读取或明确 quarantine | `gated` |
+| VS01-CUT-01 | Entry Cutover | UI/Agent/Automation 三入口逐一切到 Shared Operations | UI/AGT/AUTO；EVAL | shadow/read compare；write owner 单一；feature gate | 无旧独立邀请写入流量 | `gated` |
+| VS01-DEL-01 | Legacy Exit | 删除 seed、mock-only branching、重复邀请 apply/write 路径与死代码 | CUT-01 | import/use scan；full test/eval；rollback window | 旧 owner 不再可达，文档同步 | `gated` |
+| VS01-REL-01 | Slice Release | 生产发布另行确认；本任务保持 Draft 分支 | EVAL/MIG/CUT/DEL | deterministic + integration + experience + recovery gates | VS-01 标记 `done` | `planned` |
 
 ## 7. 执行顺序与并行边界
 
@@ -324,7 +354,8 @@ Gate F — Evaluation/Migration/Cutover
 
 ## 8. Migration 与数据真值计划
 
-实施前必须先用只读审计确认：
+生产应用迁移前由部署负责人用只读审计确认；本轮没有访问生产资料。
+实现回归使用隔离的多用户/多日期/多状态旧数据，不能冒称已经审计全部真实用户：
 
 1. 当前 `interview_scheduled` ProcessEvents 数量、source kinds 和关联 Opportunity；
 2. 其中有多少存在对应 InterviewRecord；
@@ -360,15 +391,26 @@ Gate F — Evaluation/Migration/Cutover
 | ID | 问题 | 是否阻塞核心 VS-01 | 处理 |
 |---|---|---|---|
 | PDR-03 | Calendar Event / Interview Schedule / fixed NextAction 长期所有权与 fake external branch | 否 | 核心不含外部支线；未来单独决定 |
-| EXP-01 | Copilot 常驻/抽屉/工作区具体形态 | 否 | VS-01 只要求 typed object handoff 和状态一致 |
+| EXP-01 | Copilot 常驻/抽屉/工作区具体形态 | 否 | 当前采用全局页面内面板并复用原聊天工作区；typed object handoff 与状态一致已有测试 |
 
-### 10.1 当前发布阻塞项（不是开放产品决定）
+### 10.1 已实现的原工程阻塞与验收入口
 
-1. **VS01-S09**：已证明 durable Interaction 与进程边界后的 same-call 幂等恢复；仍需覆盖 VS-01 verifying 状态的 worker-kill/reconnect 恢复。
-2. **VS01-S14**：表结构可表达 `unknown/reconciled`，但 commit ambiguity 到 reconciliation 的适配器/runtime 路径尚未闭合，不能宣称完成。
-3. **PostgreSQL migration gate**：migration chain、ORM 对齐等静态检查通过；本环境未连接 PostgreSQL，4 个真实 up/down 测试被跳过。
-4. **Cutover/legacy exit**：新三入口已经使用 Shared Operations，但 Gmail-specific invitation apply、Career 双页面和部分旧读取/写入路径尚未完成流量证明与退出。
-5. **统一事件门禁**：Domain Event 与 Activity envelope 已建立；Harness/Experience 全量 ordering、cursor、reconnect 仍未完成 EVT-01。
+| 原阻塞 | 当前对应 |
+|---|---|
+| VS01-S09 Worker kill | 三类邀请来源、verifying/committed 等断点的实际 Celery SIGKILL/恢复；固定身份不重新生成写入参数 |
+| VS01-S14 commit ambiguity | 持久入站命令、取消墓碑、原收据恢复；实际浏览器 COMMIT 后丢响应；未知外部结果保守保护 |
+| PostgreSQL migration | 0001→0052、ORM check、旧状态余额保真与安全回退；CI REQUIRE_TEST_POSTGRES=1，不可因服务不可用跳过 |
+| Cutover / legacy exit | Gmail 邀请转为候选和事实确认；不再独立 auto-apply；Career 只有现行 board；整个旧 services 实现树退出 |
+| 协议、事件与上下文 | 权威 schemas 输入/输出快照及生成/兼容门禁；Domain/Harness/Experience 明确分类，已有 cursor/replay/reconnect 行为回归 |
+
+以上入口仍须在每次最终变更上实际重跑；最新结果以 PR #2 的固定提交 CI/JUnit 为准。
+本文件不会把有失败或跳过的回归版本称为验收通过。
+
+### 10.2 两类实现工作之外保留的发布条件
+
+真实模型选择/反馈/学习效果、真实 Milvus/Reranker 与供应商写入回读、全依赖长期压力/容量曲线、
+生产数据只读审计/备份恢复及运维费率配置仍需部署和质量验收。长期记忆生产门禁保持关闭。
+这些不由 schema 合法、目录清理或确定性测试替代；不要求为了关闭清单而调用真实账户、编造费率或合并 main。
 
 ## 11. 变更记录
 
@@ -379,3 +421,5 @@ Gate F — Evaluation/Migration/Cutover
 | 2026-08-26 | Gate B/C 主干落地：确定 InterviewRecord 为 schedule 物理 owner，OperationVerification 为独立耐久记录；新增 provider-neutral invitation owners、Shared Operations、Domain Events 与 migration 0043。 |
 | 2026-08-26 | Gate D/E 首轮落地：fact confirmation、Context Package、Agent/UI/fixture adapters、通用 preparation Client Action、Today/Interview/Activity/Copilot handoff；删除 Today seed/fallback 与求职卡片虚构未来阶段。 |
 | 2026-08-26 | 创建新蓝图 VS01-S01…S15 evaluation manifest；13 covered、S09/S14 partial，因此 Gate F 与 Slice Release 有意保持未通过。 |
+
+| 2026-09-19 | 统一全部当前消耗类别与业务 owner 迁移；修复0052、结算提交不明和真实非空架构扫描；补输入/输出生成协议门禁与多状态旧数据回归。以最终固定提交CI验收，不自动合并或部署。 |

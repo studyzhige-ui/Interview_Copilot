@@ -9,7 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class ActivityObjectReference(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: str
     id: str
@@ -19,7 +21,9 @@ class ActivityObjectReference(BaseModel):
 class CareerActivityEvent(BaseModel):
     """Contract-shaped envelope over a canonical event or owner projection."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     event_id: str
     event_kind: str
