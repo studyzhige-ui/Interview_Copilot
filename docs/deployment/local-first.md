@@ -75,3 +75,57 @@ Official references checked on 2026-09-19:
 - [Windows/Linux filesystem placement](https://learn.microsoft.com/en-us/windows/wsl/filesystems).
 - [WSL memory, processor and swap settings](https://learn.microsoft.com/en-us/windows/wsl/wsl-config).
 - [NVIDIA CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/index.html).
+
+
+## Explicit local loader/inference probe (P1 continuation)
+
+`doctor_local.py` remains read-only and does not import models. After that
+structural check, the new command below can explicitly load **one existing
+model** in a separate Linux/WSL2 interpreter and run a small synthetic input:
+
+```bash
+python scripts/probe_local_model.py --role embedding \
+  --python /home/your-user/local-ml/.venv/bin/python \
+  --model-root /mnt/d/Models/InterviewCopilot \
+  --cache-dir /home/your-user/copilot-runtime/cache --device cuda
+```
+
+The ML environment must already contain the selected role's dependencies. The
+command does not install or download them, change the production model, use the
+DeepSeek key, or change existing model roots. The existing configured model ID
+is used unless `--model` is explicit. `--timeout` defaults to 180 seconds per
+probe; the child is stopped/reaped before the temporary cache is removed.
+
+Supported probes: `embedding` via SentenceTransformer, `reranking` via
+CrossEncoder, `transcription` via faster-whisper/CT2, and `alignment` via the
+local Transformers CTC model. They consume the synthetic inference result;
+creating a lazy transcription generator is not counted as a successful test.
+This does not certify WhisperX's complete alignment/diarization pipeline,
+Docling bundles, model quality, microphone, real-time voice or single-card
+co-residency. Those acceptance items remain open. CUDA is explicit and does not
+silently fall back to CPU. CPU is the default for an unqualified invocation.
+
+Each process receives only an allowlisted environment, private temporary HOME
+and offline cache roots, and no provider credentials, proxy settings, Python
+path or database URL. SDK offline options plus Python socket audit checks stop
+ordinary downloads/network calls. **They are not an OS security sandbox against
+malicious local model code or native libraries.** Use trusted assets, read-only
+weight mounts and an OS/network-isolated host for stronger containment.
+
+The combined stdout/stderr budget is bounded. Logs are not included in the JSON
+report; request ID, role, protocol and exit status must agree. Deadline, output
+flood, repeated cancellation and descendants holding a pipe are tested using
+real subprocesses. POSIX process groups are used; Windows-native execution is
+rejected instead of pretending that `Process.kill()` kills an entire tree.
+The GPU is initialized only in the fresh interpreter, not before a Celery fork.
+
+A success means one synthetic loader smoke completed in the selected environment.
+It is not P2's shared GPU scheduler and does not make P3–P9 complete. Missing
+weights/dependencies or failed inference exit nonzero, never `skipped=passed`.
+
+Official references checked 2026-09-20:
+- [Python subprocess lifecycle and pipes](https://docs.python.org/3.13/library/asyncio-subprocess.html).
+- [PyTorch accelerator/fork limitations](https://docs.pytorch.org/docs/stable/notes/multiprocessing.html).
+- [SentenceTransformer local loading](https://sbert.net/docs/package_reference/sentence_transformer/model.html).
+- [CrossEncoder loading and inference](https://sbert.net/docs/package_reference/cross_encoder/model.html).
+- [faster-whisper local models and lazy transcription](https://github.com/SYSTRAN/faster-whisper).
