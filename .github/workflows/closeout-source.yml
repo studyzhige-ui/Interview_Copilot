@@ -9,18 +9,19 @@ jobs:
   source:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          persist-credentials: false
-      - name: Export tracked code only
+          node-version: '24'
+      - name: Prepare public development dependencies only
         run: |
-          git archive --format=tar HEAD > "$RUNNER_TEMP/closeout-source.tar"
-          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/closeout-identity.txt"
+          mkdir -p "$RUNNER_TEMP/contract-codegen"
+          cd "$RUNNER_TEMP/contract-codegen"
+          printf '%s\n' '{"name":"copilot-contract-codegen","version":"1.0.0","private":true,"type":"module","devDependencies":{"openapi-typescript":"7.13.0","typescript":"6.0.3"}}' > package.json
+          npm install --ignore-scripts --no-audit --no-fund
+          tar -czf "$RUNNER_TEMP/contract-codegen.tar.gz" package.json package-lock.json node_modules
       - uses: actions/upload-artifact@v4
         with:
-          name: closeout-source
-          path: |
-            ${{ runner.temp }}/closeout-source.tar
-            ${{ runner.temp }}/closeout-identity.txt
+          name: contract-codegen
+          path: ${{ runner.temp }}/contract-codegen.tar.gz
           retention-days: 1
           if-no-files-found: error
