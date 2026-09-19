@@ -226,10 +226,10 @@ def upgrade():
     # not disjoint input/output/cache buckets. Backfill only known attempt units;
     # do not invent a token split or vendor price. Keep the original balances.
     op.execute(
-        "UPDATE model_budget_reservations SET reserved_units_json = '{\"requests\":1}'::jsonb"
+        "UPDATE model_budget_reservations SET reserved_units_json = jsonb_build_object('requests', 1)"
     )
     op.execute(
-        "UPDATE model_budget_reservations SET observed_units_json = '{\"requests\":1}'::jsonb WHERE status IN ('settled','estimated','rejected')"
+        "UPDATE model_budget_reservations SET observed_units_json = jsonb_build_object('requests', 1) WHERE status IN ('settled','estimated','rejected')"
     )
     op.execute("""
         UPDATE model_budget_windows AS w SET
