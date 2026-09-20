@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     LOCAL_MODELS_OFFLINE: bool = False
     AUXILIARY_MODEL_POLICY: Literal["configured", "local_only"] = "configured"
 
+    # One local inference broker; API/worker never load local RAG weights.
+    LOCAL_INFERENCE_SOCKET: str = ""
+    LOCAL_INFERENCE_TIMEOUT_SECONDS: float = Field(120, gt=0, le=600)
+    LOCAL_EMBED_MAX_TOKENS: int = Field(8192, ge=1, le=32768)
+    LOCAL_EMBED_QUERY_PREFIX: str = Field("", max_length=2048)
+    LOCAL_EMBED_TEXT_PREFIX: str = Field("", max_length=2048)
+
     # Logs and telemetry
     LOG_DIR: str = ""
     LOG_LEVEL: str = "INFO"
@@ -70,8 +77,8 @@ class Settings(BaseSettings):
     # Local upload backups and object-storage staging
     STORAGE_DIR: str = ""
 
-    # One device choice for the local RAG stack (Docling, embedding, reranker).
-    # Every component supports CPU; ``auto`` uses CUDA when available.
+    # Parser device policy. RAG weights use the independently configured broker;
+    # its device is explicit and never initializes CUDA in this process.
     RAG_DEVICE: str = "auto"
     # ── Model selection: provider + free-form model name ───────────────────
     # Two axes per role:

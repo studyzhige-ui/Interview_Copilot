@@ -31,6 +31,7 @@ class IndexIdentity:
     embedding_revision: str | None
     namespace: str
     embedding_dim: int
+    embedding_adapter: str
     similarity_metric: str
     parser_contract: str
     parser_provider: str
@@ -60,6 +61,22 @@ class IndexIdentity:
         return {**asdict(self), "fingerprint": self.fingerprint}
 
 
+def _embedding_adapter() -> str:
+    if settings.EMBEDDING_PROVIDER != "local":
+        return "provider-native-v1"
+    from app.local_inference.config import binding_for
+
+    return binding_for(
+        "embedding",
+        settings.EMBEDDING_MODEL,
+        settings.MODEL_REVISIONS_JSON.get(settings.EMBEDDING_MODEL),
+        settings.EMBEDDING_DIM,
+        settings.LOCAL_EMBED_MAX_TOKENS,
+        settings.LOCAL_EMBED_QUERY_PREFIX,
+        settings.LOCAL_EMBED_TEXT_PREFIX,
+    )
+
+
 def current_index_identity() -> IndexIdentity:
     return IndexIdentity(
         schema_version=INDEX_SCHEMA_VERSION,
@@ -68,6 +85,7 @@ def current_index_identity() -> IndexIdentity:
         embedding_revision=settings.MODEL_REVISIONS_JSON.get(settings.EMBEDDING_MODEL),
         namespace=settings.RAG_INDEX_NAMESPACE,
         embedding_dim=int(settings.EMBEDDING_DIM),
+        embedding_adapter=_embedding_adapter(),
         similarity_metric=(settings.RAG_SIMILARITY_METRIC or "").strip().upper(),
         parser_contract=PARSER_CONTRACT_VERSION,
         parser_provider=(settings.PARSER_PROVIDER or "").strip().lower(),

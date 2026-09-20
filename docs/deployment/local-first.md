@@ -1,8 +1,8 @@
-# Local-first setup boundary (first implementation batch)
+# Local-first deployment and verification boundaries
 
-Status: evaluator and local-asset policy implemented; real-time audio, GPU
-scheduling and pgvector switch are still pending. Do not interpret this guide as
-a tested one-command installation of all future models. No production data is
+Status: evaluator, local-asset policy, pgvector and the local RAG inference
+broker are implemented. Real-time audio and all-model scheduling remain open.
+Do not interpret this guide as a tested one-command installation of all future models. No production data is
 migrated and no paid service is invoked by the preflight commands below.
 
 ## Reuse local assets
@@ -183,3 +183,86 @@ python scripts/consistency_scan.py
 https://github.com/pgvector/pgvector ；Python/SQLAlchemy类型
 https://github.com/pgvector/pgvector-python ；事务与行锁
 https://www.postgresql.org/docs/current/explicit-locking.html 。
+
+
+## P2：共享本地 RAG 推理服务（2026-09-20）
+
+本批把本地 Embedding 和重排从 API/Celery 进程移到一个独立服务；
+`EMBEDDING_PROVIDER=local` 和 `RERANKER_PROVIDER=local` 不再在应用中加载权重。
+现有模型目录只读复用，不下载新模型、不启用远端 fallback。普通 CPU tokenizer
+仍可本地加载，但强制 `local_files_only`，不加载 Embedding 权重。
+
+这是 **P2 的已接入子集**：支持 SentenceTransformer / CrossEncoder（当前 BGE 基线）。
+不是声称已接入 Qwen ASR、CosyVoice、ForcedAligner、说话人和 Docling，也不是实时媒体服务。
+缺少模型不会妨碍代码回归；实际权重、GPU内核、精度和显存峰值在用户实机另验。
+
+### 明确准备、启动与诊断
+
+业务环境与本地 RAG ML 环境分开。ML 环境需要与模型相容的 Torch、Transformers、
+SentenceTransformers；不要把 WhisperX/Qwen/vLLM 的不同依赖强行装进同一个环境。
+可复用已有本地模型与已验证的 ML 环境。这里不声称当前旧 `[local]` extra 可作为
+将来所有音频模型的统一安装锁；完整环境锁与语音安装入口仍是后续交付项。
+
+```bash
+# 使用业务 Python 做结构/哈希检查，只写一个新的 owner-only config.json；不加载权重。
+# 运行目录选 Linux 文件系统，保持 Unix socket 路径短于 100 字节。
+python scripts/prepare_local_inference.py \
+  --python /home/your-user/venvs/local-rag/bin/python --device cuda \
+  --runtime-dir /home/your-user/.ic-inference \
+  --model-root /mnt/d/Projects/Python/Interview_Copilot/data/cache/models
+
+# 将命令输出的 LOCAL_INFERENCE_SOCKET 合并到原 .env，不替换密钥/数据库配置。
+# 前台运行独立 broker；模型由它按需启动，在独立解释器中驻留。
+python scripts/run_local_inference.py --config /home/your-user/.ic-inference/config.json
+
+# 另一个终端：只读取队列/驻留/聚合计数，不加载模型、不返回输入文本。
+python scripts/run_local_inference.py --config /home/your-user/.ic-inference/config.json --status
+```
+
+准备命令拒绝覆盖已有配置；改变模型需停止旧服务、核对生成的新配置再切换。
+Unix socket 与父目录要求 owner-only；两端检查同 OS UID。应用账户权限和账本仍在
+现有应用层，这个 socket 不向浏览器开放，不接受任意 Python 模块名或模型路径。
+容器部署要将同一 socket 目录挂载到调用者，并匹配 UID；未配置时明确不可用，
+不会偷偷创建一套进程或云端调用。默认 Compose 不会替用户自动安装 ML 环境。
+
+### 生命周期、资源与错误
+
+一个确定性调度 lane 串行执行请求；交互查询优先，后台任务通过等待老化获得机会。
+当前队列最多 16 个未完成任务，连接最多 24 个，文本与消息大小、加载、执行、
+读取、写入和关闭均有边界。模型可在多个请求间复用，空闲到期或预约容量不足时，
+先停止并回收旧进程，再释放预约。默认 CUDA 预约总额 12000 MiB，Embedding 5000、
+重排 3000。**这些是准入估算，不是硬件测量、硬显存隔离或“16GB一定够用”的承诺。**
+CPU模型不占CUDA预约；系统外的GPU程序与尚未接入的模型不受这个调度器控制。
+
+取消排队任务不会执行；取消已开始的任务会清理整个已拥有的进程组，回收后才调度下一项。
+父服务突然死亡时，Linux parent-death signal终止直接模型子进程；这不是对任意
+第三方子孙进程或恶意native代码的安全沙箱。不得将当前直接模型进程合同冒用到
+尚未集成的vLLM多进程执行。网络关闭由SDK离线选项和Python审计辅助，强隔离需OS配置。
+
+连接前失败/明确未开始与发送后未知分开；应用账本只对明确拒绝释放额度。
+重排分批时，首批已运行后下一批被拒绝，也不会退还整次操作或静默切换。
+连接关闭不表示“没有计算过”；服务不提供持久响应回放或跨重启exactly-once承诺。
+主程序仍使用原消费作用域，broker不接收DeepSeek密钥、数据库地址、代理和调用者PYTHONPATH。
+
+### 输入与索引语义
+
+Embedding 使用显式查询/文本前缀、归一化向量和真实 tokenizer 长度检查；
+超长输入拒绝，不让库的隐式截断吞掉证据。模型维数和响应身份必须匹配。
+重排返回模型原始相关性分数，**不是用户十分制成绩**，不会夹紧到0–10。
+适配合同、前缀、token上限和已知模型revision进入索引身份；旧代次保留，但要使用
+P3的有界重建路径生成新代次，不能把不同向量语义混写。旧未固定revision的资产
+仍明确属于未固定来源，不伪造权重身份；正式质量对照需固定资产版本。
+
+### 已验证与尚未验证
+
+新增测试执行了真实Unix连接和真实新Python进程，模型使用测试专属协议替身，
+生产代码没有测试模型开关。测试覆盖复用、私密环境、错误/过大输出、日志洪泛、
+断连/重复取消、队列期限、后台老化、驻留回收、父进程强制退出及RAG工厂实际接入。
+SDK模型逻辑另外用小型替身检查前缀、长度和结果形状。没有真实权重、准确率或GPU成绩。
+
+官方接口参考（2026-09-20复核）：
+- Python asyncio streams / subprocess：https://docs.python.org/3.13/library/asyncio-stream.html
+- PyTorch CUDA进程限制：https://docs.pytorch.org/docs/stable/notes/multiprocessing.html
+- SentenceTransformer：https://sbert.net/docs/package_reference/sentence_transformer/model.html
+- CrossEncoder：https://sbert.net/docs/package_reference/cross_encoder/model.html
+- Linux parent-death语义：https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html

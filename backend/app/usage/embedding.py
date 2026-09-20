@@ -142,9 +142,10 @@ class AccountLocalEmbedding(BaseEmbedding):
         )
 
     async def _aget_query_embedding(self, query):
-        import asyncio
-
-        return await asyncio.to_thread(self._get_query_embedding, query)
+        desc = _descriptor("local", self.model_name, {"input": [query]}, "local")
+        return await runtime.invoke_async(
+            lambda: self._inner.aget_query_embedding(query), **desc
+        )
 
     def _get_text_embedding(self, text):
         return self._get_text_embeddings([text])[0]
@@ -156,11 +157,10 @@ class AccountLocalEmbedding(BaseEmbedding):
         )
 
     async def _aget_text_embedding(self, text):
-        import asyncio
-
-        return await asyncio.to_thread(self._get_text_embedding, text)
+        return (await self._aget_text_embeddings([text]))[0]
 
     async def _aget_text_embeddings(self, texts):
-        import asyncio
-
-        return await asyncio.to_thread(self._get_text_embeddings, texts)
+        desc = _descriptor("local", self.model_name, {"input": texts}, "local")
+        return await runtime.invoke_async(
+            lambda: self._inner.aget_text_embedding_batch(texts), **desc
+        )

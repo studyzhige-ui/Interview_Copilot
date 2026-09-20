@@ -282,39 +282,10 @@ def build_reranker(top_n: int) -> Any:
     p = cfg.provider
 
     if p.kind == "local_hf_crossencoder":
-        from app.core.hf_runtime import (
-            format_missing_model_error,
-            prepare_hf_runtime,
-            resolve_local_snapshot,
-        )
-
-        prepare_hf_runtime()
-        from llama_index.postprocessor.sbert_rerank import SentenceTransformerRerank
-        from app.rag.policy import current_rag_policy, resolve_rag_device
-
-        local_path = resolve_local_snapshot(cfg.model)
-        if local_path is None:
-            raise RuntimeError(
-                format_missing_model_error(
-                    model_id=cfg.model,
-                    role="Reranker",
-                    filter_substring="rerank",
-                    fix_hint="python scripts/init_models.py --only reranker",
-                )
-            )
-        logger.info("Reranker: local model=%s top_n=%d", cfg.model, top_n)
-        reranker = SentenceTransformerRerank(
-            model=local_path,
-            device=resolve_rag_device(),
-            top_n=top_n,
-            cross_encoder_kwargs={
-                "max_length": current_rag_policy().tokens.rerank_input
-            },
-        )
-        _warm_local_reranker(reranker)
+        from app.local_inference.rag import BrokerReranker
         from app.usage.reranking import AccountLocalReranker
 
-        return AccountLocalReranker(reranker, cfg.model)
+        return AccountLocalReranker(BrokerReranker(cfg.model, top_n), cfg.model)
 
     if p.kind == "remote_openai_style":
         api_key = os.getenv(p.api_key_env, "").strip()

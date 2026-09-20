@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "interview-copilot"
 version = "0.1.0"
-description = "Cloud-first career copilot for job search, interviews, artifacts, and agent workflows"
+description = "Local-first career copilot for job search, interviews, artifacts, and agent workflows"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -21,7 +21,7 @@ dependencies = [
     "redis==8.1.0",
     "celery==5.6.3",
     "boto3==1.43.67",
-    # Match the deployed Milvus 2.6 server line; PyMilvus 3.x targets Milvus 3.
+    # PostgreSQL vector projection; local ML libraries stay in their own environment.
     "pgvector==0.5.0",
     # Configuration and security
     "python-dotenv==1.2.2",
@@ -126,7 +126,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "slow: marks tests that require significant time (e.g. model loading)",
-    "integration: marks tests that require external services (DB, Milvus, Redis)",
+    "integration: marks tests that require external services (PostgreSQL, Redis)",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning:sqlalchemy",

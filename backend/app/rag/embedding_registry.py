@@ -21,9 +21,8 @@ Adding a new provider:
 
 ⚠ Dimension lock-in
 -------------------
-Milvus collections are created with a fixed ``dim``. Once data is indexed
-you can NOT swap to a different-dim model without rebuilding the
-collection. Plan ahead.
+PostgreSQL generations freeze the complete embedding identity. A model,
+revision, dimension, prefix or adapter change requires rebuilding a generation.
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 ProviderKind = Literal[
-    "local_huggingface",  # in-process HuggingFaceEmbedding
+    "local_huggingface",  # isolated local broker
     "openai",  # OpenAI's official endpoint shape (uses dimensions= param)
     "openai_compat",  # /v1/embeddings drop-in (SiliconFlow / Jina / DashScope / etc)
 ]
@@ -54,7 +53,7 @@ class EmbeddingValidationError(Exception):
 
     A permanent (non-retryable) ingest error: a returned vector's dim != the
     configured ``EMBEDDING_DIM``, the vector count != the chunk count, or an
-    existing Milvus collection's dim differs from ``EMBEDDING_DIM``. The message
+    existing index generation's dim differs from ``EMBEDDING_DIM``. The message
     is user-facing — the worker surfaces it like ``EmptyContentError`` — and
     retrying never helps: fix the model/config or rebuild the index.
     """
@@ -173,40 +172,11 @@ def build_embedding() -> Any:
     p = cfg.provider
 
     if p.kind == "local_huggingface":
-        from app.core.hf_runtime import (
-            format_missing_model_error,
-            prepare_hf_runtime,
-            resolve_local_snapshot,
-        )
-
-        hf_cache_dir = prepare_hf_runtime()
-        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-        from app.rag.policy import resolve_rag_device
-
-        device = resolve_rag_device()
-        model_name = resolve_local_snapshot(cfg.model)
-        if model_name is None:
-            raise RuntimeError(
-                format_missing_model_error(
-                    model_id=cfg.model,
-                    role="Embedding",
-                    fix_hint="python scripts/init_models.py --only embedding",
-                )
-            )
-        logger.info(
-            "Embedding: local HF model=%s device=%s dim=%d",
-            cfg.model,
-            device,
-            cfg.dim,
-        )
+        from app.local_inference.rag import BrokerEmbedding
         from app.usage.embedding import AccountLocalEmbedding
 
-        inner = HuggingFaceEmbedding(
-            model_name=model_name,
-            device=device,
-            cache_folder=str(hf_cache_dir),
-        )
-        return AccountLocalEmbedding(inner, cfg.model)
+        # A thin proxy, no weights or CUDA in the web/Celery interpreter.
+        return AccountLocalEmbedding(BrokerEmbedding(cfg.model, cfg.dim), cfg.model)
 
     api_key = os.getenv(p.api_key_env, "").strip()
     if not api_key:

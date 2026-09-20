@@ -30,7 +30,7 @@ class ProcessResult:
     elapsed_seconds: float
 
 
-async def _finish_cleanup(task: asyncio.Task):
+async def finish_cleanup(task: asyncio.Task):
     """Repeated cancellation cannot orphan the process during cleanup."""
     while not task.done():
         try:
@@ -47,7 +47,7 @@ def _signal_group(process: asyncio.subprocess.Process, value: signal.Signals) ->
         pass
 
 
-async def _stop(process: asyncio.subprocess.Process, grace: float) -> None:
+async def stop_process_group(process: asyncio.subprocess.Process, grace: float) -> None:
     _signal_group(process, signal.SIGTERM)
     try:
         await asyncio.wait_for(asyncio.shield(process.wait()), grace)
@@ -153,12 +153,12 @@ async def run_isolated(
         try:
             if process is None:
                 try:
-                    process = await _finish_cleanup(creation)
+                    process = await finish_cleanup(creation)
                 except OSError:
                     process = None
             if process is not None:
-                await _finish_cleanup(
-                    asyncio.create_task(_stop(process, kill_grace_seconds))
+                await finish_cleanup(
+                    asyncio.create_task(stop_process_group(process, kill_grace_seconds))
                 )
         finally:
             for task in tasks:
@@ -169,4 +169,4 @@ async def run_isolated(
                 async def drain() -> None:
                     await asyncio.gather(*tasks, return_exceptions=True)
 
-                await _finish_cleanup(asyncio.create_task(drain()))
+                await finish_cleanup(asyncio.create_task(drain()))
