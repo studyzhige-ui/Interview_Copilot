@@ -95,6 +95,12 @@ jobs:
           mkdir -p test-results
           python evaluation/mock_interview_eval.py --plan-only > test-results/mock-preflight.json
 
+      - name: Check fixture dependencies before expensive integration work
+        timeout-minutes: 3
+        run: |
+          mkdir -p test-results
+          python -m pytest backend/tests --setup-plan -q > test-results/fixture-plan.txt
+
       - name: Apply and verify database migrations
         run: |
           alembic upgrade head
@@ -114,6 +120,7 @@ jobs:
           name: backend-tests-py${{ matrix.python-version }}
           path: |
             test-results/backend.xml
+            test-results/fixture-plan.txt
             test-results/mock-preflight.json
           if-no-files-found: warn
           retention-days: 7
