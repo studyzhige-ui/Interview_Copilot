@@ -147,11 +147,15 @@ jobs:
           docker build -f infra/postgres/Dockerfile -t copilot-pg-ci .
           docker run -d --name copilot-pg-extension -e POSTGRES_PASSWORD=ci-only copilot-pg-ci
           trap 'docker rm -f copilot-pg-extension >/dev/null 2>&1 || true' EXIT
-          for attempt in $(seq 1 30); do
-            if docker exec copilot-pg-extension pg_isready -U postgres; then break; fi
+          # The entrypoint starts a temporary Unix-socket-only server during
+          # initdb. Wait for final TCP readiness, not that transient server.
+          ready=false
+          for attempt in $(seq 1 60); do
+            if docker exec copilot-pg-extension pg_isready -h 127.0.0.1 -U postgres; then ready=true; break; fi
             sleep 1
           done
-          docker exec copilot-pg-extension psql -U postgres -v ON_ERROR_STOP=1 -c "CREATE EXTENSION vector; SELECT '[1,2,3]'::vector <-> '[1,2,3]'::vector;"
+          if [ "$ready" != true ]; then docker logs copilot-pg-extension; exit 1; fi
+          docker exec -e PGPASSWORD=ci-only copilot-pg-extension psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -c "CREATE EXTENSION vector; SELECT '[1,2,3]'::vector <-> '[1,2,3]'::vector;"
 
   lint:
     runs-on: ubuntu-latest
