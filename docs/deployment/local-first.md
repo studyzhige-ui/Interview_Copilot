@@ -266,3 +266,75 @@ SDK模型逻辑另外用小型替身检查前缀、长度和结果形状。没�
 - SentenceTransformer：https://sbert.net/docs/package_reference/sentence_transformer/model.html
 - CrossEncoder：https://sbert.net/docs/package_reference/cross_encoder/model.html
 - Linux parent-death语义：https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html
+
+
+## P2 音频扩展：有限片段 Qwen 转写与独立对齐（2026-09-20）
+
+本节扩展前述 RAG broker，同一私有 socket 和同一调度 lane 现在可配置四个角色：
+Embedding、重排、Qwen Transformers 转写、Qwen ForcedAligner。它是有限片段的
+生产调用能力，**不是 vLLM 连续流式 ASR、WebRTC 或完整录音复盘切换**。
+TTS、说话人、OCR尚未纳入这个资源管理器；不能从四角色测试外推这些模型已接入。
+
+### 接口与本地资产
+
+使用单独的音频 Python 环境，参考官方 `qwen-asr==0.0.6` 及其兼容依赖。不要将其
+固定的 Transformers/Accelerate/vLLM 依赖装进业务环境或覆盖已有 RAG 环境。
+本轮不提供“已在5060Ti上验收”的环境锁，不下载权重，也不启动付费服务。
+目标权重是 `Qwen/Qwen3-ASR-1.7B`（也支持明确配置0.6B）和
+`Qwen/Qwen3-ForcedAligner-0.6B`；二者使用独立进程，可分别驻留/回收。
+
+在最终本机验收阶段，有完整权重和独立音频环境后，再准备新的配置目录：
+
+```bash
+python scripts/prepare_local_inference.py \
+  --python /home/your-user/venvs/local-rag/bin/python \
+  --audio-python /home/your-user/venvs/qwen-audio/bin/python \
+  --device cuda --runtime-dir /home/your-user/.ic-inference-audio \
+  --model-root /mnt/d/Projects/Python/Interview_Copilot/data/cache/models
+```
+
+已有配置仍拒绝覆盖，切换前停止旧 broker 并核对模型身份。ASR默认预约7000MiB、
+对齐3500MiB；总CUDA预约默认12000MiB。**这是保守准入配置而非实测峰值**，CPU模型
+不占CUDA预约，也不因为其预约数值超过CUDA容量而被拒绝。加入音频角色不改变现有
+RAG绑定hash，不应为无语义变化的Embedding额外重建索引。
+
+`local_qwen_asr` 已接入通用文件转写和模拟面试的录音回答入口。只有明确配置
+`TRANSCRIPTION_PROVIDER=local_qwen_asr` 与相匹配的 `TRANSCRIPTION_MODEL` 才会选用，不能由服务失败触发
+静默切换。**上传面试的证据入口仍使用现有WhisperX合同**：Qwen文本结果没有说话人，
+不得冒充完整词级复盘依据。待独立说话人/角色与新证据编排接入后再统一默认；本批
+没有把未写完的部分包装成用户侧模型验收，也没有要求现在下载模型。
+
+### 有界音频与错误语义
+
+应用在验证资料所有权后打开本地普通文件，固定文件描述符；FFmpeg只使用许可的
+本地协议及常见音视频demuxer，不接受网络URL或播放列表引用其他资料。输出以
+16kHz、单声道PCM16分块，每次最多30秒；不一次物化整场音频或输出。输入字节、
+解码总时长、读取期限和最终文字总量有上限。前段有效、后段损坏仍是失败，
+不是返回前段文字冒充完整转写；源文件处理中变化也明确失败。
+
+每个IPC音频包包含样本数、采样率、编码和SHA-256，不传任意文件路径或URL给ML子进程。
+ASR只返回文字与语言；对齐另收原文字，核对词/字覆盖和时间界限，不允许改写原文。
+零长/缺失对齐明确标为未对齐，不编造时间、置信度、说话人或“文字已核实”。
+固定分块存在跨块语义边界，因此本批不声称解决长音频的高质量接缝/分段策略。
+
+短回答走交互优先级，文件转写/对齐默认后台优先级。排队期限到达时立即移除并明确
+拒绝，不等前面的长任务完成，更不能超时后继续偷偷执行。执行后的未知状态和
+结算确认丢失不降格为普通可重试服务不可用；录音回答API返回409，不自动换提供者
+重发。多段转写已执行部分后再遇到拒绝，整项消费保守保留，不退还已执行部分。
+
+取消/早退会回收拥有的FFmpeg进程组与文件句柄。模型清理若失败，broker进入故障
+停止接单，保留未确认释放的预约，不在资源状态未知时加载下一模型。
+这些是故障与准入约束，不是对恶意本地库或所有FFmpeg原生漏洞的完整OS沙箱。
+
+### 验证与官方依据
+
+工程测试使用合成PCM、真实FFmpeg、真实Unix连接和新Python子进程；模型数学使用
+测试专属替身，生产代码没有假模型开关。覆盖损坏/超限音频、跨块失败、取消回收、
+文本与时间戳校验、进程复用、配置绑定、排队过期和资源清理失败。CI显式检查FFmpeg
+可用，不把未执行的解码测试计为通过。Qwen权重准确率、设备延迟和显存峰值未实测。
+
+官方接口（2026-09-20核对）：
+- Qwen API/限制：https://github.com/QwenLM/Qwen3-ASR
+- 依赖版本：https://github.com/QwenLM/Qwen3-ASR/blob/main/pyproject.toml
+- FFmpeg协议与demuxer选项：https://ffmpeg.org/ffmpeg-formats.html
+- Python有界pipe与取消清理：https://docs.python.org/3.13/library/asyncio-subprocess.html

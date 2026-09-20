@@ -236,3 +236,50 @@ async def test_idle_resident_is_reaped(config):
         assert model.closed
     finally:
         await broker.close()
+
+
+async def test_queued_deadline_returns_before_active_finishes(config):
+    P = factory()
+    P.entered, P.release = asyncio.Event(), asyncio.Event()
+    broker = Broker(config, factory=P)
+    broker.start()
+    try:
+        active = broker.submit(task(config.models[0]))
+        await P.entered.wait()
+        queued = broker.submit(task(config.models[0], timeout=0.02))
+        response = await asyncio.wait_for(queued.future, 0.5)
+        assert response["code"] == "queue_deadline"
+        assert not active.future.done() and not broker.pending
+        P.release.set()
+        await active.future
+        assert [v for event, v in P.events if event == "run"] == [active.task["id"]]
+    finally:
+        await broker.close()
+
+
+async def test_teardown_failure_faults_broker_and_resolves_waiters(config):
+    class BrokenClose(FakeProcess):
+        events, instances = [], []
+        release, entered = asyncio.Event(), asyncio.Event()
+
+        async def close(self):
+            raise RuntimeError("native cleanup not confirmed")
+
+    gpu_config = replace(
+        config, models=tuple(replace(m, device="cuda") for m in config.models)
+    )
+    broker = Broker(gpu_config, factory=BrokenClose)
+    broker.start()
+    try:
+        first = broker.submit(task(gpu_config.models[0], timeout=0.03))
+        await BrokenClose.entered.wait()
+        next_job = broker.submit(task(gpu_config.models[1]))
+        assert (await asyncio.wait_for(first.future, 0.5))["status"] == "unknown"
+        assert (await asyncio.wait_for(next_job.future, 0.5))["status"] == "not_started"
+        assert broker.snapshot()["faulted"] is True
+        assert broker.reserved() == gpu_config.models[0].reservation_mib
+        assert (await broker.submit(task(gpu_config.models[1])).future)[
+            "code"
+        ] == "broker_stopping"
+    finally:
+        await broker.close()

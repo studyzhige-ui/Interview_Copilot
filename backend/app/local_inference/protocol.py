@@ -15,17 +15,15 @@ import socket
 import struct
 from typing import BinaryIO
 
+from .errors import ProtocolError
+
 VERSION = 1
 MAX_FRAME = 4 * 1024 * 1024
 MAX_TEXT_BYTES = 256 * 1024
 MAX_ITEMS = 32
-ROLES = {"embedding", "reranking"}
+ROLES = {"embedding", "reranking", "transcription", "alignment"}
 PRIORITIES = {"interactive": 0, "background": 10}
 LOCAL_EMBEDDING_CONTRACT = "sentence-transformer-explicit-prompts-v1"
-
-
-class ProtocolError(ValueError):
-    pass
 
 
 def loads(raw: bytes):
@@ -105,6 +103,8 @@ def request(value: dict) -> dict:
         "priority",
         "timeout",
     }
+    if isinstance(value, dict) and value.get("role") in ("transcription", "alignment"):
+        expected = (expected - {"texts", "query"}) | {"audio", "text", "language"}
     if not isinstance(value, dict) or set(value) != expected:
         raise ProtocolError("invalid_request")
     if type(value["version"]) is not int or value["version"] != VERSION:
@@ -113,7 +113,12 @@ def request(value: dict) -> dict:
         "[0-9a-f]{32}", value["id"]
     ):
         raise ProtocolError("invalid_id")
-    if value["role"] not in ROLES or value["priority"] not in PRIORITIES:
+    if (
+        not isinstance(value["role"], str)
+        or not isinstance(value["priority"], str)
+        or value["role"] not in ROLES
+        or value["priority"] not in PRIORITIES
+    ):
         raise ProtocolError("invalid_role_or_priority")
     binding = value["binding"]
     if not isinstance(binding, str) or not re.fullmatch("[0-9a-f]{64}", binding):
@@ -125,6 +130,10 @@ def request(value: dict) -> dict:
         or not 0 < duration <= 600
     ):
         raise ProtocolError("invalid_timeout")
+    if value["role"] in ("transcription", "alignment"):
+        from .audio import validate_audio_request
+
+        return validate_audio_request(value)
     texts, query = value["texts"], value["query"]
     if not isinstance(texts, list) or not 1 <= len(texts) <= MAX_ITEMS:
         raise ProtocolError("invalid_text_count")
@@ -166,3 +175,13 @@ def same_user(sock) -> bool:
         sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")),
     )
     return uid == os.getuid()
+
+
+def validate_output(task, values, *, dimension):
+    if task["role"] in ("transcription", "alignment"):
+        from .audio import validate_audio_result
+
+        return validate_audio_result(task, values)
+    return validate_values(
+        values, role=task["role"], count=len(task["texts"]), dimension=dimension
+    )

@@ -19,6 +19,7 @@ async def transcribe_short_clip(file_path: str, *, language: str = "zh") -> str:
     clip has exactly one speaker.
     """
     from app.media.application import transcription_registry
+    from app.core.execution_errors import ModelOutcomeUnknownError
 
     try:
         return await transcription_registry.transcribe_plain(
@@ -27,6 +28,9 @@ async def transcribe_short_clip(file_path: str, *, language: str = "zh") -> str:
         )
     except transcription_registry.LocalProviderOnly:
         pass
+    except ModelOutcomeUnknownError:
+        # Do not disguise an unconfirmed dispatch/settlement as service downtime.
+        raise
     except Exception as exc:  # noqa: BLE001 — provider transport/config failure
         raise TranscriptionUnavailable from exc
 

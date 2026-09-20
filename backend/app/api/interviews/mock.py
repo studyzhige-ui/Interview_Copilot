@@ -466,6 +466,7 @@ async def prepare_answer_audio(
 ):
     """Transcribe and keep one recording without a second client upload."""
     from app.files.application.file_validation import read_validated_upload
+    from app.core.execution_errors import ModelOutcomeUnknownError
     from app.media.application.short_clip_transcription import TranscriptionUnavailable
     from app.media.application.short_clip_transcription import transcribe_short_clip
 
@@ -489,6 +490,11 @@ async def prepare_answer_audio(
             stream.write(contents)
         try:
             text = (await transcribe_short_clip(local_path, language="zh")).strip()
+        except ModelOutcomeUnknownError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="转写执行或结算结果未确认，未自动重试。录音仍在当前页面，可以改用文字回答。",
+            ) from exc
         except TranscriptionUnavailable as exc:
             logger.error("Short-clip transcription unavailable: %s", exc)
             raise HTTPException(

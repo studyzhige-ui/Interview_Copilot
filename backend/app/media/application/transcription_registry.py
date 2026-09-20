@@ -26,7 +26,7 @@ from app.media.application.workers import pool
 logger = logging.getLogger(__name__)
 
 
-ProviderKind = Literal["local_whisperx", "openai_compat"]
+ProviderKind = Literal["local_whisperx", "local_qwen_asr", "openai_compat"]
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,11 @@ class TranscriptionProvider:
 
 
 PROVIDERS: dict[str, TranscriptionProvider] = {
+    "local_qwen_asr": TranscriptionProvider(
+        kind="local_qwen_asr",
+        label="本地 Qwen3-ASR（有限音频转写）",
+        china_friendly=True,
+    ),
     "local_whisperx": TranscriptionProvider(
         kind="local_whisperx",
         label="本地 WhisperX (含 Pyannote)",
@@ -87,7 +92,8 @@ def resolve_transcription() -> ResolvedTranscription:
     if pid not in PROVIDERS:
         raise ValueError(f"Unknown TRANSCRIPTION_PROVIDER: {pid!r}")
     require_local_model(
-        "transcription", is_local=PROVIDERS[pid].kind == "local_whisperx"
+        "transcription",
+        is_local=PROVIDERS[pid].kind in {"local_whisperx", "local_qwen_asr"},
     )
     model = (
         settings.TRANSCRIPTION_MODEL or "deepdml/faster-whisper-large-v3-turbo-ct2"
@@ -105,6 +111,7 @@ def list_providers() -> list[dict[str, Any]]:
             "supports_word_timestamps": p.supports_word_timestamps,
             "api_key_env": p.api_key_env,
             "ready": p.kind == "local_whisperx"
+            or (p.kind == "local_qwen_asr" and bool(settings.LOCAL_INFERENCE_SOCKET))
             or (
                 settings.AUXILIARY_MODEL_POLICY != "local_only"
                 and bool(os.getenv(p.api_key_env, "").strip())
@@ -137,6 +144,9 @@ async def transcribe(file_path: str, language: Optional[str] = "zh") -> str:
     """
     cfg = resolve_transcription()
     p = cfg.provider
+
+    if p.kind == "local_qwen_asr":
+        return await _transcribe_qwen(cfg, file_path, language)
 
     if p.kind == "local_whisperx":
         from app.media.application.whisperx_engine import _run_whisperx_sync
@@ -240,6 +250,8 @@ async def transcribe_plain(file_path: str, language: Optional[str] = "zh") -> st
 
     cfg = resolve_transcription()
     p = cfg.provider
+    if p.kind == "local_qwen_asr":
+        return await _transcribe_qwen(cfg, file_path, language, priority="interactive")
     if p.kind == "local_whisperx":
         raise LocalProviderOnly(cfg.provider_id)
     if p.kind != "openai_compat":
@@ -390,3 +402,18 @@ __all__ = [
     "list_providers",
     "transcribe",
 ]
+
+
+async def _transcribe_qwen(cfg, file_path, language, *, priority="background"):
+    from app.local_inference.speech import transcribe_file
+    from app.usage import media, runtime
+
+    units = await pool("probe").run(media.audio_units, file_path)
+    desc = await pool("probe").run(media.descriptor, cfg, file_path, language, units)
+    return await runtime.invoke_async(
+        lambda: transcribe_file(
+            file_path, model=cfg.model, language=language, priority=priority
+        ),
+        observed=lambda _: units,
+        **desc,
+    )

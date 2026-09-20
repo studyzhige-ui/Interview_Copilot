@@ -1,4 +1,4 @@
-"""Prepare (never download) explicit local RAG broker configuration."""
+"""Prepare (never download) explicit local RAG and optional Qwen audio configuration."""
 
 from __future__ import annotations
 
@@ -25,6 +25,9 @@ def build_config(
     model_root: Path,
     cache_root: Path,
     capacity_mib: int = 12000,
+    audio_python: str | None = None,
+    asr_model: str = "Qwen/Qwen3-ASR-1.7B",
+    alignment_model: str = "Qwen/Qwen3-ForcedAligner-0.6B",
 ) -> BrokerConfig:
     if not sys.platform.startswith("linux"):
         raise ValueError("use_linux_or_wsl2")
@@ -77,6 +80,39 @@ def build_config(
                 else "",
             )
         )
+    if audio_python is not None:
+        from app.local_inference.audio import AUDIO_OUTPUT_TOKENS
+
+        audio_executable = Path(audio_python).expanduser().absolute()
+        if not audio_executable.is_file() or not os.access(audio_executable, os.X_OK):
+            raise ValueError("invalid_audio_python")
+        for role, model_id, reservation in (
+            ("transcription", asr_model, 7000),
+            ("alignment", alignment_model, 3500),
+        ):
+            revision = settings.MODEL_REVISIONS_JSON.get(model_id)
+            asset = inspect_model(
+                model_id,
+                model_root=model_root,
+                cache_root=cache_root / "huggingface",
+                revision=revision,
+                verify_hashes=True,
+            )
+            if not asset.loadable_candidate or asset.layout != "transformers":
+                raise ValueError(f"{role}_requires_complete_local_weights")
+            specs.append(
+                ModelSpec(
+                    role,
+                    model_id,
+                    asset.path,
+                    str(audio_executable),
+                    device=device,
+                    revision=revision,
+                    dimension=1,
+                    max_tokens=AUDIO_OUTPUT_TOKENS,
+                    reservation_mib=reservation,
+                )
+            )
     return BrokerConfig(
         str(runtime_dir / "worker.sock"),
         str(runtime_dir / "cache"),
@@ -88,6 +124,12 @@ def build_config(
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python", required=True)
+    parser.add_argument(
+        "--audio-python",
+        help="Optional separate qwen-asr interpreter; never installs dependencies",
+    )
+    parser.add_argument("--asr-model", default="Qwen/Qwen3-ASR-1.7B")
+    parser.add_argument("--alignment-model", default="Qwen/Qwen3-ForcedAligner-0.6B")
     parser.add_argument("--device", choices=("cpu", "cuda"), required=True)
     parser.add_argument("--runtime-dir", required=True)
     parser.add_argument("--model-root")
@@ -104,6 +146,9 @@ def main(argv=None):
         ).absolute(),
         cache_root=cache,
         capacity_mib=args.capacity_mib,
+        audio_python=args.audio_python,
+        asr_model=args.asr_model,
+        alignment_model=args.alignment_model,
     )
     private_directory(runtime_dir)
     target = runtime_dir / "config.json"

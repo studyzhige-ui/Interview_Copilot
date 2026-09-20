@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 
 from app.core.isolated_process import finish_cleanup, stop_process_group
-from .protocol import ProtocolError, receive, send, validate_values
+from .protocol import ProtocolError, receive, send, validate_output
 
 CHILD = Path(__file__).with_name("child.py")
 
@@ -50,6 +50,7 @@ class ModelProcess:
         self.logs = None
         self.temp = None
         self.closed = False
+        self._closing = None
 
     async def start(self):
         self.temp = tempfile.TemporaryDirectory(prefix="model-", dir=self.cache_root)
@@ -114,11 +115,8 @@ class ModelProcess:
             ):
                 raise ProtocolError("worker_response_identity_mismatch")
             if result.get("status") == "completed":
-                validate_values(
-                    result.get("values"),
-                    role=self.spec.role,
-                    count=len(task["texts"]),
-                    dimension=self.spec.dimension,
+                validate_output(
+                    task, result.get("values"), dimension=self.spec.dimension
                 )
             elif (
                 result.get("status") != "rejected"
@@ -131,9 +129,13 @@ class ModelProcess:
             raise
 
     async def close(self):
-        if self.closed:
-            return
-        self.closed = True
+        # Concurrent cleanup callers await one owned operation. A failed cleanup
+        # remains failed; it cannot become a successful no-op and free capacity.
+        if self._closing is None:
+            self._closing = asyncio.create_task(self._close_owned())
+        await finish_cleanup(self._closing)
+
+    async def _close_owned(self):
         try:
             if self.process is None and self.creation is not None:
                 try:
@@ -171,8 +173,11 @@ class ModelProcess:
             if self.logs is not None:
                 self.logs.cancel()
                 await finish_cleanup(asyncio.create_task(_drain(self.logs)))
-            if self.temp is not None:
-                self.temp.cleanup()
+        # Preserve the workspace and reservation when termination was not
+        # confirmed. Deleting files underneath a possibly live model is unsafe.
+        if self.temp is not None:
+            self.temp.cleanup()
+        self.closed = True
 
 
 async def _drain(task):

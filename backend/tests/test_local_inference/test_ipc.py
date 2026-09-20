@@ -297,3 +297,119 @@ asyncio.run(main())
         if parent.poll() is None:
             parent.kill()
             await asyncio.to_thread(parent.wait, 3)
+
+
+@pytest.mark.parametrize("role", ["transcription", "alignment"])
+async def test_audio_crosses_real_socket_and_owned_process(config, fake_child, role):
+    """Actual server/client/child transport; fixture replaces only model math."""
+    from dataclasses import replace
+    from app.local_inference.audio import AUDIO_OUTPUT_TOKENS
+    from app.local_inference.client import make_audio_request
+    from app.local_inference.config import ModelSpec
+
+    spec = ModelSpec(
+        role,
+        f"Qwen/test-{role}",
+        config.models[0].model_path,
+        config.models[0].python,
+        dimension=1,
+        max_tokens=AUDIO_OUTPUT_TOKENS,
+        reservation_mib=20,
+    )
+    config = replace(config, models=(spec,))
+    source = FAKE.replace(
+        "v=['sentence-transformer-explicit-prompts-v1',",
+        "v=[{'transcription':'qwen-asr-transformers-pcm16-v1','alignment':'qwen-forced-aligner-pcm16-v1'}[spec['role']],",
+    ).replace("text=job['texts'][0]", "text=job['language']")
+    source = source.replace(
+        "value=[[1.,0.,0.] for _ in job['texts']] if job['role']=='embedding' else [1. for _ in job['texts']]",
+        "value={'text': 'synthetic ASR' if spec['role']=='transcription' else job['text'], 'language':job['language'], 'words': [] if spec['role']=='transcription' else [{'text':job['text'],'start':0.0,'end':0.5}]}",
+    )
+    fake_child.write_text(source)
+    server = Server(config)
+    await server.start()
+    try:
+        client = Client(config.socket_path, timeout=3)
+        request = make_audio_request(
+            role,
+            spec.binding,
+            b"\x00\x00" * 16000,
+            text="original text" if role == "alignment" else "",
+            language="en",
+            timeout=3,
+        )
+        result = await client.acall(request, dimension=1)
+        assert result["text"] == (
+            "synthetic ASR" if role == "transcription" else "original text"
+        )
+        assert result["words"] == (
+            []
+            if role == "transcription"
+            else [{"text": "original text", "start": 0.0, "end": 0.5}]
+        )
+        pid = int((Path(spec.model_path) / "pid").read_text())
+        assert await client.acall(request, dimension=1) == result
+        assert int((Path(spec.model_path) / "pid").read_text()) == pid
+        # Corrupt PCM is rejected before dispatch; the existing process survives.
+        request["audio"]["sha256"] = "0" * 64
+        with pytest.raises(ValueError):
+            await client.acall(request, dimension=1)
+        assert (await client.status())["completed"] == 2
+    finally:
+        await server.close()
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    assert not list(Path(config.cache_root).iterdir())
+
+
+async def test_close_failure_is_sticky_and_keeps_workspace(config, monkeypatch):
+    from types import SimpleNamespace
+
+    cleaned, attempts = [], []
+    obj = process.ModelProcess(config.models[0], Path(config.cache_root))
+    out, err = asyncio.StreamReader(), asyncio.StreamReader()
+    out.feed_eof()
+    err.feed_eof()
+    obj.process = SimpleNamespace(stdout=out, stderr=err)
+    obj.temp = SimpleNamespace(cleanup=lambda: cleaned.append(True))
+
+    async def fail_stop(_process, grace):
+        attempts.append(grace)
+        raise OSError("synthetic stop failure")
+
+    monkeypatch.setattr(process, "stop_process_group", fail_stop)
+    for _ in range(2):
+        with pytest.raises(OSError, match="synthetic stop failure"):
+            await obj.close()
+    assert attempts == [1] and not cleaned and obj.closed is False
+
+
+async def test_concurrent_close_waits_for_same_reap(config, monkeypatch):
+    from types import SimpleNamespace
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    cleaned, attempts = [], []
+    obj = process.ModelProcess(config.models[0], Path(config.cache_root))
+    out, err = asyncio.StreamReader(), asyncio.StreamReader()
+    out.feed_eof()
+    err.feed_eof()
+    obj.process = SimpleNamespace(stdout=out, stderr=err)
+    obj.temp = SimpleNamespace(cleanup=lambda: cleaned.append(True))
+
+    async def stop(_process, grace):
+        attempts.append(grace)
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(process, "stop_process_group", stop)
+    first = asyncio.create_task(obj.close())
+    await entered.wait()
+    second = asyncio.create_task(obj.close())
+    try:
+        await asyncio.sleep(0)
+        assert not first.done() and not second.done() and not obj.closed
+        assert not cleaned
+    finally:
+        release.set()
+        await asyncio.gather(first, second)
+    assert obj.closed and attempts == [1] and cleaned == [True]

@@ -29,6 +29,10 @@ class InputTooLong(ValueError):
 
 
 def load_model(spec):
+    if spec.role in {"transcription", "alignment"}:
+        from app.local_inference.qwen_audio import load
+
+        return load(spec)
     import torch
     from sentence_transformers import CrossEncoder, SentenceTransformer
 
@@ -53,6 +57,10 @@ def infer(model, spec, task):
 
     if task["binding"] != spec.binding or task["role"] != spec.role:
         raise ValueError("model_binding_mismatch")
+    if spec.role in {"transcription", "alignment"}:
+        from app.local_inference.qwen_audio import infer as infer_audio
+
+        return infer_audio(model, spec, task)
     texts = task["texts"]
     with torch.inference_mode():
         if spec.role == "embedding":

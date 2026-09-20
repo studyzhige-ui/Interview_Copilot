@@ -20,7 +20,7 @@ from .protocol import (
     request,
     same_user,
     send,
-    validate_values,
+    validate_output,
 )
 
 
@@ -32,6 +32,14 @@ class LocalInferenceNotStarted(RuntimeError):
 
 class LocalInferenceUnknown(ModelOutcomeUnknownError):
     """Never replace an uncertain dispatch with an in-process or online retry."""
+
+
+def configured_socket_path():
+    from app.core.config import settings
+
+    return settings.LOCAL_INFERENCE_SOCKET or str(
+        Path(settings.APP_DATA_DIR) / "inference/run/worker.sock"
+    )
 
 
 def check_socket(path: str):
@@ -103,11 +111,27 @@ def checked_response(task, response, dimension):
         raise LocalInferenceNotStarted("local_inference_request_rejected")
     if response.get("status") != "completed":
         raise LocalInferenceUnknown("local_inference_outcome_unknown")
-    return validate_values(
-        response.get("values"),
-        role=task["role"],
-        count=len(task["texts"]),
-        dimension=dimension,
+    return validate_output(task, response.get("values"), dimension=dimension)
+
+
+def make_audio_request(
+    role, binding, pcm, *, text="", language=None, priority="background", timeout=120
+):
+    from .audio import pcm_payload
+
+    return request(
+        dict(
+            version=VERSION,
+            id=uuid.uuid4().hex,
+            role=role,
+            binding=binding,
+            operation="transcribe" if role == "transcription" else "align",
+            audio=pcm_payload(pcm),
+            text=text,
+            language=language,
+            priority=priority,
+            timeout=timeout,
+        )
     )
 
 

@@ -1325,6 +1325,49 @@ def test_mock_answer_audio_reports_unavailable_transcription_without_storing(
     assert db.query(FileAsset).count() == 0
 
 
+@pytest.mark.parametrize(
+    "error_type", ["ModelOutcomeUnknownError", "ConsumptionSettlementUnconfirmedError"]
+)
+def test_mock_answer_audio_unknown_never_becomes_retryable_unavailability(
+    client: TestClient,
+    db: Session,
+    monkeypatch,
+    error_type,
+):
+    from app.core import execution_errors
+    from app.models.file_asset import FileAsset
+
+    record_id, _ = _seed_started_mock(
+        db,
+        record_id="ir_audio_unknown",
+        conv_id="c_audio_unknown",
+    )
+    attempts = []
+
+    async def unresolved(_path: str, *, language: str = "zh") -> str:
+        attempts.append(_path)
+        raise getattr(execution_errors, error_type)("synthetic unresolved result")
+
+    monkeypatch.setattr(
+        "app.media.application.short_clip_transcription.transcribe_short_clip",
+        unresolved,
+    )
+    response = client.post(
+        f"/api/v1/mock-interviews/{record_id}/answer-audio",
+        files={
+            "file": (
+                "answer.webm",
+                b"\x1a\x45\xdf\xa3" + b"synthetic-audio" * 3,
+                "audio/webm",
+            )
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert "未自动重试" in response.json()["detail"]
+    assert len(attempts) == 1
+    assert db.query(FileAsset).count() == 0
+
+
 def test_mock_answer_appends_messages_and_advances(
     client: TestClient,
     db: Session,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from pydantic import PrivateAttr
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
@@ -11,6 +10,7 @@ from llama_index.core.schema import NodeWithScore
 from app.core.config import settings
 from .client import (
     Client,
+    configured_socket_path,
     LocalInferenceNotStarted,
     LocalInferenceUnknown,
     make_request,
@@ -19,9 +19,7 @@ from .config import binding_for
 
 
 def socket_path():
-    return settings.LOCAL_INFERENCE_SOCKET or str(
-        Path(settings.APP_DATA_DIR) / "inference/run/worker.sock"
-    )
+    return configured_socket_path()
 
 
 def _binding(role, model, dimension):

@@ -24,6 +24,7 @@ class Job:
     queued: float
     deadline: float
     started: bool = False
+    expiry: asyncio.TimerHandle | None = None
 
 
 class Broker:
@@ -37,6 +38,7 @@ class Broker:
         self.loop_task: asyncio.Task | None = None
         self.wake = asyncio.Event()
         self.closed = False
+        self.faulted = False
         self.counts = {"completed": 0, "rejected": 0, "unknown": 0}
 
     def start(self):
@@ -76,10 +78,27 @@ class Broker:
             job.future.set_result(self._error(task, "not_started", code))
         else:
             self.pending.append(job)
+            # Expire queued requests even while a different model is loading
+            # or executing. A rejected queued request must never later run.
+            job.expiry = asyncio.get_running_loop().call_later(
+                max(0, job.deadline - time.monotonic()), self._expire, job
+            )
             self.wake.set()
         return job
 
+    def _expire(self, job: Job):
+        if job in self.pending:
+            self.pending.remove(job)
+            self.counts["rejected"] += 1
+            if not job.future.done():
+                job.future.set_result(
+                    self._error(job.task, "not_started", "queue_deadline")
+                )
+            self.wake.set()
+
     def cancel(self, job: Job):
+        if job.expiry is not None:
+            job.expiry.cancel()
         if job in self.pending:
             self.pending.remove(job)
             job.future.cancel()
@@ -107,7 +126,10 @@ class Broker:
         spec = self.specs[role]
         amount = spec.reservation_mib if spec.device == "cuda" else 0
         while self.reserved() + amount > self.config.capacity_mib:
-            oldest = min(self.resident, key=lambda key: self.resident[key][1])
+            oldest = min(
+                (r for r in self.resident if self.specs[r].device == "cuda"),
+                key=lambda key: self.resident[key][1],
+            )
             await self._drop(oldest)
         process = self.factory(spec, Path(self.config.cache_root))
         self.resident[role] = (process, time.monotonic())
@@ -148,12 +170,7 @@ class Broker:
                 now = time.monotonic()
                 for job in self.pending[:]:
                     if job.deadline <= now:
-                        self.pending.remove(job)
-                        self.counts["rejected"] += 1
-                        if not job.future.done():
-                            job.future.set_result(
-                                self._error(job.task, "not_started", "queue_deadline")
-                            )
+                        self._expire(job)
                 if self.pending:
                     # Aging eventually promotes background work. No unsafe hard
                     # preemption of a CUDA kernel to accommodate new arrivals.
@@ -165,6 +182,8 @@ class Broker:
                         ),
                     )
                     self.pending.remove(job)
+                    if job.expiry is not None:
+                        job.expiry.cancel()
                     self.active = job
                     self.running = asyncio.create_task(self._execute(job))
                     try:
@@ -186,13 +205,40 @@ class Broker:
                     await asyncio.wait_for(self.wake.wait(), 1)
                 except TimeoutError:
                     pass
+        except Exception:
+            # A failed teardown is a broker failure, not permission to free
+            # a VRAM reservation and admit a replacement into unknown resources.
+            self.faulted = self.closed = True
+            if self.active is not None and not self.active.future.done():
+                job = self.active
+                job.future.set_result(
+                    self._error(
+                        job.task,
+                        "unknown" if job.started else "not_started",
+                        "execution_interrupted" if job.started else "broker_stopping",
+                    )
+                )
         finally:
+            for job in self.pending:
+                if job.expiry is not None:
+                    job.expiry.cancel()
+                if not job.future.done():
+                    job.future.set_result(
+                        self._error(job.task, "not_started", "broker_stopping")
+                    )
+            self.pending.clear()
             for role in list(self.resident):
-                await self._drop(role)
+                try:
+                    await self._drop(role)
+                except Exception:
+                    self.faulted = self.closed = True
+            self.active, self.running = None, None
 
     async def close(self):
         self.closed = True
         for job in self.pending:
+            if job.expiry is not None:
+                job.expiry.cancel()
             if not job.future.done():
                 job.future.set_result(
                     self._error(job.task, "not_started", "broker_stopping")
@@ -211,5 +257,6 @@ class Broker:
             "resident_roles": sorted(self.resident),
             "reserved_mib": self.reserved(),
             "closing": self.closed,
+            "faulted": self.faulted,
             **self.counts,
         }

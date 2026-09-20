@@ -79,8 +79,10 @@ def test_semantic_binding_includes_prefix_and_not_device(specs):
 def test_config_rejects_duplicate_models_and_insufficient_reservation(config, specs):
     with pytest.raises(ValueError):
         replace(config, models=(specs[0], specs[0]))
+    # A CPU-only deployment does not reserve VRAM. CUDA models still must fit.
+    assert replace(config, capacity_mib=1).capacity_mib == 1
     with pytest.raises(ValueError):
-        replace(config, capacity_mib=1)
+        replace(config, capacity_mib=1, models=(replace(specs[0], device="cuda"),))
     with pytest.raises(ValueError):
         replace(config, cache_root=specs[0].model_path + "/cache")
     with pytest.raises(ValueError):

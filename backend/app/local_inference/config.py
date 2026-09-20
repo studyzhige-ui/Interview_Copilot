@@ -16,8 +16,13 @@ def binding_for(
 ) -> str:
     # Execution details (device, cache, interpreter) do not change semantic identity.
     # Changing an instruction or adapter contract DOES require a new index.
+    from .audio import ASR_CONTRACT, ALIGN_CONTRACT
+
+    contract = {"transcription": ASR_CONTRACT, "alignment": ALIGN_CONTRACT}.get(
+        role, LOCAL_EMBEDDING_CONTRACT
+    )
     value = [
-        LOCAL_EMBEDDING_CONTRACT,
+        contract,
         role,
         model_id,
         revision,
@@ -77,10 +82,10 @@ class ModelSpec:
             value = getattr(self, name)
             if not isinstance(value, str) or len(value) > 2048:
                 raise ValueError("invalid_prompt_prefix")
-        if self.role == "reranking" and (
+        if self.role in {"reranking", "transcription", "alignment"} and (
             self.dimension != 1 or self.query_prefix or self.text_prefix
         ):
-            raise ValueError("invalid_reranker_spec")
+            raise ValueError("invalid_nonembedding_spec")
 
     @property
     def binding(self):
@@ -127,7 +132,10 @@ class BrokerConfig:
                 raise ValueError("runtime_paths_must_be_absolute")
         if len(os.fsencode(self.socket_path)) > 100:
             raise ValueError("unix_socket_path_too_long")
-        if any(m.reservation_mib > self.capacity_mib for m in self.models):
+        if any(
+            m.device == "cuda" and m.reservation_mib > self.capacity_mib
+            for m in self.models
+        ):
             raise ValueError("model_exceeds_memory_reservation")
         cache = Path(self.cache_root).resolve()
         if any(cache.is_relative_to(Path(m.model_path).resolve()) for m in self.models):
