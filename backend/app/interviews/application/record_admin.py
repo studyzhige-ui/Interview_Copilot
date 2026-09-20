@@ -401,6 +401,11 @@ def delete_record_cascade(
         db.query(InterviewQARevision).filter(
             InterviewQARevision.record_id == record.id
         ).delete(synchronize_session=False)
+        from app.models.transcript_correction import TranscriptCorrection
+
+        db.query(TranscriptCorrection).filter_by(record_id=record.id).delete(
+            synchronize_session=False
+        )
         db.delete(record)
         db.commit()
         from app.task_queue.dispatch import revoke_task

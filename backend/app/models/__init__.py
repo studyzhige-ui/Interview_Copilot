@@ -184,3 +184,5 @@ from app.models.model_budget import UsageAccount as UsageAccount
 from app.models.model_budget import UsageAdjustment as UsageAdjustment
 
 from .retrieval_index import RetrievalEntry, RetrievalGeneration  # noqa: F401
+
+from .transcript_correction import TranscriptCorrection  # noqa: F401

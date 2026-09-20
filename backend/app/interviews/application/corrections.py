@@ -54,37 +54,16 @@ def edit_qa(
         .with_for_update()
         .all()
     )
-    # Preserve the last report and per-question judgments before invalidating.
-    archived = {
-        "generation": record.review_generation,
-        "report": record.analysis_json,
-        "questions": [
-            {
-                "qa_id": row.id,
-                "version": row.version,
-                "score": row.score,
-                "critique": row.critique,
-                "improved_answer": row.improved_answer,
-                "key_points_json": row.key_points_json,
-                "assessment": row.answer_quality_json,
-                "analyzed_at": row.analyzed_at.isoformat() if row.analyzed_at else None,
-            }
-            for row in all_rows
-        ],
-    }
-    for row in all_rows:
-        row.score = None
-        row.critique = None
-        row.improved_answer = None
-        row.key_points_json = None
-        row.analyzed_at = None
-        row.answer_quality_json = None
+    from app.interviews.application.review_invalidation import invalidate_review
+
+    archived = invalidate_review(
+        db,
+        record,
+        all_rows,
+        message="内容已纠正，旧评分已失效。请明确重新分析；不会自动产生模型调用。",
+    )
     for field, value in changes.items():
         setattr(qa, field, value)
-    # Every sibling's analysis version changes too: a stale editor may not
-    # inadvertently restore a feedback value that was just invalidated.
-    for row in all_rows:
-        row.version += 1
     qa.source_provenance_json = {
         **(qa.source_provenance_json or {}),
         "manual_override": {
@@ -93,41 +72,6 @@ def edit_qa(
             "updated_at": utc_now().isoformat(),
         },
     }
-    record.review_generation += 1
-    record.ability_signal_generation += 1
-    record.analysis_json = None
-    record.analyzed_qa_count = 0
-    record.completed_at = None
-    record.status = "review_failed" if record.source == "mock" else "failed"
-    record.error_message = (
-        "内容已纠正，旧评分已失效。请明确重新分析；不会自动产生模型调用。"
-    )
-    record.updated_at = utc_now()
-    from app.career.application.signals import (
-        invalidate_ability_signals_for_interview_reanalysis,
-    )
-
-    invalidate_ability_signals_for_interview_reanalysis(
-        db, user_pk=user_pk, interview_record_id=record_id
-    )
-
-    from app.models.knowledge import KnowledgeDocument
-
-    document_ids = [row.saved_document_id for row in all_rows if row.saved_document_id]
-    if document_ids:
-        for doc in (
-            db.query(KnowledgeDocument)
-            .filter(
-                KnowledgeDocument.id.in_(document_ids),
-                KnowledgeDocument.user_id == user_pk,
-            )
-            .all()
-        ):
-            # Canonical hydration excludes non-ready documents; never serve an
-            # old improved answer as if it still described current evidence.
-            doc.status = "stale"
-            doc.error_message = "source_qa_corrected: 请重新分析并显式更新知识库内容"
-            doc.updated_at = utc_now()
     receipt = InterviewQARevision(
         record_id=record_id,
         qa_id=qa_id,

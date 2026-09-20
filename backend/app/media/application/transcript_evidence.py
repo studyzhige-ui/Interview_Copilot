@@ -269,6 +269,28 @@ def build_transcript_evidence(
     if not words:
         raise ValueError("ASR produced no aligned words")
 
+    turns = group_acoustic_turns(words)
+
+    return TranscriptEvidence(
+        audio=AudioEvidenceIdentity(
+            file_asset_id=file_asset_id,
+            file_asset_version=file_asset_version,
+            sha256=audio_sha256,
+            duration_seconds=duration_seconds,
+        ),
+        language=language,
+        models=EvidenceModels(
+            asr=asr_model,
+            alignment=alignment_model,
+            diarization=diarization_model,
+        ),
+        words=words,
+        diarization=DiarizationTracks(regular=regular, exclusive=exclusive),
+        acoustic_turns=turns,
+    )
+
+
+def group_acoustic_turns(words: list[EvidenceWord]) -> list[AcousticTurn]:
     turns: list[AcousticTurn] = []
     start_index = 0
     for index in range(1, len(words) + 1):
@@ -290,23 +312,7 @@ def build_transcript_evidence(
             )
             start_index = index
 
-    return TranscriptEvidence(
-        audio=AudioEvidenceIdentity(
-            file_asset_id=file_asset_id,
-            file_asset_version=file_asset_version,
-            sha256=audio_sha256,
-            duration_seconds=duration_seconds,
-        ),
-        language=language,
-        models=EvidenceModels(
-            asr=asr_model,
-            alignment=alignment_model,
-            diarization=diarization_model,
-        ),
-        words=words,
-        diarization=DiarizationTracks(regular=regular, exclusive=exclusive),
-        acoustic_turns=turns,
-    )
+    return turns
 
 
 def render_word_ids(

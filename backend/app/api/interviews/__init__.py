@@ -2,10 +2,11 @@
 
 from fastapi import APIRouter
 
-from app.api.interviews import mock, records
+from app.api.interviews import mock, records, transcripts
 
 router = APIRouter()
 router.include_router(records.router)
 router.include_router(mock.router)
+router.include_router(transcripts.router)
 
 __all__ = ["router"]

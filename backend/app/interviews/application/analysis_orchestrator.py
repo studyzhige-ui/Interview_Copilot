@@ -306,7 +306,13 @@ class InterviewAnalysisOrchestrator:
         )
 
         interview_record_service.set_status(record_id, STATUS_EXTRACTING)
-        projected = await project_interview_qa(evidence)
+        from app.interviews.application.transcript_corrections import confirmed_roles
+
+        with SessionLocal() as db:
+            roles = confirmed_roles(db, transcript_id)
+        projected = await project_interview_qa(
+            evidence, **({"confirmed_roles": roles} if roles else {})
+        )
         interview_record_service.set_transcript_projection(
             transcript_id,
             structure=projected.structure.model_dump(mode="json"),

@@ -58,7 +58,8 @@ class SpeakerRole(BaseModel):
 
     speaker_id: str
     role: Literal["interviewer", "candidate", "unknown"]
-    confidence: float = Field(ge=0, le=1)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    source: Literal["model", "user"] = "model"
 
 
 class _SpeakerRoleEnvelope(BaseModel):
@@ -254,7 +255,8 @@ async def _infer_roles(
         )
     roles = {item.role for item in role_by_speaker.values()}
     if roles != {"interviewer", "candidate"} or any(
-        item.confidence < 0.65 for item in role_by_speaker.values()
+        item.confidence is None or item.confidence < 0.65
+        for item in role_by_speaker.values()
     ):
         raise TranscriptProjectionError(
             "speaker_roles_ambiguous", "speaker role confidence is insufficient"
@@ -877,9 +879,29 @@ async def project_interview_qa(
     evidence: TranscriptEvidence,
     *,
     llm: LLM | None = None,
+    confirmed_roles: dict[str, str] | None = None,
 ) -> ProjectedInterview:
     worker_llm = llm or get_internal_llm("worker")
-    roles = await _infer_roles(evidence, worker_llm)
+    overrides = confirmed_roles or {}
+    speakers = {word.speaker_id for word in evidence.words if word.speaker_id}
+    if set(overrides) - speakers or any(
+        value not in {"candidate", "interviewer", "unknown"}
+        for value in overrides.values()
+    ):
+        raise TranscriptProjectionError(
+            "speaker_roles_invalid", "user roles must cite current speakers"
+        )
+    if set(overrides) == speakers and speakers:
+        roles = []
+    else:
+        roles = await _infer_roles(evidence, worker_llm)
+    resolved = {role.speaker_id: role for role in roles}
+    for speaker, role in overrides.items():
+        # User assignment is not a model confidence measurement.
+        resolved[speaker] = SpeakerRole(
+            speaker_id=speaker, role=role, confidence=None, source="user"
+        )
+    roles = [resolved[speaker] for speaker in sorted(speakers)]
     utterances = await _project_utterances(evidence, roles, worker_llm)
     structure = TranscriptStructure(speaker_roles=roles, utterances=utterances)
     episodes = await _project_episodes(evidence, utterances, worker_llm)
