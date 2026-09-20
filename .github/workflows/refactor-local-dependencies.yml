@@ -1,0 +1,28 @@
+name: Refactor local validation dependencies
+on:
+  push:
+    branches: [refactor/product-runtime-convergence]
+    paths: [.github/workflows/refactor-local-dependencies.yml]
+permissions:
+  contents: read
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Download only pinned portable pgvector wheel
+        run: |
+          mkdir -p "$RUNNER_TEMP/copilot-validation-wheels"
+          python -m pip download --no-deps --only-binary=:all: pgvector==0.5.0 -d "$RUNNER_TEMP/copilot-validation-wheels"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: copilot-validation-wheels
+          path: ${{ runner.temp }}/copilot-validation-wheels/*.whl
+          retention-days: 3
+          if-no-files-found: error
