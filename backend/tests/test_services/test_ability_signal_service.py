@@ -279,3 +279,47 @@ def test_interview_analysis_projects_recomputes_and_invalidates_signals(db_sessi
         .count()
         == 0
     )
+
+
+@pytest.mark.parametrize(
+    "kind", ["correct_id", "foreign_id", "unmatched_quote", "index_only"]
+)
+def test_evidence_projection_uses_ids_not_compacted_report_positions(db_session, kind):
+    import json
+
+    user = _user(db_session)
+    record, qa = _interview_sources(db_session, user)
+    qa.order_idx = 7
+    qa.answer = "使用信号量限制并发"
+    evidence = {
+        "question_index": 1,
+        "qa_id": qa.id,
+        "answer_quote": qa.answer,
+        "score": 7,
+        "reason": "描述了并发准入",
+        "source_version": qa.version,
+    }
+    if kind == "foreign_id":
+        evidence["qa_id"] = "qa_wrong"
+    elif kind == "unmatched_quote":
+        evidence["answer_quote"] = "用户没有说过的话"
+    elif kind == "index_only":
+        evidence.pop("qa_id")
+        evidence["question_index"] = 8
+    record.analysis_json = json.dumps(
+        {
+            "rubric_version": "interview-answer-10-v2",
+            "skill_radar": {"系统设计": 7},
+            "competency_evidence": {"系统设计": [evidence]},
+        }
+    )
+    db_session.flush()
+    result = project_interview_ability_signals(
+        db_session,
+        user_pk=user.id,
+        interview_record_id=record.id,
+    )
+    assert len(result) == (1 if kind == "correct_id" else 0)
+    if result:
+        assert result[0].confidence is None
+        assert {s.source_id for s in result[0].sources} == {qa.id, record.id}

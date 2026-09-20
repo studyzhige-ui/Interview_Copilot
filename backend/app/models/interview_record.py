@@ -111,6 +111,8 @@ class InterviewRecord(Base):
         index=True,
     )
 
+    review_generation = Column(Integer, nullable=False, default=0, server_default="0")
+
     title = Column(String, default="未命名面试")
     # Primary interview category (后端/算法/系统设计…) for list filtering/display.
     category = Column(String, nullable=True)
@@ -163,6 +165,7 @@ class InterviewRecord(Base):
     transcript_id = Column(String, index=True, nullable=True)
 
     # Top-level analysis result (per-question rows in interview_qa)
+    specification_json = Column(JSON, nullable=True)
     analysis_json = Column(Text, nullable=True)
     analysis_schema_version = Column(Integer, nullable=False, default=3)
     ability_signal_generation = Column(Integer, nullable=False, default=0)

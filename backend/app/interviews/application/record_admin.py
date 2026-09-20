@@ -9,8 +9,6 @@ them in ``asyncio.to_thread``.
 from __future__ import annotations
 
 import logging
-from app.core.command_errors import CommandError
-from app.db.types import utc_now
 
 from sqlalchemy.orm import Session
 
@@ -20,7 +18,6 @@ from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.interviews.application.interview_record_service import STATUS_COMPLETED
 from app.interviews.application.interview_record_service import STATUS_FAILED
-from app.interviews.application.interview_record_service import STATUS_PENDING
 from app.interviews.application.interview_record_service import interview_record_service
 from app.task_queue.dispatch import dispatch_interview_analysis, revoke_task
 
@@ -65,22 +62,26 @@ def cancel_analysis(db: Session, record: InterviewRecord) -> bool:
 
     Returns True iff a task revoke was actually issued.
     """
-    revoked = False
-    if record.celery_task_id:
-        try:
-            revoke_task(record.celery_task_id, terminate=True, signal="SIGTERM")
-            revoked = True
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Failed to revoke celery task %s: %s",
-                record.celery_task_id,
-                exc,
-            )
-    record.status = STATUS_FAILED
+    from app.interviews.application.review_fence import lock_record
+
+    current = lock_record(db, record.id)
+    if current is None:
+        return False
+    record = current
+    record.review_generation += 1
+    old_task_id = record.celery_task_id
+    record.status = "review_failed" if record.source == "mock" else STATUS_FAILED
     record.error_message = "cancelled"
     db.add(record)
     db.commit()
-    return revoked
+    if not old_task_id:
+        return False
+    try:
+        revoke_task(old_task_id, terminate=True, signal="SIGTERM")
+        return True
+    except Exception as exc:
+        logger.warning("Failed to revoke celery task %s: %s", old_task_id, exc)
+        return False
 
 
 def update_record_fields(
@@ -211,6 +212,11 @@ def reanalyze_record(
     Returns the dispatched Celery task. Dispatch failure rolls the record
     back to ``failed`` (never a zombie ``pending``) and re-raises.
     """
+    from app.interviews.application.review_fence import lock_record
+
+    record = lock_record(db, record.id)
+    if record is None:
+        raise ReanalyzeNotAllowed("记录已删除")
     if record.source != "upload":
         raise ReanalyzeNotAllowed(
             "仅上传录音的记录支持重新分析（模拟面试请用重试复盘）"
@@ -218,14 +224,9 @@ def reanalyze_record(
     if record.status not in (STATUS_COMPLETED, STATUS_FAILED):
         raise ReanalyzeNotAllowed("记录当前状态不支持重新分析")
 
-    # Best-effort revoke of a stale task handle: an acks_late redelivery
-    # after a hard worker kill could otherwise run concurrently with the
-    # rerun we're about to dispatch.
-    if record.celery_task_id:
-        try:
-            revoke_task(record.celery_task_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("reanalyze: stale-task revoke failed: %s", exc)
+    # Stale writers are fenced transactionally below. Broker control comes
+    # after that commit and must not hold business row locks over the network.
+    old_task_id = record.celery_task_id
 
     if retranscribe:
         # Detach the current transcript rather than deleting it. The worker
@@ -246,36 +247,26 @@ def reanalyze_record(
         user_pk=record.user_id,
         interview_record_id=record.id,
     )
+    record.review_generation += 1
     record.analysis_json = None
     record.error_message = None
     record.analyzed_qa_count = 0
     db.add(record)
     db.commit()
-    # Status flips go through the canonical helper (updated_at bump — a
-    # re-analyzed record must not sort stale in updated_at-ordered views).
-    interview_record_service.set_status(record.id, STATUS_PENDING, db=db)
-    db.commit()
+    if old_task_id:
+        try:
+            revoke_task(old_task_id)
+        except Exception as exc:
+            logger.warning("reanalyze: stale-task revoke failed: %s", exc)
+    from app.interviews.application.review_dispatch import dispatch_review_command
 
-    try:
-        task = dispatch_interview_analysis(record.id)
-    except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
-        logger.error("reanalyze dispatch failed for %s: %s", record.id, exc)
-        interview_record_service.set_status(
-            record.id,
-            STATUS_FAILED,
-            error_message=REANALYZE_DISPATCH_FAILED_MSG,
-            db=db,
-        )
-        db.commit()
-        raise
-    interview_record_service.set_status(
+    return dispatch_review_command(
+        db,
         record.id,
-        STATUS_PENDING,
-        celery_task_id=task.id,
-        db=db,
+        sender=dispatch_interview_analysis,
+        rollback_status=STATUS_FAILED,
+        error_message=REANALYZE_DISPATCH_FAILED_MSG,
     )
-    db.commit()
-    return task
 
 
 def delete_record_cascade(
@@ -405,6 +396,11 @@ def delete_record_cascade(
             MockInterviewRuntime.interview_record_id == record_id
         ).delete(synchronize_session=False)
         # interview_qa auto-cleaned by ON DELETE CASCADE on interview_records.
+        from app.models.interview_qa_revision import InterviewQARevision
+
+        db.query(InterviewQARevision).filter(
+            InterviewQARevision.record_id == record.id
+        ).delete(synchronize_session=False)
         db.delete(record)
         db.commit()
         from app.task_queue.dispatch import revoke_task
@@ -483,38 +479,8 @@ def record_exists_for_user(record_id: str, username: str) -> bool:
 
 
 def edit_owned_qa(db, *, record_id, qa_id, payload, current_user):
-    """Edit a single InterviewQA row by id."""
-    qa = get_owned_qa(
-        db,
-        user_pk=resolve_user_pk(db, current_user.username),
-        record_id=record_id,
-        qa_id=qa_id,
-        for_update=True,
-    )
-    if qa is None:
-        raise CommandError(kind="not_found", message="QA row not found")
+    from app.interviews.application.corrections import edit_qa
 
-    if payload.question is not None:
-        qa.question = payload.question
-    if payload.answer is not None:
-        qa.answer = payload.answer
-    if payload.critique is not None:
-        qa.critique = payload.critique
-    if payload.improved_answer is not None:
-        qa.improved_answer = payload.improved_answer
-    if (payload.question is not None or payload.answer is not None) and isinstance(
-        qa.source_provenance_json, dict
-    ):
-        provenance = dict(qa.source_provenance_json)
-        provenance["manual_override"] = {
-            "question": payload.question is not None
-            or bool((provenance.get("manual_override") or {}).get("question")),
-            "answer": payload.answer is not None
-            or bool((provenance.get("manual_override") or {}).get("answer")),
-            "updated_at": utc_now().isoformat(),
-        }
-        qa.source_provenance_json = provenance
-    db.add(qa)
-    db.commit()
-    db.refresh(qa)
-    return qa
+    return edit_qa(
+        db, record_id=record_id, qa_id=qa_id, payload=payload, current_user=current_user
+    )

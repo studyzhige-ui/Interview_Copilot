@@ -8,6 +8,8 @@ queries here, not a reusable owner/Evidence registry.
 
 from __future__ import annotations
 
+from app.core.scoring import read_historical_score, validate_score
+
 import json
 import hashlib
 import uuid
@@ -409,9 +411,6 @@ def project_interview_ability_signals(
         .order_by(InterviewQA.order_idx.asc())
         .all()
     )
-    all_qa_count = (
-        db.query(InterviewQA.id).filter(InterviewQA.record_id == record.id).count()
-    )
     sources = [
         AbilitySourceRefInput(kind="interview_record", source_id=record.id),
         *[
@@ -419,8 +418,7 @@ def project_interview_ability_signals(
             for qa in qas[:99]
         ],
     ]
-    coverage = len(qas) / max(1, all_qa_count)
-    confidence = round(min(0.9, 0.55 + 0.35 * coverage), 2)
+    confidence = None  # Coverage is not a calibrated probability of correctness.
     formed_at = max(
         (qa.analyzed_at or qa.created_at for qa in qas),
         default=record.updated_at or record.created_at or utc_now(),
@@ -431,14 +429,44 @@ def project_interview_ability_signals(
         if raw_score is None:
             continue
         try:
-            score = float(raw_score)
-        except (TypeError, ValueError):
-            continue
-        if not 0 <= score <= 10:
+            score = validate_score(raw_score)
+        except ValueError:
             continue
         topic = str(raw_topic).strip()[:200]
         if not topic:
             continue
+        dimension_sources = sources
+        if analysis.get("rubric_version") == "interview-answer-10-v2":
+            evidence = analysis.get("competency_evidence", {}).get(topic, [])
+            # Stable identities, not positions in a compacted report, are the
+            # authority. A missing/wrong id must not be rescued by an index.
+            evidence_ids = {
+                item["qa_id"]
+                for item in evidence
+                if isinstance(item, dict) and isinstance(item.get("qa_id"), str)
+            }
+            supporting = [
+                qa
+                for qa in qas
+                if qa.id in evidence_ids
+                and any(
+                    isinstance(item, dict)
+                    and item.get("qa_id") == qa.id
+                    and isinstance(item.get("answer_quote"), str)
+                    and bool(item["answer_quote"].strip())
+                    and item["answer_quote"] in (qa.answer or "")
+                    for item in evidence
+                )
+            ]
+            if not supporting:
+                continue
+            dimension_sources = [
+                AbilitySourceRefInput(kind="interview_record", source_id=record.id),
+                *[
+                    AbilitySourceRefInput(kind="interview_qa", source_id=qa.id)
+                    for qa in supporting[:99]
+                ],
+            ]
         topic_key = hashlib.sha256(topic.encode("utf-8")).hexdigest()[:16]
         producer_key = f"interview:{record.id}:g{generation}:{topic_key}"
         current_keys.add(producer_key)
@@ -473,8 +501,9 @@ def project_interview_ability_signals(
                     ),
                     scope={"kind": "interview_record", "ref_id": record.id},
                     formed_at=formed_at,
-                    rubric_version=f"interview_analysis_v{record.analysis_schema_version}",
-                    sources=sources,
+                    rubric_version=analysis.get("rubric_version")
+                    or f"interview_analysis_v{record.analysis_schema_version}",
+                    sources=dimension_sources,
                 ),
                 supersedes_signal_id=previous.id if previous is not None else None,
                 expected_superseded_version=(
@@ -809,7 +838,6 @@ def _signal_view(db: Session, row: AbilitySignal) -> AbilitySignalView:
                 "topic",
                 "signal_type",
                 "level",
-                "score",
                 "summary",
                 "confidence",
                 "limitations",
@@ -826,6 +854,7 @@ def _signal_view(db: Session, row: AbilitySignal) -> AbilitySignalView:
                 "status_changed_at",
             )
         },
+        score=read_historical_score(row.score, row.score_scale_version),
         sources=[AbilitySignalSourceView.model_validate(source) for source in sources],
     )
 

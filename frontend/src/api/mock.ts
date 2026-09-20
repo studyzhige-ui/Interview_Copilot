@@ -8,7 +8,9 @@ import type {
 } from '@/types/api';
 
 export async function startMockInterview(payload: {
-  resume_id: string;
+  resume_id?: string | null;
+  purpose?: 'full' | 'project_deep_dive' | 'focused_practice';
+  focus?: string;
   jd_text?: string;
   jd_snapshot_id?: string;
   jd_snapshot_version?: number;

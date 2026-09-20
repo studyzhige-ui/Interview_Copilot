@@ -760,7 +760,9 @@ def test_interview_debrief_returns_real_processing_identity_not_completion(
     monkeypatch.setattr(
         analysis_intake,
         "dispatch_interview_analysis",
-        lambda record_id, language: SimpleNamespace(id=f"task:{record_id}:{language}"),
+        lambda record_id, language, task_id, review_generation: SimpleNamespace(
+            id=task_id
+        ),
     )
 
     def set_status(record_id, status, **values):

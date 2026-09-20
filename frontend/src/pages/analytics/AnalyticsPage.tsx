@@ -1,3 +1,4 @@
+import { formatScore, scoreFraction, validScore, SCORE_SCALE_VERSION } from '@/lib/scoring';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart3, Lightbulb, AlertCircle, RefreshCw } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -24,6 +25,8 @@ interface NormalizedReport {
 function normalize(raw: unknown): NormalizedReport | { empty: true; message: string } {
   if (!raw || typeof raw !== 'object') return { empty: true, message: '无数据' };
   const obj = raw as Record<string, unknown>;
+  const unit = obj.score_scale as Record<string, unknown> | undefined;
+  if (obj.status === 'success' && unit?.version !== SCORE_SCALE_VERSION) return { empty: true, message: '历史评分单位未确认，暂不混合显示。请刷新或重新评估。' };
   if (obj.status === 'empty' || obj.status === 'error' || obj.status === 'fallback') {
     return { empty: true, message: typeof obj.message === 'string' ? obj.message : '暂无数据' };
   }
@@ -32,7 +35,7 @@ function normalize(raw: unknown): NormalizedReport | { empty: true; message: str
     ? (obj.axes as { k?: unknown; v?: unknown }[])
         .map((a) => ({
           k: String(a.k ?? ''),
-          v: typeof a.v === 'number' && Number.isFinite(a.v) ? a.v : null,
+          v: validScore(a.v) ? a.v : null,
           topicCount: Number((a as Record<string, unknown>).topic_count ?? 0),
           evidenceCount: Number((a as Record<string, unknown>).evidence_count ?? 0),
           confidence: String((a as Record<string, unknown>).confidence ?? 'none') as RadarAxis['confidence'],
@@ -40,13 +43,13 @@ function normalize(raw: unknown): NormalizedReport | { empty: true; message: str
         .filter((a) => a.k)
     : [];
 
-  const overall: number | null = typeof obj.overall === 'number'
+  const overall: number | null = validScore(obj.overall)
     ? (obj.overall as number)
     : axes.some((axis) => axis.v !== null)
-    ? Math.round(
+    ? Math.round(10 *
         axes.reduce((sum, axis) => sum + (axis.v ?? 0), 0)
         / axes.filter((axis) => axis.v !== null).length,
-      )
+      ) / 10
     : null;
 
   const strengths = Array.isArray(obj.strengths)
@@ -187,10 +190,10 @@ function OverallCircle({ score }: { score: number | null }) {
       </div>
     );
   }
-  const clamped = Math.max(0, Math.min(100, Math.round(score)));
+  const label = formatScore(score);
   const r = 56;
   const c = 2 * Math.PI * r;
-  const off = c - (clamped / 100) * c;
+  const off = c - scoreFraction(score) * c;
   return (
     <div className="relative w-[140px] h-[140px] shrink-0">
       <svg width={140} height={140}>
@@ -207,7 +210,7 @@ function OverallCircle({ score }: { score: number | null }) {
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <div className="text-2xl font-semibold text-stone-800">{clamped}</div>
+        <div className="text-2xl font-semibold text-stone-800">{label}</div>
         <div className="text-[11px] text-stone-500">综合分</div>
       </div>
     </div>
@@ -228,12 +231,12 @@ function AxisCoverage({ axes }: { axes: RadarAxis[] }) {
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm font-medium text-stone-700">{axis.k}</span>
             <span className={axis.v === null ? 'text-xs text-stone-400' : 'text-sm font-semibold text-stone-800'}>
-              {axis.v === null ? '待评估' : Math.round(axis.v)}
+              {formatScore(axis.v)}
             </span>
           </div>
           <div className="mt-2 h-1.5 rounded-full bg-stone-100 overflow-hidden">
             {axis.v !== null && (
-              <div className="h-full bg-primary-500" style={{ width: `${Math.max(0, Math.min(100, axis.v))}%` }} />
+              <div className="h-full bg-primary-500" style={{ width: `${scoreFraction(axis.v) * 100}%` }} />
             )}
           </div>
           <div className="mt-1.5 text-[11px] text-stone-500">
@@ -253,7 +256,7 @@ function Radar({ axes }: { axes: (RadarAxis & { v: number })[] }) {
   const cy = 120;
   const pts = axes.map((a, i) => {
     const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
-    const v = Math.max(0, Math.min(100, a.v)) / 100;
+    const v = scoreFraction(a.v);
     return {
       x: cx + Math.cos(angle) * radius * v,
       y: cy + Math.sin(angle) * radius * v,

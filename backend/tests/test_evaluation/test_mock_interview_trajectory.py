@@ -19,7 +19,7 @@ from evaluation.mock_interview_eval import (
 
 
 async def _perfect_judge(*args) -> dict[str, Any]:
-    return {**{dimension: 5 for dimension in JUDGE_DIMENSIONS}, "reason": "ok"}
+    return {**{dimension: 10 for dimension in JUDGE_DIMENSIONS}, "reason": "ok"}
 
 
 class DeterministicInterviewer:

@@ -28,6 +28,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
+from app.interviews.domain.specification import InterviewSpecification, InterviewPurpose
 from app.models.chat import Conversation, ConversationMessage, generate_uuid
 from app.models.interview_record import InterviewRecord
 from app.interviews.application import mock_interview_service
@@ -126,8 +127,8 @@ class ResumeNotReadyError(RuntimeError):
 @dataclass(frozen=True)
 class ResolvedResumeContext:
     text: str
-    artifact_id: str
-    artifact_version_id: str
+    artifact_id: str | None
+    artifact_version_id: str | None
 
 
 def resolve_resume_context(
@@ -218,13 +219,15 @@ def start_mock(
     db: Session,
     *,
     username: str,
-    resume_id: str,
+    resume_id: str | None,
     jd_text: str | None,
     interviewer_style: str,
     target_question_count: int,
     job_opportunity_id: str | None = None,
     jd_snapshot_id: str | None = None,
     jd_snapshot_version: int | None = None,
+    purpose: InterviewPurpose = "full",
+    focus: str | None = None,
 ) -> StartedMock:
     """Atomically create record + conversation + opening message + runtime.
 
@@ -237,22 +240,43 @@ def start_mock(
         user_pk=user_pk,
         job_opportunity_id=job_opportunity_id,
     )
-    resolved_resume = _resolve_resume_reference(
-        db, username=username, resume_id=resume_id
+    from app.schemas.mock_preparation import MockPreparationRequest
+
+    command = MockPreparationRequest(
+        resume_id=resume_id,
+        jd_text=jd_text,
+        jd_snapshot_id=jd_snapshot_id,
+        jd_snapshot_version=jd_snapshot_version,
+        job_opportunity_id=normalized_job_id,
+        purpose=purpose,
+        focus=focus,
+        interviewer_style=interviewer_style,
+        target_question_count=target_question_count,
+    )
+    spec = InterviewSpecification(purpose=command.purpose, focus=command.focus)
+    resolved_resume = (
+        _resolve_resume_reference(db, username=username, resume_id=resume_id)
+        if resume_id
+        else ResolvedResumeContext("", None, None)
     )
     resume_context = resolved_resume.text
     from app.interviews.application.mock_sources import resolve_job_description
 
-    jd_context = resolve_job_description(
-        db,
-        user_pk=user_pk,
-        jd_text=jd_text,
-        job_opportunity_id=normalized_job_id,
-        jd_snapshot_id=jd_snapshot_id,
-        jd_snapshot_version=jd_snapshot_version,
+    jd_context = (
+        resolve_job_description(
+            db,
+            user_pk=user_pk,
+            jd_text=jd_text,
+            job_opportunity_id=normalized_job_id,
+            jd_snapshot_id=jd_snapshot_id,
+            jd_snapshot_version=jd_snapshot_version,
+        )
+        if jd_text is not None or jd_snapshot_id is not None
+        else ""
     )
 
     plan = mock_interview_service.generate_plan(
+        specification=spec,
         resume_context=resume_context,
         jd_context=jd_context,
         interviewer_style=interviewer_style,
@@ -262,7 +286,7 @@ def start_mock(
     # 1) record (mock_in_progress) — freezes the resume/JD snapshots + plan.
     record = interview_record_service.create_for_mock(
         user_id=username,
-        title="模拟面试",
+        title=spec.title,
         resume_artifact_id=resolved_resume.artifact_id,
         resume_artifact_version_id=resolved_resume.artifact_version_id,
         resume_text_snapshot=resume_context,
@@ -272,11 +296,13 @@ def start_mock(
         db=db,
     )
 
+    record.specification_json = spec.model_dump()
+
     # 2) conversation (bound to the record via subject_type/subject_id).
     conversation = Conversation(
         id=generate_uuid(),
         user_id=user_pk,
-        title="模拟面试",
+        title=spec.title,
         type="mock_interview",
         mode="chat",
         subject_type="interview_record",
@@ -371,6 +397,7 @@ async def submit_answer(
         record.resume_text_snapshot or "",
         record.jd_text_snapshot or "",
         runtime.interviewer_style,
+        specification=active_record.specification_json,
     )
     # Full dialog BEFORE this answer. The new answer is passed separately so it
     # is not duplicated in the prompt. The advisory target guides pacing, so a
@@ -552,18 +579,14 @@ def dispatch_review(
     dispatch failure restores ``mock_in_progress`` and the unchanged runtime
     remains resumable. Review retries happen after that runtime is gone.
     """
-    try:
-        task = dispatch_mock_interview_review(record_id)
-    except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
-        logger.error("review dispatch failed for record %s: %s", record_id, exc)
-        interview_record_service.set_status(record_id, rollback_status, db=db)
-        db.commit()
-        raise
-    interview_record_service.set_status(
+    from app.interviews.application.review_dispatch import dispatch_review_command
+
+    task = dispatch_review_command(
+        db,
         record_id,
-        STATUS_PROCESSING_REVIEW,
-        celery_task_id=task.id,
-        db=db,
+        sender=dispatch_mock_interview_review,
+        rollback_status=rollback_status,
+        error_message="复盘派发未确认，请核对状态后重试。旧任务已失效。",
     )
     if delete_live_runtime:
         runtime = mock_runtime_service.get_runtime_for_record(

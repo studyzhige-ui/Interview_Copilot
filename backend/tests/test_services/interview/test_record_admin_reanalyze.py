@@ -48,18 +48,18 @@ def test_reanalyze_resets_and_dispatches(db_session, monkeypatch):
     monkeypatch.setattr(
         record_admin,
         "dispatch_interview_analysis",
-        lambda rid: SimpleNamespace(id="task-9"),
+        lambda rid, **kw: SimpleNamespace(id=kw["task_id"]),
     )
 
     task = record_admin.reanalyze_record(db_session, rec)
 
     db_session.refresh(rec)
-    assert task.id == "task-9"
+    assert len(task.id) == 36
     assert rec.status == "pending"
     assert rec.analysis_json is None
     assert rec.error_message is None
     assert rec.analyzed_qa_count == 0
-    assert rec.celery_task_id == "task-9"
+    assert rec.celery_task_id == task.id
 
 
 def test_reanalyze_rejects_mock_and_inflight(db_session):
@@ -75,7 +75,7 @@ def test_reanalyze_rejects_mock_and_inflight(db_session):
 def test_reanalyze_dispatch_failure_rolls_back_to_failed(db_session, monkeypatch):
     rec = _mk_record(db_session, "ir_re4", status="completed")
 
-    def _raise(rid):
+    def _raise(rid, **kw):
         raise ConnectionError("broker down")
 
     monkeypatch.setattr(
@@ -121,7 +121,7 @@ def test_retranscribe_detaches_old_evidence_and_forces_qa_rebuild(
     monkeypatch.setattr(
         record_admin,
         "dispatch_interview_analysis",
-        lambda rid: SimpleNamespace(id="task-retranscribe"),
+        lambda rid, **kw: SimpleNamespace(id=kw["task_id"]),
     )
 
     record_admin.reanalyze_record(db_session, rec, retranscribe=True)

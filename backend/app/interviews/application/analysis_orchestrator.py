@@ -47,6 +47,14 @@ from app.interviews.application.interview_record_service import interview_record
 from app.files.application.file_asset_service import get_file_asset
 from app.media.application.transcript_evidence import TranscriptEvidence
 
+from app.core.scoring import score_scale, validate_score
+from app.interviews.domain.assessment import RUBRIC_VERSION
+from app.interviews.application.review_fence import (
+    ReviewSuperseded,
+    lock_record,
+    review_scope,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,9 +63,17 @@ class InterviewAnalysisOrchestrator:
 
     # ── Public synchronous entry point (called by Celery task) ────────
 
-    def run(self, record_id: str, language: str = "zh") -> dict[str, Any]:
+    def run(
+        self, record_id: str, language: str = "zh", *, review_generation: int = 0
+    ) -> dict[str, Any]:
         loop = _get_loop()
-        return loop.run_until_complete(self._run_async(record_id, language=language))
+        with review_scope(record_id, review_generation):
+            try:
+                return loop.run_until_complete(
+                    self._run_async(record_id, language=language)
+                )
+            except ReviewSuperseded:
+                return {"status": "superseded", "record_id": record_id}
 
     # ── Async core ────────────────────────────────────────────────────
 
@@ -144,7 +160,9 @@ class InterviewAnalysisOrchestrator:
                         evidence,
                     )
             else:  # mock
-                qa_pairs = self._load_mock_qa(record_id)
+                qa_pairs = self._load_existing_qa_shells(
+                    record_id
+                ) or self._load_mock_qa(record_id)
                 transcript = self._compose_transcript_from_qa(qa_pairs)
                 interview_record_service.set_transcript(
                     record_id,
@@ -154,6 +172,9 @@ class InterviewAnalysisOrchestrator:
 
             # Persist QA shells (so SSE can show "X of Y analyzed" early on)
             self._persist_qa_shells(record_id, qa_pairs)
+            # Capture canonical IDs and versions even on the first analysis.
+            # A blank legacy row or non-contiguous order must not shift scores.
+            qa_pairs = self._load_existing_qa_shells(record_id)
 
             # Zero the per-question counter BEFORE flipping status: the SSE
             # stream interpolates percent from the counter whenever status is
@@ -187,6 +208,8 @@ class InterviewAnalysisOrchestrator:
             interview_record_service.set_status(record_id, done_status)
             return {"status": done_status, "record_id": record_id}
 
+        except ReviewSuperseded:
+            raise
         except Exception as exc:
             logger.exception("Orchestrator failed for %s: %s", record_id, exc)
             interview_record_service.set_status(
@@ -338,6 +361,8 @@ class InterviewAnalysisOrchestrator:
                     "index": i,
                     "question": row.question or "",
                     "answer": row.answer or "",
+                    "qa_id": row.id,
+                    "source_version": row.version,
                     "question_summary": "",
                     "phase": row.phase or "general",
                     "is_follow_up": False,
@@ -477,6 +502,8 @@ class InterviewAnalysisOrchestrator:
         even mid-pipeline. Skipped when rows already exist (re-run scenario)."""
         db: Session = SessionLocal()
         try:
+            if lock_record(db, record_id) is None:
+                raise ReviewSuperseded("review_record_removed")
             existing = (
                 db.query(InterviewQA.id)
                 .filter(InterviewQA.record_id == record_id)
@@ -503,6 +530,9 @@ class InterviewAnalysisOrchestrator:
         per_question = report.get("per_question") or []
         db: Session = SessionLocal()
         try:
+            rec = lock_record(db, record_id)
+            if rec is None:
+                raise ReviewSuperseded("review_record_removed")
             rows = (
                 db.query(InterviewQA)
                 .filter(InterviewQA.record_id == record_id)
@@ -510,36 +540,33 @@ class InterviewAnalysisOrchestrator:
                 .all()
             )
             row_by_idx = {r.order_idx: r for r in rows}
-
+            row_by_id = {r.id: r for r in rows}
+            seen = set()
             for idx, pq in enumerate(per_question):
                 if not isinstance(pq, dict):
-                    continue
-                row = row_by_idx.get(idx)
-                if row is None:
-                    # Shell missing — orchestrator inserted N pairs but extractor
-                    # returned more questions. Create the missing row.
-                    interview_record_service.bulk_insert_qa(
-                        record_id,
-                        [
-                            {
-                                "question": pq.get("question", ""),
-                                "answer": pq.get("answer", ""),
-                            }
-                        ],
-                        db=db,
+                    raise ValueError("analysis result must be a question object")
+                row = (
+                    row_by_id.get(pq["qa_id"])
+                    if pq.get("qa_id")
+                    else row_by_idx.get(idx)
+                )
+                if row is None or row.id in seen:
+                    raise ValueError(
+                        "analysis cannot invent or repeat QA rows outside its input"
                     )
-                    row = (
-                        db.query(InterviewQA)
-                        .filter(
-                            InterviewQA.record_id == record_id,
-                            InterviewQA.order_idx == idx,
-                        )
-                        .first()
-                    )
-                    if row is None:
-                        continue
+                seen.add(row.id)
+                if (
+                    pq.get("source_version") is not None
+                    and pq["source_version"] != row.version
+                ):
+                    raise ReviewSuperseded("review_answer_version_changed")
 
                 row.score = _safe_score(pq.get("score"))
+                row.answer_quality_json = {
+                    "rubric_version": RUBRIC_VERSION,
+                    "criteria": pq.get("criteria", []),
+                    "competency_evidence": pq.get("competency_evidence", []),
+                }
                 row.critique = pq.get("critique") or pq.get("feedback")
                 row.improved_answer = pq.get("improved_answer")
                 kp = pq.get("tags")
@@ -552,20 +579,21 @@ class InterviewAnalysisOrchestrator:
                 if pq.get("phase"):
                     row.phase = pq["phase"]
                 row.analyzed_at = utc_now()
+                row.version += 1
 
             top_level = {
                 "schema_version": 3,
+                "score_scale": score_scale(),
+                "rubric_version": report.get(
+                    "rubric_version", "interview-answer-10-v1"
+                ),
                 "generation_status": report.get("generation_status", "complete"),
                 "generation_warnings": report.get("generation_warnings", []),
                 "overall": report.get("overall", {}),
                 "phase_summary": report.get("phase_summary", []),
                 "skill_radar": report.get("skill_radar", {}),
+                "competency_evidence": report.get("competency_evidence", {}),
             }
-            rec = (
-                db.query(InterviewRecord)
-                .filter(InterviewRecord.id == record_id)
-                .first()
-            )
             if rec is not None:
                 serialized_analysis = json.dumps(
                     top_level, ensure_ascii=False, sort_keys=True
@@ -616,11 +644,7 @@ def _get_loop() -> asyncio.AbstractEventLoop:
 
 
 def _safe_score(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return round(max(0.0, min(10.0, float(value))), 1)
-    return None
+    return None if value is None else validate_score(value)
 
 
 analysis_orchestrator = InterviewAnalysisOrchestrator()

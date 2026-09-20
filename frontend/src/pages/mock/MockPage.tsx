@@ -138,8 +138,10 @@ export function MockPage() {
   };
 
   const handleReady = async (payload: {
-    resume_id: string;
-    jd_text: string;
+    resume_id?: string;
+    purpose: 'full' | 'project_deep_dive' | 'focused_practice';
+    focus?: string;
+    jd_text?: string;
     input_mode: 'text' | 'voice';
     interviewer_style: InterviewerStyle;
     tts_voice: TtsVoice;
@@ -150,6 +152,8 @@ export function MockPage() {
     try {
       const started = await startMockInterview({
         resume_id: payload.resume_id,
+        purpose: payload.purpose,
+        focus: payload.focus,
         jd_text: payload.jd_text,
         input_mode: payload.input_mode,
         interviewer_style: payload.interviewer_style,

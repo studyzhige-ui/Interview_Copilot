@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.scoring import read_historical_score
 from app.models.ability_signal import AbilitySignal
 from app.models.memory_ability_state import MemoryAbilityState
 from app.models.memory_audit_logs import MemoryAuditEntry
@@ -110,11 +111,12 @@ def migrate_legacy_memory(
                     topic=state.topic.strip(),
                     signal_type=state.skill_type,
                     level=state.mastery_level,
-                    score=state.ability_score,
+                    score=read_historical_score(
+                        state.ability_score, state.score_version
+                    ),
                     summary=(state.summary or "").strip(),
-                    # The old store did not record calibrated confidence. Keep
-                    # this visibly low instead of inventing certainty.
-                    confidence=0.25,
+                    # Unknown confidence is not an invented low probability.
+                    confidence=None,
                     limitations=(
                         "Migrated from the retired ability store. Legacy rows did "
                         "not record calibrated confidence; re-evaluate from new "
@@ -142,7 +144,7 @@ def migrate_legacy_memory(
                     state,
                     "migrated",
                     target_id=view.id,
-                    reason="created low-confidence canonical AbilitySignal",
+                    reason="created canonical AbilitySignal with explicit unknown confidence",
                 )
             )
 
@@ -207,6 +209,8 @@ def _ineligible_reason(state: MemoryAbilityState) -> str | None:
         return "missing explanatory summary"
     if state.ability_score is None:
         return "missing numeric score; mastery label must not become a fake score"
+    if read_historical_score(state.ability_score, state.score_version) is None:
+        return "unknown or invalid score unit; preserve raw history for explicit review"
     return None
 
 

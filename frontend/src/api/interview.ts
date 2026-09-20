@@ -1,6 +1,8 @@
+import type { components } from '@/types/generated/shared-protocols';
 import { apiClient } from './client';
 import { uploadFileAsset } from './fileAssets';
 import type {
+  InterviewQA,
   AnalyzeDispatchResp,
   InterviewRecordDetail,
   InterviewRecordListItem,
@@ -99,12 +101,20 @@ export async function deleteInterviewRecord(
 export async function editInterviewQA(
   recordId: string,
   qaId: string,
-  patch: { question?: string; answer?: string; critique?: string; improved_answer?: string },
-): Promise<void> {
-  await apiClient.patch(
+  patch: components['schemas']['QAEditRequestRequestContract'],
+): Promise<InterviewQA> {
+  const response = await apiClient.patch<{ status: string; qa: InterviewQA }>(
     `/interview-records/${encodeURIComponent(recordId)}/qa/${encodeURIComponent(qaId)}`,
     patch,
   );
+  return response.data.qa;
+}
+
+export type QACorrection = components['schemas']['QACorrectionView'];
+
+export async function getQACorrections(recordId: string, before?: string): Promise<{ items: QACorrection[]; next_cursor: string | null }> {
+  const response = await apiClient.get(`/interview-records/${encodeURIComponent(recordId)}/corrections`, { params: { before, limit: 30 } });
+  return response.data;
 }
 
 /** Publish a QA's improved answer to the knowledge base (source_kind=improved_qa). */
@@ -112,7 +122,7 @@ export async function saveQAToKnowledge(
   recordId: string,
   qaId: string,
   opts: { category?: string } = {},
-): Promise<{ document_id: string; saved_document_id: string }> {
+): Promise<{ document_id: string; saved_document_id: string; document_status?: string }> {
   const res = await apiClient.post(
     `/interview-records/${encodeURIComponent(recordId)}/qa/${encodeURIComponent(qaId)}/save-to-knowledge`,
     { category: opts.category },

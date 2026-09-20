@@ -1457,12 +1457,11 @@ def test_mock_finish_transitions_to_processing_review_and_dispatches(
 
     dispatched: dict = {}
 
-    class _FakeAsyncResult:
-        id = "task_123"
+    def fake_delay(rid, *, task_id, review_generation):
+        dispatched.update(record_id=rid, task_id=task_id, generation=review_generation)
+        from types import SimpleNamespace
 
-    def fake_delay(rid):
-        dispatched["record_id"] = rid
-        return _FakeAsyncResult()
+        return SimpleNamespace(id=task_id)
 
     monkeypatch.setattr(
         "app.interviews.application.mock_flow.dispatch_mock_interview_review",
@@ -1474,6 +1473,8 @@ def test_mock_finish_transitions_to_processing_review_and_dispatches(
     body = resp.json()
     assert body == {"status": "processing_review", "record_id": record_id}
     assert dispatched["record_id"] == record_id
+    assert dispatched["generation"] > 0
+    assert db.get(InterviewRecord, record_id).celery_task_id == dispatched["task_id"]
 
     db.expire_all()
     assert db.get(InterviewRecord, record_id).status == "processing_review"

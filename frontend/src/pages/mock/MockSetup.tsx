@@ -13,6 +13,7 @@ import { parseJdForMock } from '@/api/mock';
 import type { MockClientUiResult, MockPrefillPayload } from '@/types/clientAction';
 import { JobOpportunitySelect } from '@/pages/career/JobOpportunitySelect';
 
+export type InterviewPurpose = 'full' | 'project_deep_dive' | 'focused_practice';
 export type InterviewerStyle = 'friendly' | 'professional' | 'rigorous' | 'pressure';
 export type TargetQuestionCount = 15 | 20 | 30;
 export type TtsVoice =
@@ -23,8 +24,10 @@ export type TtsVoice =
 
 interface Props {
   onReady: (payload: {
-    resume_id: string;
-    jd_text: string;
+    purpose: InterviewPurpose;
+    focus?: string;
+    resume_id?: string;
+    jd_text?: string;
     input_mode: 'text' | 'voice';
     interviewer_style: InterviewerStyle;
     tts_voice: TtsVoice;
@@ -87,6 +90,9 @@ const EMPTY_RESUME: ResumeState = { filename: '', id: null, loading: false };
 const EMPTY_JD: JdState = { filename: '', parsing: false };
 
 export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Props) {
+  const [purpose, setPurpose] = useState<InterviewPurpose>(prefill?.purpose ?? 'full');
+  const [focus, setFocus] = useState(prefill?.focus ?? '');
+  const purposeRef = useRef(purpose);
   const [resume, setResume] = useState<ResumeState>(EMPTY_RESUME);
   const [jdDocument, setJdDocument] = useState<JdState>(EMPTY_JD);
   const [resumeMode, setResumeMode] = useState<'upload' | 'existing'>('existing');
@@ -114,11 +120,11 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
         const usable = rs.filter((resume) => resume.has_text || resume.parse_status === 'ready');
         const selected = prefill
           ? usable.find((resume) => resume.id === prefill.resume_id)
-          : (usable.find((resume) => resume.is_default) ?? usable[0]);
+          : (purposeRef.current === 'focused_practice' ? undefined : (usable.find((resume) => resume.is_default) ?? usable[0]));
         setResumeMode(selected ? 'existing' : 'upload');
         if (selected) {
           setResume({ filename: selected.title, id: selected.id, loading: false });
-        } else if (prefill) {
+        } else if (prefill?.resume_id) {
           onPrefillApplied?.({
             outcome: 'failed',
             reason: '预填引用的简历在当前客户端已不可用',
@@ -126,7 +132,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
         }
       })
       .catch(() => {
-        if (alive && prefill) onPrefillApplied?.({ outcome: 'failed', reason: '无法核实预填简历，请重试' });
+        if (alive && prefill?.resume_id) onPrefillApplied?.({ outcome: 'failed', reason: '无法核实预填简历，请重试' });
       })
       .finally(() => { if (alive) setLoadingResumes(false); });
     return () => { alive = false; };
@@ -199,13 +205,18 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
   // JD always reduces to plain text — either the user pasted it directly,
   // or parseJdForMock returned text from their uploaded file.
   const jdReady = jdText.trim().length >= 20 && jdText.trim().length <= 50_000;
-  const ready = resume.id !== null && !resume.loading && jdReady;
+  const resumeReady = purpose === 'focused_practice' || resume.id !== null;
+  const sourceReady = purpose === 'full' ? jdReady : (!jdText.trim() || jdReady);
+  const focusReady = purpose === 'full' || focus.trim().length >= 2;
+  const ready = resumeReady && !resume.loading && !jdDocument.parsing && sourceReady && focusReady;
+  const purposeLabel = { full: '完整模拟', project_deep_dive: '项目深挖', focused_practice: '专项练习' }[purpose];
 
   // A ClientAction is not a second HTTP start. Its frozen settings must be
   // visible and confirmed, not silently edited and then ignored by the Tool.
   if (prefill) return <section aria-label="确认模拟面试设置" className="mx-auto max-w-3xl space-y-4 p-6">
     <h2 className="text-xl font-semibold">确认本次模拟面试设置</h2>
-    <p>简历：{resume.filename || '正在核实…'}</p>
+    <p>用途：{purposeLabel}{focus && ` · ${focus}`}</p>
+    <p>简历：{prefill.resume_id ? (resume.filename || '正在核实…') : '本次未使用简历'}</p>
     <p>回答方式：{prefill.input_mode === 'text' ? '文字，无需麦克风' : '语音，需检查麦克风'}</p>
     <p>风格：{prefill.interviewer_style} · 预计题量：{prefill.target_question_count}</p>
     {prefill.job_opportunity_id && <p>关联机会：{prefill.job_opportunity_id}</p>}
@@ -223,13 +234,27 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
         {/* Header: clean, single hierarchy — title + subtitle, both centered. */}
         <header className="mb-9 text-center">
           <h2 className="text-[26px] font-semibold text-stone-800 leading-tight">
-            开始之前，先准备两份材料
+            先确定本次练习目标
           </h2>
           <p className="text-stone-500 text-[15px] mt-2.5 leading-relaxed">
-            上传简历和岗位 JD 后，AI 面试官会根据你的背景定制问题。
+            完整模拟需要简历和岗位说明；项目深挖只需简历，专项练习可以直接从具体目标开始。
           </p>
         </header>
 
+        <div className="w-full mb-6 space-y-3">
+          <PrefGroup label="练习用途" value={purpose} onChange={(next) => { purposeRef.current = next; setPurpose(next); if (next === 'focused_practice') setResume(EMPTY_RESUME); }} columns={3}
+            options={[
+              { id: 'full' as const, label: '完整模拟', desc: '自我介绍、项目、技术和反问' },
+              { id: 'project_deep_dive' as const, label: '项目深挖', desc: '只考察指定项目的贡献与取舍' },
+              { id: 'focused_practice' as const, label: '专项练习', desc: '只练一个具体目标，无需简历' },
+            ]} />
+          {purpose !== 'full' && <label className="grid gap-2 text-sm">本次考察目标
+            <textarea aria-label="本次考察目标" value={focus} maxLength={1000} rows={3}
+              onChange={(event) => setFocus(event.target.value)} className="rounded-lg border p-3"
+              placeholder={purpose === 'project_deep_dive' ? '例如：Interview Copilot的并发控制与失败恢复' : '例如：Python协程取消和资源清理'} />
+          </label>}
+        </div>
+        {purpose === 'focused_practice' && <p className="mb-3 text-sm text-stone-500">简历和岗位说明均可不提供。{resume.id && <button type="button" className="ml-2 text-primary-700" onClick={() => setResume(EMPTY_RESUME)}>本次不使用简历</button>}</p>}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
           <ResumeCard
             mode={resumeMode}
@@ -316,8 +341,10 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
             loading={starting}
             onClick={() =>
               onReady({
-                resume_id: resume.id!,
-                jd_text: jdText.trim(),
+                resume_id: resume.id ?? undefined,
+                purpose,
+                focus: focus.trim() || undefined,
+                jd_text: jdText.trim() || undefined,
                 input_mode: inputMode,
                 interviewer_style: style,
                 tts_voice: ttsVoice,
@@ -326,7 +353,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
               })
             }
           >
-            {ready ? '开始模拟面试' : '请先完成上传'}
+            {ready ? '开始模拟面试' : '请先完成必要设置'}
           </Btn>
         </div>
       </div>

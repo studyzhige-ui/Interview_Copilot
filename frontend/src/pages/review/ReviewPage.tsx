@@ -75,6 +75,7 @@ export function ReviewPage() {
   const [selectedActiveId, setActiveId] = useState<string | null>(null);
   const [detail, setDetail] = useState<InterviewRecordDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailRevision, setDetailRevision] = useState(0);
   const [widths, setWidths] = useState(loadWidths);
   const [analyses, setAnalyses] = useState<Record<string, AnalysisEntry>>({});
   const [mobilePane, setMobilePane] = useState<'records' | 'review' | 'chat'>('review');
@@ -176,7 +177,7 @@ export function ReviewPage() {
       alive = false;
       controller.abort();
     };
-  }, [activeId]);
+  }, [activeId, detailRevision]);
 
 
   const onNew = () => {
@@ -472,7 +473,7 @@ export function ReviewPage() {
     // A failed mock review must NOT fall into the AnalyzingState spinner
     // below (it would spin forever) — show an explicit retry card wired
     // to the retry-review endpoint.
-    if (detail && status === 'review_failed') {
+    if (detail && status === 'review_failed' && !hasContent) {
       return (
         <ReviewFailedState
           kind="mock"
@@ -488,7 +489,7 @@ export function ReviewPage() {
     // With partial results (transcript/QA rows persisted before the failure)
     // keep them readable and show a slim retry banner instead of hiding
     // everything behind the full-page card.
-    if (detail && status === 'failed' && !isMockSource) {
+    if (detail && ((status === 'failed' && !isMockSource) || status === 'review_failed')) {
       if (hasContent) {
         return (
           <div className="h-full flex flex-col">
@@ -498,7 +499,7 @@ export function ReviewPage() {
               </span>
               <button
                 type="button"
-                onClick={() => { void retryUploadAnalysis(detail.id); }}
+                onClick={() => { if (isMockSource) void retryReview(detail.id); else void retryUploadAnalysis(detail.id); }}
                 disabled={retryingReview === detail.id}
                 className="text-xs text-white px-3 py-1.5 rounded bg-primary-600 hover:bg-primary-700 disabled:opacity-60 shrink-0"
               >
@@ -507,15 +508,13 @@ export function ReviewPage() {
             </div>
             <div className="flex-1 min-h-0">
               <QAPanel
-                key={detail?.id ?? 'empty'}
+                key={`${detail?.id ?? 'empty'}:${detailRevision}`}
                 detail={detail}
+                onCorrected={() => setDetailRevision((value) => value + 1)}
                 loading={detailLoading}
                 reanalyzing={retryingReview === detail.id}
-                onReanalyze={(mode) => {
-                  void retryUploadAnalysis(
-                    detail.id,
-                    mode === 'report' ? undefined : mode,
-                  );
+                onReanalyze={isMockSource ? undefined : (mode) => {
+                  void retryUploadAnalysis(detail.id, mode === 'report' ? undefined : mode);
                 }}
                 selectedQuestionIndexes={selectedQuestionIndexes}
                 onToggleQuestion={toggleQuestion}
@@ -558,8 +557,9 @@ export function ReviewPage() {
     }
     return (
       <QAPanel
-        key={detail?.id ?? 'empty'}
+        key={`${detail?.id ?? 'empty'}:${detailRevision}`}
         detail={detail}
+        onCorrected={() => setDetailRevision((value) => value + 1)}
         loading={detailLoading}
         reanalyzing={retryingReview === detail?.id}
         onReanalyze={detail?.source === 'upload' ? (mode) => {

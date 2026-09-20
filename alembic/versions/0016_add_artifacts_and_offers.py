@@ -62,9 +62,7 @@ def upgrade() -> None:
         sa.Column("source_owner_type", sa.String(length=64), nullable=True),
         sa.Column("source_owner_id", sa.String(length=128), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["artifact_id"], ["artifacts.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["artifact_id"], ["artifacts.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["file_asset_id"], ["file_assets.id"], ondelete="RESTRICT"
         ),
@@ -100,9 +98,7 @@ def upgrade() -> None:
         sa.Column("job_opportunity_id", sa.String(length=128), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["artifact_id"], ["artifacts.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["artifact_id"], ["artifacts.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "artifact_id",
@@ -138,9 +134,7 @@ def upgrade() -> None:
         sa.Column("receipt_owner_id", sa.String(length=128), nullable=True),
         sa.Column("submitted_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["artifact_id"], ["artifacts.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["artifact_id"], ["artifacts.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["artifact_version_id"], ["artifact_versions.id"], ondelete="RESTRICT"
         ),
@@ -184,10 +178,10 @@ def upgrade() -> None:
         sa.Column("last_source_kind", sa.String(length=32), nullable=False),
         sa.Column("last_source_identity", sa.String(length=256), nullable=False),
         sa.Column("last_source_version", sa.String(length=128), nullable=True),
-        sa.Column("last_source_observed_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
-            "last_confirmation_source_kind", sa.String(length=32), nullable=True
+            "last_source_observed_at", sa.DateTime(timezone=True), nullable=False
         ),
+        sa.Column("last_confirmation_source_kind", sa.String(length=32), nullable=True),
         sa.Column(
             "last_confirmation_source_identity", sa.String(length=256), nullable=True
         ),
@@ -214,9 +208,7 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "job_opportunity_id", name="uq_offers_job_opportunity"
-        ),
+        sa.UniqueConstraint("job_opportunity_id", name="uq_offers_job_opportunity"),
         sa.UniqueConstraint(
             "user_id",
             "creation_operation_key",
@@ -224,12 +216,8 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_offers_user_id", "offers", ["user_id"])
-    op.create_index(
-        "ix_offers_job_opportunity_id", "offers", ["job_opportunity_id"]
-    )
-    op.create_index(
-        "ix_offers_user_updated", "offers", ["user_id", "updated_at"]
-    )
+    op.create_index("ix_offers_job_opportunity_id", "offers", ["job_opportunity_id"])
+    op.create_index("ix_offers_user_updated", "offers", ["user_id", "updated_at"])
 
 
 def downgrade() -> None:

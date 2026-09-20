@@ -196,11 +196,13 @@ RAG (all three or none), falling back to the existing DeepSeek judge configurati
 `EVAL_GENERATOR_*` still configures the separate RAG generator, not the production
 mock interview. One-provider judging is not independent ground truth.
 
-Reports use schema version 2. Each selected section must finish with samples;
+Reports use schema version 3 and the explicit `score10-v1` unit. Each selected section must finish with samples;
 the gate recomputes results from strict per-item scores and checks, rather than
-trusting stored totals. Scores must be actual integers 1–5 with a nonempty reason:
-99, `"5"`, 5.0, booleans, missing dimensions and extra fields are not repaired into
-high scores. Duplicate JSON keys and nonfinite numbers are invalid. Generation
+trusting stored totals. Scores use the shared 0–10 scale (at most one decimal place) with a nonempty reason:
+99, `"5"`, 8.25, booleans, missing dimensions and extra fields are not repaired into
+high scores. JSON numeric 5 and 5.0 are the same valid ten-point score. All judge
+pass-rate aggregations use 8/10, not a leftover 4/5 cutoff. Old five-point reports
+are retained as history and rejected by the new gate; they are not silently regraded. Duplicate JSON keys and nonfinite numbers are invalid. Generation
 and judge latency are recorded separately.
 
 The report records sample/source hashes and actual model settings, and is
@@ -213,3 +215,37 @@ as public CI artifacts. CI's `mock-preflight.json` has fixture identities and ha
 only and makes no model call. A preflight result is not a quality score.
 
 Official contracts checked for this change: [Pydantic strict mode](https://docs.pydantic.dev/latest/concepts/strict_mode/).
+
+
+## Shared assessment and source correction (local refactor patch)
+
+`app.core.scoring` defines the one 0–10 grade unit used by product and eval code.
+`interview-answer-10-v2` is a separate rubric: it specifies which criteria were
+measured, not a different numerical unit. Per-question totals are calculated from
+explicit criterion weights, and ability dimensions require direct answer quotes.
+A quote match validates provenance only, not the truth of a model's judgment.
+No coding-execution ability is inferred from an API/Python keyword. Unmeasured
+dimensions are null, not zero; confidence is uncalibrated/null, not a fabricated
+probability derived from question count. The proposed rubric still needs blinded
+human calibration and real-model evaluation.
+
+Question and answer edits are explicit, versioned commands. The UI preserves the
+submitted draft when the response is uncertain; a read-only reconciliation checks
+server state before any user-approved retry. Source corrections archive the old
+report, clear dependent grades and signals, and mark published improved answers
+as stale. A new explicit analysis is required. Review generation and source QA
+identities prevent a prior task from publishing over a corrected answer. This
+is not a claim of global exactly-once external requests or a tested GPU pipeline.
+
+Three purpose contracts share the same execution core: `full`,
+`project_deep_dive` and `focused_practice`. The last does not require uploading a
+resume or JD. Existing records without a purpose remain the historical full
+interview. The current model-backed fixture campaign covers the full-interview
+path; deterministic tests cover the other two purposes. Do not claim live
+quality coverage for them from the old full-interview fixture results.
+
+Source correction PostgreSQL tests live in
+`backend/tests/test_db/test_review_corrections_postgres.py`. They use the existing
+required-PG fixture in CI. A skip in an environment without PostgreSQL is not a
+pass. New migration rollback is allowed only before nonreconstructable new
+versions/history are stored; export and migrate explicitly afterwards.

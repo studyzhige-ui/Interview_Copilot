@@ -163,11 +163,12 @@ def _run_start_mock(
                     "error": "mock_already_in_progress",
                     "reason": "已有进行中的模拟面试，请先继续或放弃它",
                 }
-            mock_flow.resolve_resume_context(
-                db,
-                username=ctx.user_id,
-                resume_id=args.resume_id,
-            )
+            if args.resume_id:
+                mock_flow.resolve_resume_context(
+                    db,
+                    username=ctx.user_id,
+                    resume_id=args.resume_id,
+                )
             try:
                 interview_record_service.require_owned_job_opportunity(
                     db,
@@ -179,13 +180,17 @@ def _run_start_mock(
                     "error": "job_opportunity_not_found",
                     "reason": "The requested job opportunity is unavailable",
                 }
-            jd_text = resolve_job_description(
-                db,
-                user_pk=turn.user_id,
-                jd_text=args.jd_text,
-                job_opportunity_id=args.job_opportunity_id,
-                jd_snapshot_id=args.jd_snapshot_id,
-                jd_snapshot_version=args.jd_snapshot_version,
+            jd_text = (
+                resolve_job_description(
+                    db,
+                    user_pk=turn.user_id,
+                    jd_text=args.jd_text,
+                    job_opportunity_id=args.job_opportunity_id,
+                    jd_snapshot_id=args.jd_snapshot_id,
+                    jd_snapshot_version=args.jd_snapshot_version,
+                )
+                if args.jd_text is not None or args.jd_snapshot_id is not None
+                else ""
             )
             row, request = create_mock_client_action(
                 db,
@@ -269,11 +274,13 @@ def _run_start_mock(
             started = mock_flow.start_mock(
                 db,
                 username=ctx.user_id,
-                resume_id=args.resume_id,
-                jd_text=preparation.jd_text,
-                interviewer_style=args.interviewer_style,
-                target_question_count=args.target_question_count,
-                job_opportunity_id=args.job_opportunity_id,
+                resume_id=preparation.resume_id,
+                jd_text=preparation.jd_text or None,
+                purpose=preparation.purpose,
+                focus=preparation.focus,
+                interviewer_style=preparation.interviewer_style,
+                target_question_count=preparation.target_question_count,
+                job_opportunity_id=preparation.job_opportunity_id,
             )
             original_client_id, active_client_id = latest_handoff_client(
                 db,

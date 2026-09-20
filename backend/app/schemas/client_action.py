@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from app.interviews.domain.specification import InterviewPurpose, InterviewSpecification
 
 
 ClientActionOutcome = Literal[
@@ -42,8 +43,10 @@ class MockPrefillPayload(BaseModel):
     input_mode: Literal["text", "voice"] = "voice"
     jd_snapshot_id: str | None = Field(default=None, min_length=1, max_length=36)
     jd_snapshot_version: int | None = Field(default=None, ge=1)
-    resume_id: str = Field(min_length=1, max_length=128)
-    jd_text: str = Field(min_length=20, max_length=50_000)
+    purpose: InterviewPurpose = "full"
+    focus: str | None = Field(default=None, min_length=2, max_length=1000)
+    resume_id: str | None = Field(default=None, min_length=1, max_length=128)
+    jd_text: str = Field(default="", max_length=50_000)
     interviewer_style: Literal["friendly", "professional", "rigorous", "pressure"]
     target_question_count: Literal[15, 20, 30]
     job_opportunity_id: str | None = Field(
@@ -51,6 +54,16 @@ class MockPrefillPayload(BaseModel):
         min_length=1,
         max_length=35,
     )
+
+    @model_validator(mode="after")
+    def validate_purpose(self):
+        spec = InterviewSpecification(purpose=self.purpose, focus=self.focus)
+        if spec.purpose != "focused_practice" and not self.resume_id:
+            raise ValueError("This purpose requires a resume")
+        if spec.purpose == "full" and len(self.jd_text.strip()) < 20:
+            raise ValueError("Full interview requires a JD")
+        self.focus = spec.focus
+        return self
 
 
 class MockReadinessPayload(BaseModel):

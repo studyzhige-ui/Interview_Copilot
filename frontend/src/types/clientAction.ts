@@ -9,7 +9,9 @@ export interface MockPrefillPayload {
   input_mode?: 'text' | 'voice';
   jd_snapshot_id?: string | null;
   jd_snapshot_version?: number | null;
-  resume_id: string;
+  purpose?: 'full' | 'project_deep_dive' | 'focused_practice';
+  focus?: string | null;
+  resume_id?: string | null;
   jd_text: string;
   interviewer_style: 'friendly' | 'professional' | 'rigorous' | 'pressure';
   target_question_count: 15 | 20 | 30;

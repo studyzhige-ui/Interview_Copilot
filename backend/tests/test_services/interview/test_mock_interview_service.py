@@ -90,7 +90,7 @@ def test_generate_plan_rejects_incomplete_guidance():
     with patch.object(mod, "get_llm_for_role") as factory:
         factory.return_value.context_window = 128_000
         factory.return_value.complete.return_value = response
-        with pytest.raises(ValueError, match="missing stage"):
+        with pytest.raises(ValueError, match="exactly match"):
             generate_plan()
 
 

@@ -31,6 +31,8 @@ def test_all_prompt_templates_render() -> None:
             resume="resume",
             jd="jd",
             style="style",
+            specification="full",
+            stage_contract="self introduction, project, technical, questions",
         ),
         MOCK_INTERVIEW_NEXT_TURN_PROMPT.format(
             prefix="prefix",

@@ -47,6 +47,7 @@ from app.models.gmail_observation import (
     GmailObservationSnapshot,
 )
 from app.models.interview_qa import InterviewQA
+from app.models.interview_qa_revision import InterviewQARevision
 from app.models.interview_invitation import (
     InterviewInvitationCandidate,
     InterviewInvitationEvidenceRef,
@@ -132,6 +133,7 @@ __all__ = [
     "GmailObservationReviewCard",
     "GmailObservationSnapshot",
     "InterviewQA",
+    "InterviewQARevision",
     "InterviewInvitationCandidate",
     "InterviewInvitationEvidenceRef",
     "InterviewInvitationObservation",

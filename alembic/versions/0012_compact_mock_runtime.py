@@ -128,9 +128,7 @@ def downgrade() -> None:
     )
     op.add_column(
         "mock_interview_runtime",
-        sa.Column(
-            "voice_mode", sa.String(), nullable=False, server_default="hybrid"
-        ),
+        sa.Column("voice_mode", sa.String(), nullable=False, server_default="hybrid"),
     )
     op.add_column(
         "mock_interview_runtime",

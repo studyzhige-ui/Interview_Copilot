@@ -6,7 +6,9 @@ import asyncio
 from collections import defaultdict
 from typing import Any
 
-ABILITY_SCORE_SCALE_VERSION = "evidence-v2"
+from app.core.scoring import SCORE_SCALE_VERSION, read_historical_score, validate_score
+
+ABILITY_SCORE_SCALE_VERSION = SCORE_SCALE_VERSION
 _SUPPORTED_SCORE_VERSIONS = {ABILITY_SCORE_SCALE_VERSION}
 _AXIS_BY_SKILL_TYPE = {
     "knowledge_topic": "知识与原理",
@@ -60,8 +62,11 @@ def _extract_ability_records(db: Any, user_id: str) -> list[dict[str, Any]]:
                 "skill_type": state.signal_type,
                 "mastery_level": state.level,
                 "summary": state.summary or "",
-                "score": state.score,
-                "score_version": state.rubric_version,
+                "score": read_historical_score(state.score, state.score_scale_version),
+                "score_version": SCORE_SCALE_VERSION,
+                "rubric_version": state.rubric_version,
+                "scope_kind": state.scope_kind,
+                "scope_ref_id": state.scope_ref_id,
                 "evidence_count": source_count,
                 "time": state.formed_at.isoformat() if state.formed_at else "",
             }
@@ -84,6 +89,14 @@ def _validate_score_version(version: str) -> None:
         raise ValueError(f"unknown ability score scale: {version}")
 
 
+def _valid_score(value: object) -> bool:
+    try:
+        validate_score(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _build_report(
     records: list[dict[str, Any]], *, scale_version: str
 ) -> dict[str, Any]:
@@ -93,7 +106,8 @@ def _build_report(
         for record in records
         if isinstance(record.get("score"), (int, float))
         and not isinstance(record.get("score"), bool)
-        and record.get("score_version") in (None, scale_version)
+        and record.get("score_version") == scale_version
+        and _valid_score(record.get("score"))
     ]
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in scored_records:
@@ -139,7 +153,7 @@ def _build_report(
             "evidence_count": int(record.get("evidence_count") or 0),
         }
         for record in ranked
-        if float(record["score"]) >= 75.0
+        if float(record["score"]) >= 7.5
     ][:3]
     weaknesses = [
         {
@@ -153,19 +167,19 @@ def _build_report(
             "evidence_count": int(record.get("evidence_count") or 0),
         }
         for record in reversed(ranked)
-        if float(record["score"]) < 60.0
+        if float(record["score"]) < 6.0
     ][:3]
 
     return {
         "status": "success",
         "score_scale": {
             "version": scale_version,
-            "range": [0, 100],
+            "range": [0, 10],
             "bands": {
-                "weak": [0, 39.9],
-                "improving": [40, 59.9],
-                "stable": [60, 79.9],
-                "strong": [80, 100],
+                "weak": [0, 3.9],
+                "improving": [4, 5.9],
+                "stable": [6, 7.9],
+                "strong": [8, 10],
             },
             "aggregation": "mean_of_scored_topics_per_axis_then_equal_axis_mean",
             "missing": "unknown_not_zero",

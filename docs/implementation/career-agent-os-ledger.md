@@ -452,3 +452,59 @@ Gate F — Evaluation/Migration/Cutover
 | 2026-08-26 | 创建新蓝图 VS01-S01…S15 evaluation manifest；13 covered、S09/S14 partial，因此 Gate F 与 Slice Release 有意保持未通过。 |
 
 | 2026-09-19 | 统一全部当前消耗类别与业务 owner 迁移；修复0052、结算提交不明和真实非空架构扫描；补输入/输出生成协议门禁与多状态旧数据回归。以最终固定提交CI验收，不自动合并或部署。 |
+
+
+## 12. 2026-09-20 中断恢复：评分、用途与可纠正复盘
+
+**本节对应待推送补丁，不是 GitHub 已验收提交。** 当前会话的 GitHub 连接
+只提供读取操作；基于远程 `60a733af3101a24d9c8df2501f02fce1709ea383` 的
+应用源码实施并在隔离环境测试，补丁与完整恢复包单独保全。没有修改 main、
+执行生产迁移或访问用户 Windows/GPU。此前 e71 的 CI 不能覆盖本节变更。
+
+### 12.1 实际实现
+
+- 共享 `score10-v1`：产品、评测、API 与页面使用 0–10、最多一位小数；
+  数字字符串/布尔/越界/非有限值拒绝，未测为 null。所有评测通过率的
+  门槛统一为 8/10，不只修改提示词或解析上限。旧量表报告不能直接混入。
+- `interview-spec-v1`：完整模拟、项目深挖、专项练习；目的独立于文字/语音
+  通道和面试风格。专项练习不要求简历/JD；非完整流程必须有考察目标。
+  创建时冻结规格，UI 与工具共用验证，恢复不回到四阶段旧默认。
+- `interview-answer-10-v2`：逐题量表和程序汇总；能力维度由本回答的明确
+  证据支持，系统核对引用存在与身份，但不冒称程序已判定语义正确。
+  删除关键词自动雷达，不制造编码执行能力和数值置信度。量表有效性待评测。
+- 问答修订：共享编辑操作、expected_version、不可变修改历史、原始词级
+  依据保留；清除旧评分/报告/能力信号，并将旧改进回答的知识库条目标为
+  stale。界面显式保存，丢响应时只读核对，版本冲突保留草稿供明确取舍。
+- 复盘 admission 先落库 generation/task_id 再发 broker；快速成功结果不
+  被接口回写 pending。修改/取消/重启令旧 generation 不可发布。源问答
+  使用真实 qa_id/version 绑定，避免空白行过滤导致结果位置错配。
+- 重新评分使用已纠正的持久问答，不用原聊天覆盖。索引迟到结果不能
+  激活 stale 的旧改进回答；显式再发布新内容使用新文档身份。
+- 0053–0055 分别增加量尺来源、面试规格和修订/代次；旧原文、原分数
+  不被猜测性重写。未知旧单位不迁入当前分数趋势。
+
+### 12.2 本补丁不包含
+
+P2 GPU 驻留/调度、P3 pgvector 切换、P6 WebRTC/Qwen/CosyVoice 全链未实现；
+P4 完整音频转写/角色纠正与新模型适配、P7/P8 其余全功能仍未收口。
+P5 已交付上述用途/量表/纠正链，不代表所有题材的面试质量已经证明。
+没有将这些开发工作改称用户本地验收。
+
+普通并行/错误用例与 SQLite 验证不等于 PostgreSQL 锁、真实 Celery、
+浏览器媒体和 CUDA 验证。代码新增的三项真实 PostgreSQL 测试在无该服务
+的隔离环境中跳过，必须在有服务的后续 CI 中运行。新评分仍需要真实
+DeepSeek 及人工校准，未发生本次真实模型调用。
+
+### 12.3 官方依据与复现
+
+实现核对 [Pydantic strict mode](https://docs.pydantic.dev/latest/concepts/strict_mode/)、
+[SQLAlchemy Session](https://docs.sqlalchemy.org/en/20/orm/session_basics.html)、
+[SQLAlchemy transactions](https://docs.sqlalchemy.org/en/20/orm/session_transaction.html)、
+[Celery tasks](https://docs.celeryq.dev/en/stable/userguide/tasks.html)。
+Session 与事务在单一执行上下文使用；网络发送在事务外；消息确认本身
+不替代业务版本、幂等或未知结果合同。未为此次改动无目的更新所有依赖。
+
+隔离回归入口：`pytest backend/tests -m 'not slow'`、Ruff、
+`python scripts/export_shared_contracts.py --check`、前端生成协议检查、
+TypeScript/ESLint/Vitest/生产构建。准确的命令、环境、跳过清单、JUnit
+与源码哈希在恢复包中记录，不将旧 PR 的通过数字复制到新补丁。

@@ -6,14 +6,25 @@ module intentionally owns neither ASR nor QA extraction.
 """
 
 import asyncio
-import json
 import logging
-import math
 from typing import Any, Callable
 
 from llama_index.core.llms import LLM
 
 from app.core.llm_client_factory import get_llm_for_role
+from app.core.structured_json import strict_json
+from app.core.execution_errors import (
+    ModelOutcomeUnknownError,
+    ModelDispatchConflictError,
+)
+from app.usage.service import ModelBudgetExceededError
+from app.interviews.domain.assessment import (
+    criteria_score,
+    verify_competencies,
+    aggregate_competencies,
+    RUBRIC_VERSION,
+)
+from app.core.scoring import validate_score, score_scale
 from app.prompts.voice_analysis import QUESTION_ANALYSIS_PROMPT, SYNTHESIS_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -21,7 +32,6 @@ logger = logging.getLogger(__name__)
 _ANALYSIS_MAX_ATTEMPTS = 2
 _ANALYSIS_RETRY_BASE_S = 2.0
 _ANALYSIS_MAX_CONCURRENCY = 5
-_ANALYSIS_RECOVERY_DELAY_S = 0.25
 _SYNTHESIS_MAX_ATTEMPTS = 2
 _SYNTHESIS_RETRY_BASE_S = 2.0
 _SKILL_DIMENSIONS = ("系统设计", "编码能力", "基础知识", "沟通表达", "项目经验")
@@ -38,29 +48,31 @@ def _notify_progress(on_progress, n: int) -> None:
 
 
 def _clean_json_response(raw_text: str) -> dict[str, Any]:
-    raw_text = str(raw_text).strip()
+    if not isinstance(raw_text, str):
+        raise ValueError("model output must be JSON text")
+    raw_text = raw_text.strip()
     if raw_text.startswith("```json"):
         raw_text = raw_text[7:]
     elif raw_text.startswith("```"):
         raw_text = raw_text[3:]
     if raw_text.endswith("```"):
         raw_text = raw_text[:-3]
-    return json.loads(raw_text.strip())
+    value = strict_json(raw_text.strip(), max_bytes=500_000)
+    if not isinstance(value, dict):
+        raise ValueError("model output must be a JSON object")
+    return value
 
 
 def _validated_score(value: Any) -> float | None:
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("score must be a number or null")
-    score = float(value)
-    if not math.isfinite(score) or not 0 <= score <= 10:
-        raise ValueError("score must be between 0 and 10")
-    return round(score, 1)
+    return validate_score(value)
 
 
 def _validate_batch_result(
-    payload: dict[str, Any], expected_indexes: list[int]
+    payload: dict[str, Any],
+    expected_indexes: list[int],
+    source_by_index: dict[int, dict[str, Any]] | None = None,
 ) -> dict[int, dict[str, Any]]:
     items = payload.get("results")
     if not isinstance(items, list) or len(items) != len(expected_indexes):
@@ -70,14 +82,26 @@ def _validate_batch_result(
     for item in items:
         if not isinstance(item, dict):
             raise ValueError("each result must be an object with an integer index")
+        if set(item) - {
+            "index",
+            "assessable",
+            "critique",
+            "improved_answer",
+            "tags",
+            "criteria",
+            "competency_evidence",
+        }:
+            raise ValueError("unknown assessment output fields")
         raw_index = item.get("index")
         if isinstance(raw_index, bool) or not isinstance(raw_index, int):
             raise ValueError("invalid result index")
         index = raw_index
         if index in parsed:
             raise ValueError(f"duplicate result index: {index}")
-        if "score" not in item:
-            raise ValueError(f"missing score for index: {index}")
+        if source_by_index is None or index not in source_by_index:
+            raise ValueError("assessment_input_identity_missing")
+        if type(item.get("assessable")) is not bool:
+            raise ValueError("assessable must be a boolean")
         critique = item.get("critique")
         improved = item.get("improved_answer")
         tags = item.get("tags")
@@ -85,8 +109,25 @@ def _validate_batch_result(
             raise ValueError(f"invalid text fields for index: {index}")
         if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
             raise ValueError(f"invalid tags for index: {index}")
+        score = None
+        criteria = []
+        competencies = []
+        source = source_by_index[index]
+        if item["assessable"]:
+            score, criteria = criteria_score(item.get("criteria"), source)
+            competencies = verify_competencies(
+                item.get("competency_evidence", []), source
+            )
+        elif item.get("criteria") or item.get("competency_evidence"):
+            raise ValueError("unassessed answers cannot produce competency scores")
+        if not critique.strip():
+            raise ValueError("assessment reasoning is missing")
+        if len(critique) > 4000 or len(improved) > 30_000 or len(tags) > 5:
+            raise ValueError("assessment output exceeds capacity")
         parsed[index] = {
-            "score": _validated_score(item["score"]),
+            "score": score,
+            "criteria": criteria,
+            "competency_evidence": competencies,
             "critique": critique.strip(),
             "improved_answer": improved.strip(),
             "tags": [tag.strip() for tag in tags if tag.strip()][:5],
@@ -98,7 +139,11 @@ def _validate_batch_result(
 
 
 async def _request_batch_result(
-    llm: LLM, prompt: str, expected_indexes: list[int]
+    llm: LLM,
+    prompt: str,
+    expected_indexes: list[int],
+    *,
+    source_by_index: dict[int, dict[str, Any]] | None = None,
 ) -> dict[int, dict[str, Any]]:
     """Repair a completed malformed response, never resend an unknown request."""
     last_exc: Exception | None = None
@@ -111,7 +156,7 @@ async def _request_batch_result(
             )
             received = True
             return _validate_batch_result(
-                _clean_json_response(response.text), expected_indexes
+                _clean_json_response(response.text), expected_indexes, source_by_index
             )
         except Exception as exc:  # noqa: BLE001
             if not received:
@@ -192,9 +237,9 @@ async def _synthesize_report(
     llm: LLM | None,
 ) -> dict[str, Any]:
     """Aggregate numeric scores in code; ask the model only for interpretation."""
-    assessed = [
-        pq for pq in per_question_results if isinstance(pq.get("score"), (int, float))
-    ]
+    assessed = [pq for pq in per_question_results if pq.get("score") is not None]
+    for pq in assessed:
+        validate_score(pq["score"])
     scores = [float(pq["score"]) for pq in assessed]
     overall_score = round(sum(scores) / len(scores), 1) if scores else None
     failed_count = sum(bool(pq.get("analysis_failed")) for pq in per_question_results)
@@ -237,6 +282,8 @@ async def _synthesize_report(
         else:
             message = "本次问答均不具备可评分的候选人回答，未生成表现分数。"
         return {
+            "score_scale": score_scale(),
+            "rubric_version": RUBRIC_VERSION,
             "generation_status": "failed",
             "generation_warnings": [message],
             "overall": {
@@ -257,15 +304,15 @@ async def _synthesize_report(
         summary_lines.append(
             f"第{pq['index']}题 [{_PHASE_NAME_MAP.get(pq.get('phase', ''), pq.get('phase', ''))}] "
             f"评分:{pq['score']}/10\n"
-            f"  问题: {pq['question'][:160]}\n"
-            f"  分析: {pq['critique'][:240]}\n"
+            f"  问题: {pq['question']}\n"
+            f"  分析: {pq['critique']}\n"
             f"  标签: {', '.join(pq.get('tags', []))}"
         )
 
     # Reuse the cached prefix the analyzer already paid for in the batch
-    # prompts. Full resume + JD; DeepSeek cache eats it.
-    resume_for_prefix = (resume_context or "")[:16000]
-    jd_for_prefix = (jd_context or "")[:8000]
+    # prompts. Complete resume + JD; capacity failure is explicit.
+    resume_for_prefix = resume_context or ""
+    jd_for_prefix = jd_context or ""
 
     prompt = SYNTHESIS_PROMPT.format(
         resume_context=resume_for_prefix,
@@ -275,6 +322,8 @@ async def _synthesize_report(
 
     try:
         assert llm is not None
+        if len(prompt.encode("utf-8")) > 180_000:
+            raise ValueError("synthesis_context_capacity_exceeded")
         synthesis = await _request_synthesis_payload(llm, prompt)
         overall_in = synthesis.get("overall")
         assert isinstance(overall_in, dict)
@@ -287,29 +336,7 @@ async def _synthesize_report(
         for row in phase_rows:
             row["summary"] = narrative_by_phase.get(row["phase"], row["summary"])
 
-        score_by_index = {int(pq["index"]): float(pq["score"]) for pq in assessed}
-        evidence = synthesis.get("skill_evidence") or {}
-        radar: dict[str, float | None] = {}
-        for dimension in _SKILL_DIMENSIONS:
-            raw_indexes = (
-                evidence.get(dimension, []) if isinstance(evidence, dict) else []
-            )
-            dimension_scores: list[float] = []
-            seen: set[int] = set()
-            if isinstance(raw_indexes, list):
-                for raw_index in raw_indexes:
-                    try:
-                        index = int(raw_index)
-                    except (TypeError, ValueError):
-                        continue
-                    if index not in seen and index in score_by_index:
-                        seen.add(index)
-                        dimension_scores.append(score_by_index[index])
-            radar[dimension] = (
-                round(sum(dimension_scores) / len(dimension_scores), 1)
-                if dimension_scores
-                else None
-            )
+        radar, competency_evidence = aggregate_competencies(assessed)
 
         growth = overall_in.get("key_growth_areas")
         growth = growth if isinstance(growth, list) else []
@@ -317,6 +344,8 @@ async def _synthesize_report(
             [f"{failed_count} 题逐题分析失败，未计入总分。"] if failed_count else []
         )
         return {
+            "score_scale": score_scale(),
+            "rubric_version": RUBRIC_VERSION,
             "generation_status": "partial" if warnings else "complete",
             "generation_warnings": warnings,
             "overall": {
@@ -331,8 +360,15 @@ async def _synthesize_report(
             "phase_summary": phase_rows,
             "per_question": per_question_results,
             "skill_radar": radar,
+            "competency_evidence": competency_evidence,
             "tag": str(synthesis.get("tag") or "").strip()[:8],
         }
+    except (
+        ModelOutcomeUnknownError,
+        ModelDispatchConflictError,
+        ModelBudgetExceededError,
+    ):
+        raise
     except Exception as exc:
         logger.error("Report synthesis failed: %s", exc)
         deterministic = _deterministic_report_fallback(
@@ -343,6 +379,8 @@ async def _synthesize_report(
             failed_count=failed_count,
         )
         return {
+            "score_scale": score_scale(),
+            "rubric_version": RUBRIC_VERSION,
             "generation_status": "partial",
             "generation_warnings": [
                 "模型综合叙述生成失败；当前展示由逐题评分确定性汇总的报告，可稍后重新生成模型综述。"
@@ -351,6 +389,7 @@ async def _synthesize_report(
             "phase_summary": phase_rows,
             "per_question": per_question_results,
             "skill_radar": deterministic["skill_radar"],
+            "competency_evidence": deterministic["competency_evidence"],
             "tag": "",
         }
 
@@ -403,48 +442,7 @@ def _deterministic_report_fallback(
     if weaknesses:
         summary += f" 优先改进{weaknesses[0].split('：', 1)[0]}的回答完整性与证据。"
 
-    radar_evidence: dict[str, list[float]] = {
-        dimension: [] for dimension in _SKILL_DIMENSIONS
-    }
-    system_terms = (
-        "系统",
-        "架构",
-        "工作流",
-        "agent",
-        "langgraph",
-        "rag",
-        "降级",
-        "上下文",
-        "记忆",
-    )
-    coding_terms = ("编码", "代码", "python", "java", "go", "算法", "数据结构", "api")
-    project_terms = ("项目", "实习", "落地", "工程", "部署", "实践")
-    for item in assessed:
-        score = float(item["score"])
-        phase = str(item.get("phase") or "general")
-        evidence_text = " ".join(
-            [
-                str(item.get("question") or ""),
-                *[str(tag) for tag in item.get("tags", [])],
-            ]
-        ).lower()
-        if phase == "technical":
-            radar_evidence["基础知识"].append(score)
-        if phase in {"self_intro", "behavioral", "reverse_qa", "general"}:
-            radar_evidence["沟通表达"].append(score)
-        if phase == "resume_deep_dive" or any(
-            term in evidence_text for term in project_terms
-        ):
-            radar_evidence["项目经验"].append(score)
-        if any(term in evidence_text for term in system_terms):
-            radar_evidence["系统设计"].append(score)
-        if any(term in evidence_text for term in coding_terms):
-            radar_evidence["编码能力"].append(score)
-
-    radar = {
-        dimension: round(sum(scores) / len(scores), 1) if scores else None
-        for dimension, scores in radar_evidence.items()
-    }
+    radar, competency_evidence = aggregate_competencies(assessed)
     growth_areas = (
         [
             {
@@ -465,6 +463,7 @@ def _deterministic_report_fallback(
         },
         "phase_summary": phase_rows,
         "skill_radar": radar,
+        "competency_evidence": competency_evidence,
     }
 
 
@@ -513,8 +512,8 @@ def _render_qa_block(qa: dict[str, Any], label: str) -> str:
     topic_str = f", topic={topic}" if topic else ""
     return (
         f"{label} [index={qa['index']}, phase={qa.get('phase', 'general')}{topic_str}]\n"
-        f"  问: {qa['question'][:600]}\n"
-        f"  答: {qa['answer'][:1200]}"
+        f"  问: {qa['question']}\n"
+        f"  答: {qa['answer']}"
     )
 
 
@@ -527,14 +526,13 @@ async def _analyze_batch(
     jd_context: str,
     llm: LLM,
 ) -> list[dict[str, Any]]:
-    # NOTE: the prefix is intentionally fed FULL resume + JD (truncated to
-    # 16k/8k). Batches fire concurrently (bounded by the semaphore), so the
+    # NOTE: the prefix receives the complete resume and JD. Batches fire concurrently (bounded by the semaphore), so the
     # shared prefix does NOT reliably hit the provider prompt cache — the
     # first wave all miss; only batches scheduled after one completes can
     # hit. The stable prefix still helps: retries and the synthesis call
     # reuse it, and providers with racy cache insertion catch some of it.
-    resume_for_prefix = (resume_context or "")[:16000]
-    jd_for_prefix = (jd_context or "")[:8000]
+    resume_for_prefix = resume_context or ""
+    jd_for_prefix = jd_context or ""
 
     prev_ctx = "\n\n".join(_render_qa_block(q, "[前]") for q in prev_window) or "（无）"
     next_ctx = "\n\n".join(_render_qa_block(q, "[后]") for q in next_window) or "（无）"
@@ -557,7 +555,7 @@ async def _analyze_batch(
                 "question": q["question"],
                 "answer": q["answer"],
                 "score": None,
-                "critique": "该题分析失败（模型调用异常），未计入总分。",
+                "critique": "该题未完成有效分析（服务、结构或容量错误），未计入总分；不会自动重发未知请求。",
                 "improved_answer": "",
                 "tags": [],
                 "analysis_failed": True,
@@ -566,8 +564,15 @@ async def _analyze_batch(
         ]
 
     try:
+        if len(prompt.encode("utf-8")) > 180_000:
+            raise ValueError(
+                "assessment_context_capacity_exceeded: full answers were not truncated"
+            )
         by_index = await _request_batch_result(
-            llm, prompt, [int(q["index"]) for q in batch]
+            llm,
+            prompt,
+            [int(q["index"]) for q in batch],
+            source_by_index={int(q["index"]): q for q in batch},
         )
         out = []
         for q in batch:
@@ -578,69 +583,21 @@ async def _analyze_batch(
                     "phase": q.get("phase", "general"),
                     "question": q["question"],
                     "answer": q["answer"],
+                    "qa_id": q.get("qa_id"),
+                    "source_version": q.get("source_version"),
                     **item,
                 }
             )
         return out
+    except (
+        ModelOutcomeUnknownError,
+        ModelDispatchConflictError,
+        ModelBudgetExceededError,
+    ):
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.error("Question-analysis batch failed after retries: %s", exc)
         return _fallback()
-
-
-async def _recover_failed_questions(
-    per_question_results: list[dict[str, Any]],
-    normalized: list[dict[str, Any]],
-    *,
-    resume_context: str,
-    jd_context: str,
-    llm: LLM,
-    ctx_prev: int,
-    ctx_next: int,
-) -> list[dict[str, Any]]:
-    """Retry failed batch members one-by-one after the concurrent wave.
-
-    Some OpenAI-compatible providers respond with an empty body under a short
-    burst even though the same request succeeds immediately when serialized.
-    Retrying the original batch alone left a large interview permanently
-    partial. This recovery pass is bounded by the number of failed questions
-    and keeps real failures explicitly unscored.
-    """
-
-    by_index = {int(item["index"]): item for item in normalized}
-    position_by_index = {
-        int(item["index"]): position for position, item in enumerate(normalized)
-    }
-    recovered: dict[int, dict[str, Any]] = {}
-    failed_indexes = [
-        int(item["index"])
-        for item in per_question_results
-        if item.get("analysis_failed") is True
-    ]
-    for recovery_position, index in enumerate(failed_indexes):
-        item = by_index.get(index)
-        position = position_by_index.get(index)
-        if item is None or position is None:
-            continue
-        if recovery_position:
-            await asyncio.sleep(_ANALYSIS_RECOVERY_DELAY_S)
-        retry = await _analyze_batch(
-            [item],
-            normalized[max(0, position - ctx_prev) : position],
-            normalized[position + 1 : position + 1 + ctx_next],
-            resume_context=resume_context,
-            jd_context=jd_context,
-            llm=llm,
-        )
-        if retry and retry[0].get("analysis_failed") is not True:
-            recovered[index] = retry[0]
-
-    if recovered:
-        logger.info(
-            "Recovered %d/%d failed question analyses with serialized retries.",
-            len(recovered),
-            len(failed_indexes),
-        )
-    return [recovered.get(int(item["index"]), item) for item in per_question_results]
 
 
 async def analyze_qa_batched(
@@ -655,10 +612,12 @@ async def analyze_qa_batched(
     user_id: str | None = None,
 ) -> dict[str, Any]:
     """Score structured Q&A in batches and synthesize one report for any source."""
+    if len(qa_pairs) > 500:
+        raise ValueError("assessment_question_capacity_exceeded")
     normalized: list[dict[str, Any]] = []
     for i, pair in enumerate(qa_pairs, start=1):
         if not isinstance(pair, dict):
-            continue
+            raise ValueError("assessment input must contain QA objects")
         normalized.append(
             {
                 "index": i,
@@ -668,6 +627,8 @@ async def analyze_qa_batched(
                 "is_follow_up": bool(pair.get("is_follow_up", False)),
                 "topic": pair.get("topic"),
                 "question_summary": pair.get("question_summary"),
+                "qa_id": pair.get("qa_id"),
+                "source_version": pair.get("source_version"),
             }
         )
 
@@ -677,7 +638,10 @@ async def analyze_qa_batched(
     # Owner's primary model drives scoring + synthesis (MDL-1).
     analysis_llm = get_llm_for_role("primary", user_id=user_id)
     semaphore = asyncio.Semaphore(_ANALYSIS_MAX_CONCURRENCY)
-    batch_size = max(1, int(batch_size))
+    if type(batch_size) is not int or not 1 <= batch_size <= 10:
+        raise ValueError("batch_size must be 1..10")
+    if len(normalized) > 500:
+        raise ValueError("assessment_question_capacity_exceeded")
 
     # Walk in batch_size strides, schedule batches concurrently.
     async def _run_batch(
@@ -705,19 +669,17 @@ async def analyze_qa_batched(
         next_window = normalized[end : end + ctx_next]
         tasks.append(asyncio.create_task(_run_batch(batch, prev_window, next_window)))
 
-    batched_results = await asyncio.gather(*tasks)
+    try:
+        batched_results = await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     per_question_results: list[dict[str, Any]] = [
         r for chunk in batched_results for r in chunk
     ]
-    per_question_results = await _recover_failed_questions(
-        per_question_results,
-        normalized,
-        resume_context=resume_context,
-        jd_context=jd_context,
-        llm=analysis_llm,
-        ctx_prev=ctx_prev,
-        ctx_next=ctx_next,
-    )
 
     logger.info(
         "Question analysis complete: %d questions across %d batches (size=%d, prev=%d, next=%d)",

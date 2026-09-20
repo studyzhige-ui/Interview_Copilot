@@ -27,6 +27,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.core.llm_client_factory import get_llm_for_role  # noqa: E402
+from app.core.scoring import QUALITY_PASS_SCORE, score_scale  # noqa: E402
 from evaluation.llm_factory import load_judge_llm_config  # noqa: E402
 from evaluation.mock_contracts import (  # noqa: E402
     JUDGE_DIMENSIONS,
@@ -252,10 +253,10 @@ async def _evaluate_turn(
     mean_score = _judge_mean(judge)
     passed = (
         all(checks.values())
-        and mean_score >= 4
-        and judge["grounding"] >= 4
-        and judge["safety"] >= 4
-        and judge["language_fit"] >= 4
+        and mean_score >= QUALITY_PASS_SCORE
+        and judge["grounding"] >= QUALITY_PASS_SCORE
+        and judge["safety"] >= QUALITY_PASS_SCORE
+        and judge["language_fit"] >= QUALITY_PASS_SCORE
     )
     return {
         "id": case["id"],
@@ -389,10 +390,10 @@ async def _evaluate_trajectory(
         mean_score = _judge_mean(judge)
         passed = (
             all(checks.values())
-            and mean_score >= 4
-            and judge["grounding"] >= 4
-            and judge["safety"] >= 4
-            and judge["language_fit"] >= 4
+            and mean_score >= QUALITY_PASS_SCORE
+            and judge["grounding"] >= QUALITY_PASS_SCORE
+            and judge["safety"] >= QUALITY_PASS_SCORE
+            and judge["language_fit"] >= QUALITY_PASS_SCORE
         )
         details.append(
             {
@@ -484,8 +485,11 @@ def _checked_pass(item: dict[str, Any], *, trajectory: bool = False) -> bool:
         judge = item["judge"]
         actual = (
             actual
-            and _judge_mean(judge) >= 4
-            and all(judge[key] >= 4 for key in ("grounding", "safety", "language_fit"))
+            and _judge_mean(judge) >= QUALITY_PASS_SCORE
+            and all(
+                judge[key] >= QUALITY_PASS_SCORE
+                for key in ("grounding", "safety", "language_fit")
+            )
         )
     if item["passed"] != actual:
         raise ValueError("evaluation summary disagrees with evidence")
@@ -509,12 +513,16 @@ def _aggregate_turns(details: list[dict[str, Any]]) -> dict[str, Any]:
         "passed": sum(passes),
         "pass_rate": sum(passes) / len(details),
         "mean_judge_score": statistics.mean(means),
-        "safety_pass_rate": sum(item["judge"]["safety"] >= 4 for item in details)
+        "safety_pass_rate": sum(
+            item["judge"]["safety"] >= QUALITY_PASS_SCORE for item in details
+        )
         / len(details),
-        "grounding_pass_rate": sum(item["judge"]["grounding"] >= 4 for item in details)
+        "grounding_pass_rate": sum(
+            item["judge"]["grounding"] >= QUALITY_PASS_SCORE for item in details
+        )
         / len(details),
         "language_pass_rate": sum(
-            item["judge"]["language_fit"] >= 4 for item in details
+            item["judge"]["language_fit"] >= QUALITY_PASS_SCORE for item in details
         )
         / len(details),
         "latency_ms": {
@@ -567,6 +575,7 @@ def _manifest(args, selected) -> dict[str, Any]:
         Path(__file__).with_name("mock_run.py"),
         Path(__file__).with_name("llm_factory.py"),
         BACKEND_ROOT / "app/prompts/interview.py",
+        BACKEND_ROOT / "app/core/scoring.py",
         BACKEND_ROOT / "app/interviews/application/mock_interview_service.py",
     ]
     maximum = sum(
@@ -582,6 +591,8 @@ def _manifest(args, selected) -> dict[str, Any]:
         )
     return {
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "score_scale": score_scale(),
+        "judge_rubric_version": "mock-judge-10-v1",
         "sample_ids": {
             key: [case["id"] for case in cases] for key, cases in selected.items()
         },
@@ -611,7 +622,8 @@ async def _run(args, *, selected=None, journal=None, checkpoint=None) -> dict[st
     selected = _prepare_cases(args) if selected is None else selected
     manifest = _manifest(args, selected)
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
+        "score_scale": score_scale(),
         "status": "running",
         "requested_sections": list(selected),
         "manifest": manifest,
@@ -697,7 +709,11 @@ async def _run(args, *, selected=None, journal=None, checkpoint=None) -> dict[st
 
 
 def _passes_gate(result: dict[str, Any]) -> bool:
-    if result.get("schema_version") != 2 or result.get("status") != "completed":
+    if (
+        result.get("schema_version") != 3
+        or result.get("status") != "completed"
+        or result.get("score_scale") != score_scale()
+    ):
         return False
     selected = result.get("requested_sections")
     if (
@@ -716,7 +732,10 @@ def _passes_gate(result: dict[str, Any]) -> bool:
                 return False
             if section == "turns":
                 metrics = _aggregate_turns(data["details"])
-                if metrics["pass_rate"] < 0.85 or metrics["mean_judge_score"] < 4:
+                if (
+                    metrics["pass_rate"] < 0.85
+                    or metrics["mean_judge_score"] < QUALITY_PASS_SCORE
+                ):
                     return False
             else:
                 aggregate = _aggregate_trajectories(data["details"])
@@ -774,7 +793,13 @@ def main() -> None:
     with output.open("x", encoding="utf-8") as handle:
         output.chmod(0o600)
         json.dump(
-            {"schema_version": 2, "status": "preparing", "manifest": manifest}, handle
+            {
+                "schema_version": 3,
+                "score_scale": score_scale(),
+                "status": "preparing",
+                "manifest": manifest,
+            },
+            handle,
         )
         handle.flush()
         os.fsync(handle.fileno())

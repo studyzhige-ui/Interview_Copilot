@@ -118,6 +118,8 @@ def start_mock_interview(
             job_opportunity_id=body.job_opportunity_id,
             jd_snapshot_id=body.jd_snapshot_id,
             jd_snapshot_version=body.jd_snapshot_version,
+            purpose=body.purpose,
+            focus=body.focus,
         )
         db.commit()
     except MockJobDescriptionUnavailable as exc:

@@ -30,6 +30,8 @@ export interface InterviewRecordListItem {
 
 export interface InterviewQA {
   id: string;
+  /** Absent only in historical offline snapshots; editing requires a fresh version. */
+  version?: number;
   order_idx: number;
   phase: string;
   phase_label?: string | null;
@@ -40,6 +42,11 @@ export interface InterviewQA {
   follow_up_depth: number;
   grounding_refs: string[];
   score?: number | null;
+  assessment?: {
+    rubric_version?: string;
+    criteria?: Array<{ key: string; score: number; reason: string }>;
+    competency_evidence?: Array<{ dimension: string; score: number; answer_quote: string; reason: string }>;
+  } | null;
   critique?: string | null;
   improved_answer?: string | null;
   key_points: string[];
@@ -71,6 +78,7 @@ export interface InterviewQA {
   analyzed_at?: string | null;
   /** knowledge_documents.id when this QA's improved answer was saved (else null). */
   saved_document_id?: string | null;
+  saved_document_status?: string | null;
 }
 
 export interface InterviewAnalysis {

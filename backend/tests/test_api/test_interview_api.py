@@ -148,7 +148,12 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
             return_value="resume txt",
         ),
     ):
-        mock_proc.return_value = fake_task
+
+        def accepted_task(record_id, *, task_id, review_generation, language):
+            fake_task.id = task_id
+            return fake_task
+
+        mock_proc.side_effect = accepted_task
         resp = client.post(
             "/api/v1/analyze",
             json={
@@ -161,11 +166,13 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "processing"
-    assert body["task_id"] == "celery-abc"
+    assert body["task_id"] == fake_task.id
     assert body["record_id"].startswith("ir_")
     # Default language is "zh"; the task receives it as a kwarg so a
     # re-run can override it without breaking idempotency.
-    mock_proc.assert_called_once_with(body["record_id"], language="zh")
+    mock_proc.assert_called_once_with(
+        body["record_id"], language="zh", task_id=body["task_id"], review_generation=1
+    )
 
     record = (
         db.query(InterviewRecord)
@@ -176,7 +183,7 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
     # Route resolves the caller's username → users.id and stores the pk.
     assert record.user_id == _uid(db, "alice")
     assert record.job_opportunity_id == "jo_analyze"
-    assert record.celery_task_id == "celery-abc"
+    assert record.celery_task_id == body["task_id"]
 
 
 def test_analyze_rejects_other_users_opportunity_before_dispatch(
@@ -340,7 +347,7 @@ def test_analytics_report_delegates_to_service(client):
     mock_gen.assert_awaited_once_with(
         10,
         user_id="alice",
-        scale_version="evidence-v2",
+        scale_version="score10-v1",
     )
 
 

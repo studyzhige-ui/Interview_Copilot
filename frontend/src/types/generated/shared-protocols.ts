@@ -1051,6 +1051,11 @@ export interface components {
         /** MockPrefillPayload */
         MockPrefillPayload: {
             /**
+             * Focus
+             * @default null
+             */
+            focus: string | null;
+            /**
              * Input Mode
              * @default voice
              * @enum {string}
@@ -1071,7 +1076,10 @@ export interface components {
              * @default null
              */
             jd_snapshot_version: number | null;
-            /** Jd Text */
+            /**
+             * Jd Text
+             * @default
+             */
             jd_text: string;
             /**
              * Job Opportunity Id
@@ -1083,14 +1091,82 @@ export interface components {
              * @enum {string}
              */
             kind: "mock_prefill";
-            /** Resume Id */
-            resume_id: string;
+            /**
+             * Purpose
+             * @default full
+             * @enum {string}
+             */
+            purpose: "full" | "project_deep_dive" | "focused_practice";
+            /**
+             * Resume Id
+             * @default null
+             */
+            resume_id: string | null;
             /**
              * Target Question Count
              * @enum {integer}
              */
             target_question_count: 15 | 20 | 30;
         };
+        /** MockPreparationRequest */
+        MockPreparationRequest: {
+            /**
+             * Focus
+             * @default null
+             */
+            focus?: string | null;
+            /**
+             * Input Mode
+             * @default text
+             * @enum {string}
+             */
+            input_mode?: "text" | "voice";
+            /**
+             * Interviewer Style
+             * @default professional
+             * @enum {string}
+             */
+            interviewer_style?: "friendly" | "professional" | "rigorous" | "pressure";
+            /**
+             * Jd Snapshot Id
+             * @default null
+             */
+            jd_snapshot_id?: string | null;
+            /**
+             * Jd Snapshot Version
+             * @default null
+             */
+            jd_snapshot_version?: number | null;
+            /**
+             * Jd Text
+             * @description Inline JD. Prefer an exact owned JD snapshot for long/reused descriptions.
+             * @default null
+             */
+            jd_text?: string | null;
+            /**
+             * Job Opportunity Id
+             * @default null
+             */
+            job_opportunity_id?: string | null;
+            /**
+             * Purpose
+             * @default full
+             * @enum {string}
+             */
+            purpose?: "full" | "project_deep_dive" | "focused_practice";
+            /**
+             * Resume Id
+             * @default null
+             */
+            resume_id?: string | null;
+            /**
+             * Target Question Count
+             * @default 20
+             * @enum {integer}
+             */
+            target_question_count?: 15 | 20 | 30;
+        };
+        MockPreparationRequestRequestContract: components["schemas"]["MockPreparationRequest"];
         /** MockReadinessPayload */
         MockReadinessPayload: {
             /**
@@ -1189,6 +1265,69 @@ export interface components {
             turn_status: string;
         };
         PendingInteractionProjectionResponseContract: components["schemas"]["PendingInteractionProjection"];
+        /** QACorrectionPage */
+        QACorrectionPage: {
+            /** Items */
+            items: components["schemas"]["QACorrectionView"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        QACorrectionPageResponseContract: components["schemas"]["QACorrectionPage"];
+        /** QACorrectionView */
+        QACorrectionView: {
+            after: components["schemas"]["QATextSnapshot"];
+            before: components["schemas"]["QATextSnapshot"];
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** New Version */
+            new_version: number;
+            /** Previous Version */
+            previous_version: number;
+            /** Qa Id */
+            qa_id: string;
+        };
+        /**
+         * QAEditRequest
+         * @description ``PATCH /interview-records/{record_id}/qa/{qa_id}`` request body.
+         */
+        QAEditRequest: {
+            /**
+             * Answer
+             * @default null
+             */
+            answer?: string | null;
+            /**
+             * Critique
+             * @default null
+             */
+            critique?: string | null;
+            /** Expected Version */
+            expected_version: number;
+            /**
+             * Improved Answer
+             * @default null
+             */
+            improved_answer?: string | null;
+            /**
+             * Question
+             * @default null
+             */
+            question?: string | null;
+        };
+        QAEditRequestRequestContract: components["schemas"]["QAEditRequest"];
+        /** QATextSnapshot */
+        QATextSnapshot: {
+            /** Answer */
+            answer: string | null;
+            /** Critique */
+            critique: string | null;
+            /** Improved Answer */
+            improved_answer: string | null;
+            /** Question */
+            question: string | null;
+        };
         /** ResolveInteractionRequest */
         ResolveInteractionRequest: {
             /** Expected Version */

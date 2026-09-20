@@ -41,6 +41,7 @@ def test_extract_records_reads_canonical_ability_signal_only(db_session):
         scope_kind="general",
         formed_at=datetime.now(UTC),
         rubric_version="evidence-v2",
+        score_scale_version="score100-legacy-v2",
         status="active",
     )
     db_session.add(signal)
@@ -57,7 +58,7 @@ def test_extract_records_reads_canonical_ability_signal_only(db_session):
     records = _extract_ability_records(db_session, user.username)
 
     assert [record["topic"] for record in records] == ["系统设计"]
-    assert records[0]["score"] == 58
+    assert records[0]["score"] == 5.8
     assert records[0]["evidence_count"] == 1
 
 
@@ -90,7 +91,8 @@ async def test_report_aggregates_observed_axes_without_model_call():
             "skill_type": "system_design",
             "mastery_level": "weak",
             "summary": "锁续期与 fencing token 不清楚",
-            "score": 35.0,
+            "score": 3.5,
+            "score_version": "score10-v1",
             "evidence_count": 2,
             "time": "2026-01-01T00:00:00",
         },
@@ -99,7 +101,8 @@ async def test_report_aggregates_observed_axes_without_model_call():
             "skill_type": "system_design",
             "mastery_level": "stable",
             "summary": "能完成基础估算",
-            "score": 75.0,
+            "score": 7.5,
+            "score_version": "score10-v1",
             "evidence_count": 1,
             "time": "2026-01-02T00:00:00",
         },
@@ -108,7 +111,8 @@ async def test_report_aggregates_observed_axes_without_model_call():
             "skill_type": "communication",
             "mastery_level": "strong",
             "summary": "能用结果和数据说明贡献",
-            "score": 90.0,
+            "score": 9.0,
+            "score_version": "score10-v1",
             "evidence_count": 3,
             "time": "2026-01-03T00:00:00",
         },
@@ -121,14 +125,14 @@ async def test_report_aggregates_observed_axes_without_model_call():
         result = await generate_comprehensive_report(limit=20, user_id="u1")
 
     axes = {axis["k"]: axis for axis in result["axes"]}
-    assert axes["系统设计"]["v"] == 55.0
+    assert axes["系统设计"]["v"] == 5.5
     assert axes["系统设计"]["evidence_count"] == 3
-    assert axes["沟通表达"]["v"] == 90.0
+    assert axes["沟通表达"]["v"] == 9.0
     assert axes["知识与原理"]["v"] is None
     assert result["totals"]["evaluated_axes"] == 2
     assert result["totals"]["ability_topics"] == 3
-    assert result["score_scale"]["version"] == "evidence-v2"
-    assert result["score_scale"]["range"] == [0, 100]
+    assert result["score_scale"]["version"] == "score10-v1"
+    assert result["score_scale"]["range"] == [0, 10]
     assert result["score_scale"]["missing"] == "unknown_not_zero"
 
 
@@ -140,7 +144,8 @@ async def test_missing_evidence_is_unknown_not_zero():
             "skill_type": "knowledge_topic",
             "mastery_level": "stable",
             "summary": "能解释联合索引",
-            "score": 75.0,
+            "score": 7.5,
+            "score_version": "score10-v1",
             "evidence_count": 1,
             "time": "2026-01-01",
         }
@@ -154,7 +159,7 @@ async def test_missing_evidence_is_unknown_not_zero():
 
     unknown = [axis for axis in result["axes"] if axis["k"] != "知识与原理"]
     assert all(axis["v"] is None and axis["confidence"] == "none" for axis in unknown)
-    assert result["overall"] == 75.0
+    assert result["overall"] == 7.5
 
 
 @pytest.mark.asyncio

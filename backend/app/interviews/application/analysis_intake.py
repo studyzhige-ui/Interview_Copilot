@@ -21,7 +21,6 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.interviews.application.interview_record_service import STATUS_FAILED
-from app.interviews.application.interview_record_service import STATUS_PENDING
 from app.interviews.application.interview_record_service import interview_record_service
 from app.files.application.file_asset_service import READABLE_UPLOAD_STATUSES
 from app.files.application.file_asset_service import ensure_uploaded
@@ -227,25 +226,14 @@ def create_record_and_dispatch(
     mark_file_asset_consumed(db, upload)
     db.commit()
 
-    try:
-        task = dispatch_interview_analysis(
-            record.id,
-            language=normalize_language(language),
-        )
-    except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
-        # The record + consumed upload are already committed. Without this
-        # catch a broker blip left a zombie forever-pending record that no
-        # worker would ever pick up. Park it in a terminal, user-visible
-        # state instead (recovery today = delete the record and re-upload;
-        # there is no reanalyze endpoint for upload records).
-        logger.error("analysis dispatch failed for record %s: %s", record.id, exc)
-        interview_record_service.set_status(
-            record.id,
-            STATUS_FAILED,
-            error_message="分析任务派发失败（任务队列暂不可用），请稍后重试。",
-        )
-        raise
-    interview_record_service.set_status(
-        record.id, STATUS_PENDING, celery_task_id=task.id
+    from app.interviews.application.review_dispatch import dispatch_review_command
+
+    task = dispatch_review_command(
+        db,
+        record.id,
+        sender=dispatch_interview_analysis,
+        rollback_status=STATUS_FAILED,
+        error_message="分析任务派发失败或未确认（任务队列暂不可用），请核对后重试。",
+        language=normalize_language(language),
     )
     return record, task

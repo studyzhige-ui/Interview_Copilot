@@ -42,6 +42,7 @@ class InterviewQA(Base):
         nullable=False,
     )
     order_idx = Column(Integer, nullable=False, default=0)
+    version = Column(Integer, nullable=False, default=1, server_default="1")
 
     phase = Column(String, nullable=False, default="technical")
     phase_label = Column(String, nullable=True)

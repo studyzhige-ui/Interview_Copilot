@@ -18,6 +18,11 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from app.interviews.domain.specification import (
+    InterviewSpecification,
+    resolve_specification,
+)
+
 from app.core.context_budget import ContextCapacityError, RequestBudget, request_tokens
 
 from app.prompts.interview import (
@@ -79,18 +84,31 @@ def _style_brief(style: str | None) -> str:
     )
 
 
-def _base_stages() -> list[dict[str, str]]:
-    return [dict(stage) for stage in BASE_INTERVIEW_STAGES]
+def _base_stages(spec: InterviewSpecification | None = None) -> list[dict[str, str]]:
+    keys = resolve_specification(spec).stage_keys
+    return [dict(stage) for stage in BASE_INTERVIEW_STAGES if stage["key"] in keys]
 
 
-def build_prefix(resume_context: str, jd_context: str, style: str) -> str:
+def build_prefix(
+    resume_context: str,
+    jd_context: str,
+    style: str,
+    *,
+    specification: dict | InterviewSpecification | None = None,
+) -> str:
     """Build the stable resume/JD/persona prefix shared by every turn."""
     resume = (resume_context or "").strip() or "（候选人未提供简历）"
     jd = (jd_context or "").strip() or "（未提供 JD）"
-    return MOCK_INTERVIEW_PREFIX.format(
-        resume=resume,
-        jd=jd,
-        style=_style_brief(style),
+    spec = resolve_specification(specification)
+    return (
+        "<interview_specification>\n"
+        + spec.model_dump_json()
+        + "\n</interview_specification>\n"
+        + MOCK_INTERVIEW_PREFIX.format(
+            resume=resume,
+            jd=jd,
+            style=_style_brief(style),
+        )
     )
 
 
@@ -148,12 +166,17 @@ def _clean_json(raw_text: str) -> dict[str, Any]:
     return data
 
 
-def _guidance_from_response(data: dict[str, Any]) -> dict[str, str]:
+def _guidance_from_response(
+    data: dict[str, Any], keys: tuple[str, ...] | None = None
+) -> dict[str, str]:
     raw = data.get("guidance")
     if not isinstance(raw, dict):
         raise ValueError("Plan output must contain a guidance object")
     guidance: dict[str, str] = {}
-    for key in _BASE_STAGE_KEYS:
+    expected = keys or tuple(_BASE_STAGE_KEYS)
+    if set(raw) != set(expected):
+        raise ValueError("Plan guidance must exactly match the frozen purpose stages")
+    for key in expected:
         value = raw.get(key)
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"Plan guidance is missing stage {key}")
@@ -219,9 +242,14 @@ def generate_plan(
     interviewer_style: str = "professional",
     user_id: str | None = None,
     llm: Any | None = None,
+    specification: dict | InterviewSpecification | None = None,
 ) -> MockPlan:
-    """Generate and freeze personalized guidance for the stable four stages."""
+    """Generate guidance for the program-selected purpose; the model cannot add stages."""
+    spec = resolve_specification(specification)
+    stages = _base_stages(spec)
     prompt = MOCK_INTERVIEW_PLAN_PROMPT.format(
+        specification=spec.model_dump_json(),
+        stage_contract=json.dumps(stages, ensure_ascii=False),
         resume=(resume_context or "").strip() or "（候选人未提供简历）",
         jd=(jd_context or "").strip() or "（未提供 JD）",
         style=_style_brief(interviewer_style),
@@ -232,9 +260,7 @@ def generate_plan(
     response = llm.complete(
         prompt, response_format={"type": "json_object"}, max_tokens=output_limit
     )
-    guidance = _guidance_from_response(_clean_json(response.text))
-
-    stages = _base_stages()
+    guidance = _guidance_from_response(_clean_json(response.text), spec.stage_keys)
     for stage in stages:
         stage["guidance"] = guidance[stage["key"]]
     formal = (interviewer_style or "").strip() in ("rigorous", "pressure")
@@ -244,6 +270,12 @@ def generate_plan(
         if formal
         else "先请你结合目标岗位做一个简单的自我介绍。"
     )
+    if spec.purpose == "project_deep_dive":
+        invitation = (
+            f"请先说明在“{spec.focus}”中你的具体职责，以及一个值得深入讨论的技术决策。"
+        )
+    elif spec.purpose == "focused_practice":
+        invitation = f"围绕“{spec.focus}”，请先解释一个你认为最关键的概念或设计选择，并说明依据。"
     return MockPlan(
         stages=stages,
         opening_message=f"{greeting}{invitation}",

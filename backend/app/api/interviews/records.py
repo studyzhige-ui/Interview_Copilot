@@ -31,6 +31,7 @@ from app.schemas.interview import (
     InterviewRecordListItem,
     InterviewRecordUpdateRequest,
     QAEditRequest,
+    QACorrectionPage,
     SaveQARequest,
 )
 from app.observability.diagnostics_report_service import ABILITY_SCORE_SCALE_VERSION
@@ -312,12 +313,37 @@ def _serialize_qa_rows(db: Session, qa_rows: list[InterviewQA]) -> list[dict]:
             if qa.answer_audio_file_asset_id
         ],
     )
-    return [_serialize_qa(qa, audio_urls=urls) for qa in qa_rows]
+    from app.models.knowledge import KnowledgeDocument
+    from app.models.interview_record import InterviewRecord
+
+    document_statuses = (
+        dict(
+            db.query(KnowledgeDocument.id, KnowledgeDocument.status)
+            .join(InterviewQA, InterviewQA.saved_document_id == KnowledgeDocument.id)
+            .join(InterviewRecord, InterviewRecord.id == InterviewQA.record_id)
+            .filter(
+                InterviewQA.id.in_([qa.id for qa in qa_rows]),
+                KnowledgeDocument.user_id == InterviewRecord.user_id,
+                KnowledgeDocument.deleted_at.is_(None),
+            )
+            .all()
+        )
+        if qa_rows
+        else {}
+    )
+    return [
+        {
+            **_serialize_qa(qa, audio_urls=urls),
+            "saved_document_status": document_statuses.get(qa.saved_document_id),
+        }
+        for qa in qa_rows
+    ]
 
 
 def _serialize_qa(qa: InterviewQA, audio_urls: dict[str, str] | None = None) -> dict:
     return {
         "id": qa.id,
+        "version": qa.version,
         "order_idx": qa.order_idx,
         "phase": qa.phase,
         "phase_label": qa.phase_label,
@@ -331,6 +357,7 @@ def _serialize_qa(qa: InterviewQA, audio_urls: dict[str, str] | None = None) -> 
         "critique": qa.critique,
         "improved_answer": qa.improved_answer,
         "key_points": _safe_json_loads(qa.key_points_json) or [],
+        "assessment": qa.answer_quality_json,
         "answer_input_mode": qa.answer_input_mode,
         "question_audio_url": qa.question_audio_url,
         # MOCK-7: voice answers store the clip's asset id; presigned GETs are
@@ -500,8 +527,12 @@ async def save_qa_to_knowledge_endpoint(
             category=(body.category or "").strip() or DEFAULT_CATEGORY,
         )
     except Exception as exc:  # noqa: BLE001
+        from app.core.command_errors import CommandError
         from app.core.error_messages import humanize_error
 
+        if isinstance(exc, CommandError):
+            with command_errors():
+                raise exc
         raise HTTPException(
             status_code=500,
             detail=f"保存到知识库失败：{humanize_error(exc)}",
@@ -510,6 +541,7 @@ async def save_qa_to_knowledge_endpoint(
         "status": "success",
         "document_id": doc.id,
         "saved_document_id": qa.saved_document_id,
+        "document_status": doc.status,
     }
 
 
@@ -713,3 +745,26 @@ async def interview_record_events_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get(
+    "/interview-records/{record_id}/corrections", response_model=QACorrectionPage
+)
+def get_interview_corrections(
+    record_id: str,
+    before: str | None = Query(None, max_length=36),
+    limit: int = Query(30, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.core.user_identity import resolve_user_pk
+    from app.interviews.application.corrections import list_corrections
+
+    with command_errors():
+        return list_corrections(
+            db,
+            record_id=record_id,
+            user_pk=resolve_user_pk(db, current_user.username),
+            before=before,
+            limit=limit,
+        )

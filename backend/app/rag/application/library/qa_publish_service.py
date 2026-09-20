@@ -14,6 +14,8 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.core.error_messages import humanize_error
+from app.core.command_errors import CommandError
+from app.interviews.application.review_fence import lock_record
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.knowledge import KnowledgeDocument
@@ -43,6 +45,20 @@ async def save_qa_to_knowledge(
     The doc row + ``saved_document_id`` back-ref are committed BEFORE indexing,
     so an index hiccup never loses the save (a reindex recovers it).
     """
+    record_id, qa_id = record.id, qa.id
+    record = lock_record(db, record_id)
+    qa = (
+        db.query(InterviewQA)
+        .filter(InterviewQA.id == qa_id, InterviewQA.record_id == record_id)
+        .with_for_update()
+        .populate_existing()
+        .first()
+    )
+    if record is None or record.user_id != user_pk or qa is None:
+        raise CommandError("not_found", "QA row not found")
+    if not (qa.improved_answer or "").strip():
+        raise CommandError("conflict", "该题暂无当前改进回答，请先重新分析或明确编辑。")
+    source_version = qa.version
     content_text = build_qa_content(qa)
 
     doc: KnowledgeDocument | None = None
@@ -56,6 +72,12 @@ async def save_qa_to_knowledge(
             )
             .first()
         )
+    if doc is not None and doc.status == "processing":
+        raise CommandError("conflict", "该问答的索引仍在处理中，请查询当前记录后再试。")
+    if doc is not None and doc.status == "stale":
+        # A corrected QA starts a new document identity. A late old embed/index
+        # worker can therefore never overwrite the newly accepted source.
+        doc = None
     if doc is None:
         doc = KnowledgeDocument(
             user_id=user_pk,
@@ -77,6 +99,8 @@ async def save_qa_to_knowledge(
     db.add(qa)
     db.commit()
     db.refresh(doc)
+    document_id = doc.id
+    db.commit()  # refresh opened a read transaction; do not keep it over embedding
 
     # Index the QA as one natural unit (Markdown content_text -> chunks + Milvus).
     from app.rag.ingest.pipeline import ingest_text
@@ -86,14 +110,64 @@ async def save_qa_to_knowledge(
             text=content_text,
             source_kind="improved_qa",
             user_id=user_pk,
-            document_id=doc.id,
+            document_id=document_id,
         )
     except Exception as exc:
-        doc.status = "failed"
-        doc.error_message = f"索引失败：{humanize_error(exc)}"[:500]
-        db.add(doc)
-        db.commit()
+        db.rollback()
+        lock_record(db, record_id)
+        doc = (
+            db.query(KnowledgeDocument)
+            .filter(
+                KnowledgeDocument.id == document_id,
+                KnowledgeDocument.user_id == user_pk,
+            )
+            .with_for_update()
+            .populate_existing()
+            .first()
+        )
+        if doc is not None and doc.status == "processing" and doc.deleted_at is None:
+            doc.status = "failed"
+            doc.error_message = f"索引失败：{humanize_error(exc)}"[:500]
+            db.commit()
+        else:
+            db.rollback()
         raise
+    # Only current evidence may graduate to ready. Both correction and delete
+    # are rechecked after the external index returns, not only at admission.
+    lock_record(db, record_id)
+    qa = (
+        db.query(InterviewQA)
+        .filter(InterviewQA.id == qa_id, InterviewQA.record_id == record_id)
+        .with_for_update()
+        .populate_existing()
+        .first()
+    )
+    doc = (
+        db.query(KnowledgeDocument)
+        .filter(
+            KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == user_pk
+        )
+        .with_for_update()
+        .populate_existing()
+        .first()
+    )
+    if (
+        qa is None
+        or qa.version != source_version
+        or qa.saved_document_id != document_id
+        or doc is None
+        or doc.deleted_at is not None
+        or doc.status != "processing"
+    ):
+        if doc is not None and doc.deleted_at is None and doc.status == "processing":
+            doc.status = "stale"
+            doc.error_message = "source_qa_changed_during_index: 索引期间原问答已改变"
+            db.commit()
+        else:
+            db.rollback()
+        raise CommandError(
+            "conflict", "原问答已改变，本次索引未被采纳，请查看最新版本。"
+        )
     doc.chunk_count = int(result.get("chunk_count") or 0) if result else 0
     indexed = bool(result and result.get("indexed", True))
     doc.status = "ready" if indexed else "processing"

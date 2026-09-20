@@ -31,6 +31,9 @@ from app.interviews.application.analysis_context import build_analysis_context
 from app.media.application.transcript_evidence import TranscriptEvidence
 from app.media.application.transcript_evidence import render_raw_turns
 
+from app.interviews.application.review_fence import lock_record
+from app.core.scoring import validate_score
+
 logger = logging.getLogger(__name__)
 
 
@@ -217,11 +220,7 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = (
-                db.query(InterviewRecord)
-                .filter(InterviewRecord.id == record_id)
-                .first()
-            )
+            row = lock_record(db, record_id)
             if row is None:
                 return
             row.status = status
@@ -256,11 +255,7 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = (
-                db.query(InterviewRecord)
-                .filter(InterviewRecord.id == record_id)
-                .first()
-            )
+            row = lock_record(db, record_id)
             if row is None:
                 return
             tr = None
@@ -311,12 +306,7 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = (
-                db.query(InterviewRecord)
-                .filter(InterviewRecord.id == record_id)
-                .with_for_update()
-                .first()
-            )
+            row = lock_record(db, record_id)
             if row is None:
                 raise ValueError(f"InterviewRecord {record_id} does not exist")
             transcript = InterviewTranscript(
@@ -400,6 +390,7 @@ class InterviewRecordService:
             )
             if transcript is None:
                 raise ValueError(f"InterviewTranscript {transcript_id} does not exist")
+            lock_record(db, transcript.record_id)
             transcript.structure_schema_version = int(
                 structure.get("schema_version") or 1
             )
@@ -481,11 +472,7 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = (
-                db.query(InterviewRecord)
-                .filter(InterviewRecord.id == record_id)
-                .first()
-            )
+            row = lock_record(db, record_id)
             if row is None:
                 return
             row.analysis_json = (
@@ -521,6 +508,7 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
+            lock_record(db, record_id)
             inserted: list[InterviewQA] = []
             existing_count = (
                 db.query(InterviewQA).filter(InterviewQA.record_id == record_id).count()
@@ -586,8 +574,9 @@ class InterviewRecordService:
             row = db.query(InterviewQA).filter(InterviewQA.id == qa_id).first()
             if row is None:
                 return
+            lock_record(db, row.record_id)
             if score is not None:
-                row.score = score
+                row.score = validate_score(score)
             if critique is not None:
                 row.critique = critique
             if improved_answer is not None:
@@ -613,11 +602,7 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = (
-                db.query(InterviewRecord)
-                .filter(InterviewRecord.id == record_id)
-                .first()
-            )
+            row = lock_record(db, record_id)
             if row is None:
                 return
             row.analyzed_qa_count = (row.analyzed_qa_count or 0) + by
@@ -643,11 +628,7 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = (
-                db.query(InterviewRecord)
-                .filter(InterviewRecord.id == record_id)
-                .first()
-            )
+            row = lock_record(db, record_id)
             if row is None:
                 return
             row.analyzed_qa_count = 0

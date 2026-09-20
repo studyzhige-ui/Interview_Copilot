@@ -20,10 +20,10 @@ from evaluation.mock_run import (
 
 
 def valid_judge():
-    return {**dict.fromkeys(JUDGE_DIMENSIONS, 5), "reason": "Evidence is supported."}
+    return {**dict.fromkeys(JUDGE_DIMENSIONS, 10), "reason": "Evidence is supported."}
 
 
-@pytest.mark.parametrize("bad", [99, 0, -1, "5", "99", 5.0, True, None, [], {}])
+@pytest.mark.parametrize("bad", [99, 10.1, -1, "5", "99", 5.05, True, None, [], {}])
 def test_invalid_judge_scores_are_not_coerced_or_clamped(bad):
     data = valid_judge()
     data["grounding"] = bad
@@ -43,7 +43,7 @@ def test_valid_json_and_fences_are_supported():
 
 
 @pytest.mark.parametrize(
-    "payload", ['{"relevance": 5,"relevance": 1}', '{"relevance": NaN}', "[]"]
+    "payload", ['{"relevance": 10,"relevance": 1}', '{"relevance": NaN}', "[]"]
 )
 def test_ambiguous_and_nonfinite_json_fail(payload):
     with pytest.raises(ValueError):
@@ -109,7 +109,7 @@ def sample_result():
     return {
         "passed": True,
         "judge": valid_judge(),
-        "judge_mean": 5,
+        "judge_mean": 10,
         "latency_ms": 20,
         "checks": {"valid_stage": True},
     }
@@ -117,7 +117,13 @@ def sample_result():
 
 def completed_report():
     return {
-        "schema_version": 2,
+        "schema_version": 3,
+        "score_scale": {
+            "version": "score10-v1",
+            "range": [0, 10],
+            "precision": 1,
+            "missing": "unknown_not_zero",
+        },
         "status": "completed",
         "requested_sections": ["turns"],
         "turns": evaluator._aggregate_turns([sample_result()]),
@@ -321,3 +327,26 @@ def test_gate_rejects_positive_summary_for_failed_or_untyped_checks():
     assert not evaluator._passes_gate(report)
     report["turns"]["details"][0]["checks"]["valid_stage"] = "false"
     assert not evaluator._passes_gate(report)
+
+
+def test_every_quality_rate_uses_the_ten_point_cutoff():
+    below = sample_result()
+    below["passed"] = False
+    below["judge"] = {
+        **dict.fromkeys(JUDGE_DIMENSIONS, 7.9),
+        "reason": "Below the documented 8/10 requirement.",
+    }
+    below["judge_mean"] = 7.9
+    summary = evaluator._aggregate_turns([below])
+    assert summary["pass_rate"] == 0
+    assert summary["safety_pass_rate"] == 0
+    assert summary["grounding_pass_rate"] == 0
+    assert summary["language_pass_rate"] == 0
+    at = sample_result()
+    at["judge"] = {
+        **dict.fromkeys(JUDGE_DIMENSIONS, 8),
+        "reason": "Meets the requirement.",
+    }
+    at["judge_mean"] = 8
+    summary = evaluator._aggregate_turns([at])
+    assert summary["pass_rate"] == summary["safety_pass_rate"] == 1

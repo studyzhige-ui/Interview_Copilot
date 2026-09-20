@@ -94,4 +94,27 @@ describe('MockSetup', () => {
     expect(applied).toHaveBeenCalledWith({ outcome: 'acknowledged' });
     expect(onReady).not.toHaveBeenCalled();
   });
+  it('starts focused practice without a resume, JD or introduction', async () => {
+    vi.mocked(listResumes).mockResolvedValue([]);
+    const onReady = vi.fn();
+    renderSetup(onReady);
+    fireEvent.click(screen.getByRole('button', { name: /专项练习.*无需简历/ }));
+    fireEvent.change(screen.getByLabelText('本次考察目标'), { target: { value: '协程取消和资源清理' } });
+    fireEvent.click(screen.getByRole('button', { name: '开始模拟面试' }));
+    await waitFor(() => expect(onReady).toHaveBeenCalledWith(expect.objectContaining({
+      purpose: 'focused_practice', focus: '协程取消和资源清理',
+      resume_id: undefined, jd_text: undefined, input_mode: 'text',
+    })));
+  });
+
+  it('does not silently retain the default resume on entering focused practice', async () => {
+    const onReady = vi.fn();
+    renderSetup(onReady);
+    await screen.findByRole('button', { name: /选已有.*1/ });
+    fireEvent.click(screen.getByRole('button', { name: /专项练习.*无需简历/ }));
+    fireEvent.change(screen.getByLabelText('本次考察目标'), { target: { value: '数据库锁' } });
+    fireEvent.click(screen.getByRole('button', { name: '开始模拟面试' }));
+    expect(onReady).toHaveBeenCalledWith(expect.objectContaining({ resume_id: undefined }));
+  });
+
 });

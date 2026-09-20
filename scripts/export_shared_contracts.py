@@ -47,7 +47,12 @@ from app.schemas.invitation_submission import (  # noqa: E402
     SubmissionKey,
 )
 
+from app.schemas.interview import QAEditRequest, QACorrectionPage  # noqa: E402
+from app.schemas.mock_preparation import MockPreparationRequest  # noqa: E402
+
 INPUT_MODELS = (
+    QAEditRequest,
+    MockPreparationRequest,
     ConfirmInterviewInvitation,
     FactConfirmationResolution,
     ResolveInteractionRequest,
@@ -56,6 +61,7 @@ INPUT_MODELS = (
     SubmissionKey,
 )
 OUTPUT_MODELS = (
+    QACorrectionPage,
     ConfirmInterviewInvitationResult,
     FactConfirmationRequest,
     InterviewInvitationCandidateFacts,

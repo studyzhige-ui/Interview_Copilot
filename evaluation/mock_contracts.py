@@ -1,9 +1,11 @@
-"""Strict inputs and judge outputs for mock evaluation, not production scoring."""
+"""Strict evaluation contracts using the same ten-point unit as the product."""
 
 from __future__ import annotations
 
-import json
+
 from typing import Annotated, Literal
+from app.core.scoring import Score
+from app.core.structured_json import strict_json as strict_json
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -14,7 +16,7 @@ Stage = Literal[
     "candidate_questions",
 ]
 Text = Annotated[str, Field(max_length=100_000)]
-Score = Annotated[int, Field(strict=True, ge=1, le=5)]
+
 JUDGE_DIMENSIONS = (
     "relevance",
     "follow_up",
@@ -105,25 +107,3 @@ class TrajectoryCase(CommonCase):
         if any(t > self.max_turns for t in self.disconnect_after_turns):
             raise ValueError("disconnect marker exceeds max_turns")
         return self
-
-
-def strict_json(text: str, *, max_bytes: int = 1_000_000):
-    """No duplicate keys, NaN, coercion, or unbounded model response parsing."""
-    if not isinstance(text, str) or len(text.encode("utf-8")) > max_bytes:
-        raise ValueError("JSON input exceeds capacity")
-
-    def unique(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError("duplicate JSON key")
-            result[key] = value
-        return result
-
-    def nonfinite(_value):
-        raise ValueError("nonfinite JSON number")
-
-    try:
-        return json.loads(text, object_pairs_hook=unique, parse_constant=nonfinite)
-    except RecursionError:
-        raise ValueError("JSON input nesting exceeds parser capacity") from None

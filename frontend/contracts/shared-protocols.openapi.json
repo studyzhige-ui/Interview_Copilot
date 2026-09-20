@@ -2794,6 +2794,20 @@
       "MockPrefillPayload": {
         "additionalProperties": false,
         "properties": {
+          "focus": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "minLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Focus"
+          },
           "input_mode": {
             "default": "voice",
             "enum": [
@@ -2841,8 +2855,8 @@
             "title": "Jd Snapshot Version"
           },
           "jd_text": {
+            "default": "",
             "maxLength": 50000,
-            "minLength": 20,
             "title": "Jd Text",
             "type": "string"
           },
@@ -2866,11 +2880,29 @@
             "title": "Kind",
             "type": "string"
           },
-          "resume_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Resume Id",
+          "purpose": {
+            "default": "full",
+            "enum": [
+              "full",
+              "project_deep_dive",
+              "focused_practice"
+            ],
+            "title": "Purpose",
             "type": "string"
+          },
+          "resume_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Id"
           },
           "target_question_count": {
             "enum": [
@@ -2887,6 +2919,8 @@
           "input_mode",
           "jd_snapshot_id",
           "jd_snapshot_version",
+          "purpose",
+          "focus",
           "resume_id",
           "jd_text",
           "interviewer_style",
@@ -2895,6 +2929,140 @@
         ],
         "title": "MockPrefillPayload",
         "type": "object"
+      },
+      "MockPreparationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "focus": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "minLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Focus"
+          },
+          "input_mode": {
+            "default": "text",
+            "enum": [
+              "text",
+              "voice"
+            ],
+            "title": "Input Mode",
+            "type": "string"
+          },
+          "interviewer_style": {
+            "default": "professional",
+            "enum": [
+              "friendly",
+              "professional",
+              "rigorous",
+              "pressure"
+            ],
+            "title": "Interviewer Style",
+            "type": "string"
+          },
+          "jd_snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jd Snapshot Id"
+          },
+          "jd_snapshot_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jd Snapshot Version"
+          },
+          "jd_text": {
+            "anyOf": [
+              {
+                "maxLength": 50000,
+                "minLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Inline JD. Prefer an exact owned JD snapshot for long/reused descriptions.",
+            "title": "Jd Text"
+          },
+          "job_opportunity_id": {
+            "anyOf": [
+              {
+                "maxLength": 35,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Opportunity Id"
+          },
+          "purpose": {
+            "default": "full",
+            "enum": [
+              "full",
+              "project_deep_dive",
+              "focused_practice"
+            ],
+            "title": "Purpose",
+            "type": "string"
+          },
+          "resume_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Id"
+          },
+          "target_question_count": {
+            "default": 20,
+            "enum": [
+              15,
+              20,
+              30
+            ],
+            "title": "Target Question Count",
+            "type": "integer"
+          }
+        },
+        "title": "MockPreparationRequest",
+        "type": "object"
+      },
+      "MockPreparationRequestRequestContract": {
+        "$ref": "#/components/schemas/MockPreparationRequest"
       },
       "MockReadinessPayload": {
         "additionalProperties": false,
@@ -3149,6 +3317,206 @@
       },
       "PendingInteractionProjectionResponseContract": {
         "$ref": "#/components/schemas/PendingInteractionProjection"
+      },
+      "QACorrectionPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QACorrectionView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "QACorrectionPage",
+        "type": "object"
+      },
+      "QACorrectionPageResponseContract": {
+        "$ref": "#/components/schemas/QACorrectionPage"
+      },
+      "QACorrectionView": {
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/QATextSnapshot"
+          },
+          "before": {
+            "$ref": "#/components/schemas/QATextSnapshot"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "new_version": {
+            "title": "New Version",
+            "type": "integer"
+          },
+          "previous_version": {
+            "title": "Previous Version",
+            "type": "integer"
+          },
+          "qa_id": {
+            "title": "Qa Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "qa_id",
+          "previous_version",
+          "new_version",
+          "before",
+          "after",
+          "created_at"
+        ],
+        "title": "QACorrectionView",
+        "type": "object"
+      },
+      "QAEditRequest": {
+        "additionalProperties": false,
+        "description": "``PATCH /interview-records/{record_id}/qa/{qa_id}`` request body.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "maxLength": 100000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Answer"
+          },
+          "critique": {
+            "anyOf": [
+              {
+                "maxLength": 50000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Critique"
+          },
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "improved_answer": {
+            "anyOf": [
+              {
+                "maxLength": 100000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Improved Answer"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "maxLength": 50000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Question"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "QAEditRequest",
+        "type": "object"
+      },
+      "QAEditRequestRequestContract": {
+        "$ref": "#/components/schemas/QAEditRequest"
+      },
+      "QATextSnapshot": {
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "critique": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Critique"
+          },
+          "improved_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Improved Answer"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          }
+        },
+        "required": [
+          "question",
+          "answer",
+          "critique",
+          "improved_answer"
+        ],
+        "title": "QATextSnapshot",
+        "type": "object"
       },
       "ResolveInteractionRequest": {
         "additionalProperties": false,

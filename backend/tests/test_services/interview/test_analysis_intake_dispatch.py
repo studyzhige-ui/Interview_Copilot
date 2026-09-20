@@ -107,7 +107,7 @@ def test_dispatch_success_leaves_record_pending_with_task_id(db_session, monkeyp
     monkeypatch.setattr(
         analysis_intake,
         "dispatch_interview_analysis",
-        lambda *a, **k: type("Task", (), {"id": "celery-task-9"})(),
+        lambda *a, **k: type("Task", (), {"id": k["task_id"]})(),
     )
 
     record, task = analysis_intake.create_record_and_dispatch(
@@ -121,6 +121,6 @@ def test_dispatch_success_leaves_record_pending_with_task_id(db_session, monkeyp
     )
 
     db_session.refresh(record)
-    assert task.id == "celery-task-9"
+    assert len(task.id) == 36
     assert record.status == STATUS_PENDING
-    assert record.celery_task_id == "celery-task-9"
+    assert record.celery_task_id == task.id

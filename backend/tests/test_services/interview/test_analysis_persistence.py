@@ -1,4 +1,8 @@
 import json
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from app.db.database import Base
 from importlib import import_module
 
 from app.models.interview_qa import InterviewQA
@@ -8,7 +12,19 @@ from app.models.user import User
 module = import_module("app.interviews.application.analysis_orchestrator")
 
 
-def test_persist_analysis_keeps_zero_and_null_distinct(db_session, monkeypatch):
+@pytest.fixture
+def analysis_db(tmp_path, monkeypatch):
+    engine = create_engine(f"sqlite:///{tmp_path / 'analysis.sqlite'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(module, "SessionLocal", factory)
+    with factory() as db:
+        yield db
+    engine.dispose()
+
+
+def test_persist_analysis_keeps_zero_and_null_distinct(analysis_db):
+    db_session = analysis_db
     user = User(username="analysis-owner", hashed_password="x")
     db_session.add(user)
     db_session.flush()
@@ -40,7 +56,6 @@ def test_persist_analysis_keeps_zero_and_null_distinct(db_session, monkeypatch):
         ]
     )
     db_session.commit()
-    monkeypatch.setattr(module, "SessionLocal", lambda: db_session)
 
     module.analysis_orchestrator._persist_analysis(
         record.id,
@@ -74,6 +89,7 @@ def test_persist_analysis_keeps_zero_and_null_distinct(db_session, monkeypatch):
         },
     )
 
+    db_session.expire_all()
     rows = (
         db_session.query(InterviewQA)
         .filter(InterviewQA.record_id == record.id)
