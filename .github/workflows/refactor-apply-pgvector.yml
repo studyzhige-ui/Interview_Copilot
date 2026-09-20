@@ -20,14 +20,14 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 2
-      - name: Validate exact source preimages and postimages without executing project code
+      - name: Validate exact Git blobs independent of checkout EOL conversion
         env:
           EXPECTED_EVENT_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_EVENT_SHA"
-          test "$(git rev-parse HEAD^)" = '5625487160760382f8960358997a934dd75b114a'
+          test "$(git rev-parse HEAD^)" = '1b5a944beb522d03cb4a2606601e274440e2d2f2'
           python - <<'PY'
           import bz2, hashlib, json, subprocess
           from pathlib import Path, PurePosixPath
@@ -53,10 +53,11 @@ jobs:
               path = root.joinpath(*relative.parts)
               if any(p.is_symlink() for p in (path, *path.parents)):
                   raise SystemExit('Source replacement refuses symbolic links')
-              before = path.read_bytes() if path.exists() else None
+              stored = subprocess.run(['git', 'show', 'HEAD:' + name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+              before = stored.stdout if stored.returncode == 0 else None
               actual = hashlib.sha256(before).hexdigest() if before is not None else None
               if actual != before_hash:
-                  raise SystemExit('Preimage mismatch: ' + name)
+                  raise SystemExit('Git preimage mismatch: ' + name)
               lines = (before or b'').decode('utf-8').splitlines(keepends=True)
               upper = len(lines)
               for start, stop, replacement in reversed(edits):
@@ -91,6 +92,6 @@ jobs:
           test "$(git ls-remote --heads origin "refs/heads/$branch" | cut -f1)" = "$EXPECTED_EVENT_SHA"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'refactor: replace Milvus with canonical tenant-filtered pgvector retrieval' -m 'Publish hash-verified source: atomic index publication, generation isolation, authorized SQL BM25 and dense retrieval, short ingestion transactions and source fencing, read-only-by-default rebuild plans, same-Alpine PostgreSQL extension image. Removes old Milvus runtime/dependencies; includes 9 real PostgreSQL contracts requiring fresh CI. No real model-quality or GPU completion claim.'
+          git commit -m 'refactor: replace Milvus with canonical tenant-filtered pgvector retrieval' -m 'Atomic index publication, generation isolation, authorized SQL BM25/dense retrieval, short ingestion transactions and source fences, bounded rebuild plans and same-Alpine PostgreSQL extension image. Removes old Milvus runtime/dependencies. Includes 9 real PostgreSQL contracts requiring fresh CI.'
           git push origin "HEAD:refs/heads/$branch"
           printf 'Published commit: `%s`\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
