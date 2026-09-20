@@ -22,7 +22,7 @@ from app.rag.domain.models import (
     EMPTY_CANONICAL_UNAVAILABLE,
     EMPTY_ALL_BELOW_THRESHOLD,
     EMPTY_ALL_FILTERED_LIVE_CHECK,
-    EMPTY_MILVUS_UNAVAILABLE,
+    EMPTY_INDEX_UNAVAILABLE,
     EMPTY_NO_CANDIDATES,
     EMPTY_PRINCIPAL_UNRESOLVED,
     EMPTY_RERANKER_UNAVAILABLE,
@@ -32,7 +32,7 @@ from app.rag.domain.models import (
     SearchIntent,
 )
 from app.rag.index.identity import (
-    active_knowledge_collection_name,
+    active_index_label,
     current_index_identity,
 )
 from app.rag.policy import current_rag_policy
@@ -134,7 +134,7 @@ class KnowledgeRetrievalPipeline:
         identity = current_index_identity()
         diagnostics: dict[str, Any] = {
             "index_fingerprint": identity.fingerprint,
-            "collection": active_knowledge_collection_name(),
+            "collection": active_index_label(),
             "intent_count": len(planned),
             "timings_ms": {},
         }
@@ -242,7 +242,7 @@ class KnowledgeRetrievalPipeline:
                 return self._empty(
                     EMPTY_CAPACITY_EXHAUSTED
                     if capacity_exhausted
-                    else EMPTY_MILVUS_UNAVAILABLE,
+                    else EMPTY_INDEX_UNAVAILABLE,
                     intents=planned,
                     degraded=True,
                     diagnostics={

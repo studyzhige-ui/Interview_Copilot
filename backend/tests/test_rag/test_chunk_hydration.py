@@ -52,6 +52,7 @@ def _seed_doc(
             storage_uri=f"s3://b/uploads/{user_id}/fa{suffix}/redis.pdf",
             content_type="application/pdf",
             size_bytes=1234,
+            upload_status="consumed",
         )
         db.add(asset)
         db.flush()
@@ -254,3 +255,25 @@ def test_owned_attachment_requires_explicit_scope_even_if_node_id_is_known(db):
 def test_hydration_never_has_an_unscoped_principal(db, principal):
     with pytest.raises(ValueError):
         hydrate_chunks(db, [], user_pk=principal)
+
+
+@pytest.mark.parametrize(
+    "state", ["pending_upload", "delete_pending", "deleted", "failed"]
+)
+def test_revoked_file_after_ranking_cannot_be_hydrated(db, state):
+    uid = _seed_user(db)
+    doc = _seed_doc(db, uid)
+    _seed_chunk(db, doc, uid, "revoke")
+    assert hydrate_chunks(db, ["revoke"], user_pk=uid)
+    db.get(FileAsset, doc.file_asset_id).upload_status = state
+    db.commit()
+    assert hydrate_chunks(db, ["revoke"], user_pk=uid) == []
+
+
+def test_deleted_file_after_ranking_cannot_be_hydrated(db):
+    uid = _seed_user(db)
+    doc = _seed_doc(db, uid)
+    _seed_chunk(db, doc, uid, "revoke")
+    db.get(FileAsset, doc.file_asset_id).deleted_at = datetime.now(UTC)
+    db.commit()
+    assert hydrate_chunks(db, ["revoke"], user_pk=uid) == []

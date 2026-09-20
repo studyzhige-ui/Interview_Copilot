@@ -22,7 +22,7 @@ class KnowledgeDocument(Base):
 
     id = Column(String, primary_key=True, default=generate_document_id)
     # Stable users.id FK (CLEANUP #2). The library API resolves the caller's
-    # username via resolve_user_pk; the same pk is the Milvus / document_chunks
+    # username via resolve_user_pk; the same pk is the retrieval projection / document_chunks
     # retrieval-scope key.
     user_id = Column(
         Integer,
@@ -65,14 +65,14 @@ class KnowledgeDocument(Base):
     # A same-dimension embedding-model change therefore becomes visible and
     # reindexable instead of silently mixing coordinate spaces.
     index_fingerprint = Column(String, nullable=True, index=True)
-    # Deletes go by document_id (milvus_hybrid.delete_by_field + the
+    # Deletes go by document_id (hybrid_index.delete_by_field + the
     # document_chunks rows) — nothing reads node ids back for deletion anymore.
     # ``ref_doc_ids`` records the LlamaIndex ref-doc ids from the last ingest as
     # a diagnostic/audit field; it is NOT read for retrieval or deletion.
     ref_doc_ids = Column(Text, default="[]", nullable=False)
     error_message = Column(Text, nullable=True)
     # Soft delete — read paths exclude deleted_at IS NOT NULL immediately, even
-    # before the async Milvus index delete completes.
+    # before the async retrieval projection index delete completes.
     deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)

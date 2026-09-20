@@ -1,17 +1,47 @@
-"""Canonical ingestion workflow, independent of Celery and HTTP entry points.
+"""Admission, preparation and fenced publication for a canonical source document.
 
-The worker supplies dispatch metadata and its attachment-resume composition port;
-this owner supplies authorization, parsing, indexing and terminal-state rules.
+Database transactions never span file download, parser or embedding work. The
+admitted source snapshot is propagated through every stage and checked again
+before terminal writes. A late worker cannot revive a deleted/replaced source.
 """
 
+from __future__ import annotations
+
 import logging
+import os
+from dataclasses import dataclass
 
 from app.core.async_runtime import run_async
 from app.core.error_messages import humanize_error
 from app.models.knowledge import KnowledgeDocument
+from app.rag.index.source import IndexSourceChanged, SourceSnapshot, source_snapshot
 
 logger = logging.getLogger(__name__)
 TRANSIENT_INGEST_ERRORS = (ConnectionError, TimeoutError, OSError)
+
+
+@dataclass(frozen=True)
+class _Input:
+    source: SourceSnapshot
+    purpose: str
+    file_id: str
+    filename: str
+    content_type: str | None
+    storage_uri: str
+    object_key: str
+
+
+def _current(db, document_id, expected):
+    doc = (
+        db.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.id == document_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if doc is None or source_snapshot(db, doc) != expected:
+        raise IndexSourceChanged("source changed during ingestion")
+    return doc
 
 
 def execute_ingestion(
@@ -23,250 +53,178 @@ def execute_ingestion(
     session_factory,
     wake_attachment_turns,
 ):
-    """Download an uploaded document if needed and ingest it into Milvus.
-
-    Idempotency contract:
-      * status='ready' (already ingested) → skip.
-      * status='processing'/'failed' → fresh attempt. Re-ingest is safe:
-        ``_index_nodes`` replaces this document's prior chunks (write_chunks
-        deletes by document_id) and Milvus rows (delete-by-document_id before
-        insert), so a retry never accumulates duplicate chunks.
-    """
-    import os
-
     from app.core.runtime_files import create_runtime_temp_file
     from app.core.storage import download_file_from_s3
     from app.rag.cleaning import EmptyContentError
     from app.rag.embedding_registry import EmbeddingValidationError
     from app.rag.ingest.pipeline import ingest_document, ingest_transcript
-    from app.rag.application.library.document_formats import UnsupportedDocumentFormat
     from app.rag.application.library.document_formats import (
+        UnsupportedDocumentFormat,
         validate_knowledge_document_format,
     )
     from app.rag.application.library.knowledge_service import dump_json_list
+    from app.usage.runtime import for_owner
 
-    db = session_factory()
-    document = None
-    local_file_path = None
-    is_temp_file = False
-    usage_token = None
+    def finish(status, error=None, result=None):
+        with session_factory() as db:
+            doc = _current(db, document_id, prepared.source)
+            doc.status, doc.error_message = status, error
+            if result is not None:
+                doc.chunk_count = int(result.get("chunk_count") or 0)
+                doc.ref_doc_ids = dump_json_list(result.get("ref_doc_ids") or [])
+                doc.content_text = result.get("content_text")
+            db.commit()
+            # Load scalar identity before closing; notification owns its transaction.
+            _ = doc.id, doc.source_kind
+            db.expunge(doc)
+        return wake_attachment_turns(doc) if status in {"ready", "failed"} else []
 
+    prepared = None
+    path = None
     try:
-        document = (
-            db.query(KnowledgeDocument)
-            .filter(KnowledgeDocument.id == document_id)
-            .first()
-        )
-        if document is None:
-            return {
-                "status": "failed",
-                "error": f"Knowledge document not found: {document_id}",
-            }
-        # document.user_id is the stable users.id (CLEANUP #2), as is the
-        # FileAsset's — compare directly + use it for the pk-namespaced
-        # object_key prefix below. The Milvus / document_chunks index now keys on
-        # the stable users.id (CLEANUP #2) — which is exactly document.user_id —
-        # so the pk goes straight to the ingest call (no pk->username bridge).
-        owner_pk = document.user_id
-        from app.usage.runtime import bind
-
-        usage_token = bind(owner_pk, f"ingest:{document_id}:{task_id}")
-        if not document.upload or document.upload.user_id != owner_pk:
-            raise ValueError("Knowledge upload owner does not match document owner")
-        upload_purpose = document.upload.purpose
-        if upload_purpose not in {"knowledge_document", "interview_audio"}:
+        with session_factory() as db:
+            doc = db.get(KnowledgeDocument, document_id)
+            if doc is None:
+                return {
+                    "status": "failed",
+                    "error": f"Knowledge document not found: {document_id}",
+                }
+            if doc.deleted_at is not None or doc.status not in {"processing", "failed"}:
+                _ = doc.id, doc.source_kind, doc.status
+                db.expunge(doc)
+                return {
+                    "status": "skipped",
+                    "document_id": document_id,
+                    "current_status": doc.status,
+                    "resumed_turn_ids": wake_attachment_turns(doc),
+                }
+            if doc.task_id and task_id and doc.task_id != task_id:
+                raise IndexSourceChanged("task superseded before ingestion")
+            snapshot = source_snapshot(db, doc)
+            asset = doc.upload
+            if asset is None or asset.user_id != doc.user_id:
+                raise ValueError("Knowledge upload owner does not match document owner")
+            prepared = _Input(
+                snapshot,
+                asset.purpose,
+                asset.id,
+                asset.original_filename,
+                asset.content_type,
+                doc.storage_uri or "",
+                doc.object_key or "",
+            )
+        # No Session or checked-out database connection during slow work.
+        if prepared.purpose not in {"knowledge_document", "interview_audio"}:
             raise ValueError("Attachment upload has invalid purpose")
         if (
-            upload_purpose == "interview_audio"
-            and document.source_kind != "chat_attachment"
+            prepared.purpose == "interview_audio"
+            and snapshot.source_kind != "chat_attachment"
         ):
             raise ValueError("Audio transcription is only valid for chat attachments")
-        if document.status not in {"processing", "failed"}:
-            return {
-                "status": "skipped",
-                "document_id": document_id,
-                "current_status": document.status,
-                "resumed_turn_ids": wake_attachment_turns(document),
-            }
-
-        # Defensive format re-check (ingestion §4.1.2) — the API already
-        # gated this, but a stale dispatch or a direct DB insert must not
-        # reach the parser with an unsupported format. Raises
-        # UnsupportedDocumentFormat (a permanent error) handled below.
-        if upload_purpose == "knowledge_document":
-            validate_knowledge_document_format(
-                document.upload.original_filename,
-                document.upload.content_type,
-            )
-
-        if not document.storage_uri.startswith("s3://"):
+        if prepared.purpose == "knowledge_document":
+            validate_knowledge_document_format(prepared.filename, prepared.content_type)
+        if not prepared.storage_uri.startswith("s3://"):
             raise ValueError("Knowledge ingestion only accepts owned S3 uploads")
+        prefix = f"uploads/{snapshot.user_id}/{prepared.file_id}/"
+        from app.core.storage import parse_s3_uri
 
-        expected_prefix = f"uploads/{owner_pk}/{document.file_asset_id}/"
-        if not document.object_key.startswith(expected_prefix):
+        _, storage_key = parse_s3_uri(prepared.storage_uri)
+        if (
+            not prepared.object_key.startswith(prefix)
+            or storage_key != prepared.object_key
+        ):
             raise ValueError("Knowledge upload object key does not match owner prefix")
-
-        logger.info("[Task %s] Downloading S3 document for RAG ingestion.", task_id)
-        _, ext = os.path.splitext(document.object_key)
-        local_file_path = create_runtime_temp_file(suffix=ext)
-
-        try:
-            download_file_from_s3(document.storage_uri, local_file_path)
-            is_temp_file = True
-            logger.info("[Task %s] Document downloaded to %s", task_id, local_file_path)
-        except Exception:
-            if os.path.exists(local_file_path):
-                os.unlink(local_file_path)
-            raise
-
-        if upload_purpose == "interview_audio":
-            from app.media.application.audio_transcription_service import (
-                transcribe_media,
+        path = create_runtime_temp_file(suffix=os.path.splitext(prepared.object_key)[1])
+        with for_owner(snapshot.user_id, operation=f"ingest:{document_id}:{task_id}"):
+            download_file_from_s3(prepared.storage_uri, path)
+            # Reject a concurrent edit before paying for ASR/parser/embedding.
+            with session_factory() as db:
+                _current(db, document_id, snapshot)
+            common = dict(
+                document_id=document_id,
+                upload_id=prepared.file_id,
+                expected_source=snapshot,
             )
-
-            logger.info(
-                "[Task %s] Transcribing Conversation audio attachment.",
-                task_id,
-            )
-            transcript = run_async(transcribe_media(local_file_path, language=None))
-            result = run_async(
-                ingest_transcript(
-                    transcript,
-                    document.source_kind,
-                    owner_pk,
-                    document_id=document.id,
-                    upload_id=document.file_asset_id,
+            if prepared.purpose == "interview_audio":
+                from app.media.application.audio_transcription_service import (
+                    transcribe_media,
                 )
-            )
-        else:
-            logger.info("[Task %s] Starting document ingestion.", task_id)
-            result = run_async(
-                ingest_document(
-                    local_file_path,
-                    document.source_kind,
-                    owner_pk,
-                    document_id=document.id,
-                    upload_id=document.file_asset_id,
-                    # Chat attachments remain conversation-scoped Postgres facts.
-                    # They are supplied through the shared Source Resolver and must
-                    # never compete in the user's global Milvus knowledge index.
-                    index_document=document.source_kind != "chat_attachment",
+
+                transcript = run_async(transcribe_media(path, language=None))
+                result = run_async(
+                    ingest_transcript(
+                        transcript, snapshot.source_kind, snapshot.user_id, **common
+                    )
                 )
-            )
-
-        if result and result.get("success"):
-            document.chunk_count = int(result.get("chunk_count") or 0)
-            document.ref_doc_ids = dump_json_list(result.get("ref_doc_ids") or [])
-            document.content_text = result.get("content_text")
-            if result.get("indexed", True):
-                document.status = "ready"
-                document.error_message = None
-                db.add(document)
-                db.commit()
-                logger.info("[Task %s] Document ingestion completed.", task_id)
-                return {
-                    "status": "success",
-                    "document_id": document_id,
-                    "resumed_turn_ids": wake_attachment_turns(document),
-                }
-            # Facts are saved but the Milvus write was queued for outbox retry
-            # (Milvus was down). Stay 'processing' until the index lands — the
-            # milvus_upsert_document handler flips this to ready (or to failed if
-            # its retries exhaust), so the doc never stalls (plan §4.6.3 / C2).
-            document.status = "processing"
-            document.error_message = "向量索引暂时不可用，正在后台重试，稍后可用。"
-            db.add(document)
-            db.commit()
-            logger.warning(
-                "[Task %s] Facts saved; Milvus write queued for retry.", task_id
-            )
-            return {"status": "indexing_queued", "document_id": document_id}
-
-        document.status = "failed"
-        document.error_message = "Empty or unparseable document"
-        db.add(document)
-        db.commit()
-        logger.warning("[Task %s] Document was empty or unparseable.", task_id)
-        return {
-            "status": "failed",
-            "error": "Empty or unparseable document",
-            "resumed_turn_ids": wake_attachment_turns(document),
+            else:
+                result = run_async(
+                    ingest_document(
+                        path,
+                        snapshot.source_kind,
+                        snapshot.user_id,
+                        index_document=snapshot.source_kind != "chat_attachment",
+                        **common,
+                    )
+                )
+        if not result or not result.get("success"):
+            resumed = finish("failed", "Empty or unparseable document")
+            return {
+                "status": "failed",
+                "error": "Empty or unparseable document",
+                "resumed_turn_ids": resumed,
+            }
+        indexed = result.get("indexed", True)
+        resumed = finish(
+            "ready" if indexed else "processing",
+            None if indexed else "向量索引暂时不可用，正在后台重试，稍后可用。",
+            result,
+        )
+        response = {
+            "status": "success" if indexed else "indexing_queued",
+            "document_id": document_id,
         }
-
+        if indexed:
+            response["resumed_turn_ids"] = resumed
+        return response
+    except IndexSourceChanged:
+        logger.info("Discarded superseded ingestion for document %s", document_id)
+        return {"status": "superseded", "document_id": document_id}
     except (
         UnsupportedDocumentFormat,
         EmptyContentError,
         EmbeddingValidationError,
     ) as exc:
-        # Permanent content/format/embedding error (unsupported format, S0
-        # cleaning left no usable text, or a dimension/count mismatch that no
-        # retry can fix) — friendly Chinese message, NO retry. document is
-        # guaranteed bound here (raised after the None check above).
-        document.status = "failed"
-        document.error_message = str(exc)[:500]
-        db.add(document)
-        db.commit()
-        logger.warning("[Task %s] Permanent ingest rejection: %s", task_id, exc)
+        try:
+            resumed = finish("failed", str(exc)[:500]) if prepared else []
+        except IndexSourceChanged:
+            return {"status": "superseded", "document_id": document_id}
         return {
             "status": "failed",
             "error": str(exc),
             "document_id": document_id,
-            "resumed_turn_ids": wake_attachment_turns(document),
+            "resumed_turn_ids": resumed,
         }
-
     except Exception as exc:
-        # Distinguish mid-retry vs final-attempt the same way
-        # process_interview_analysis does. Mid-retry: a transient
-        # status='failed' would make the UI flash "failed" between
-        # retries; tag it as "retrying" instead so the user sees a
-        # consistent in-progress signal until we give up for good.
-        retries_left = max(0, (max_retries or 0) - retries)
-        will_retry = isinstance(exc, TRANSIENT_INGEST_ERRORS) and retries_left > 0
-        if document is not None:
-            try:
-                if not will_retry:
-                    document.status = "failed"
-                    # Humanize the terminal user-facing message (e.g. a 402
-                    # balance error during embedding); raw detail is logged.
-                    document.error_message = f"导入失败：{humanize_error(exc)}"[:500]
-                else:
-                    # Don't mark as terminal "failed" mid-retry — leave
-                    # status='processing' (the prior set_status from line
-                    # 144's gate) and surface the latest error message
-                    # for debug visibility.
-                    document.error_message = (
-                        f"Attempt {retries + 1} crashed; will retry. "
-                        f"{type(exc).__name__}: {exc}"
-                    )[:500]
-                db.add(document)
-                db.commit()
-                if not will_retry:
-                    wake_attachment_turns(document)
-            except Exception as recovery_exc:  # noqa: BLE001
-                logger.error(
-                    "Failed to update document %s status after task crash: %s",
-                    document.id,
-                    recovery_exc,
-                )
-        logger.error(
-            "[Task %s] RAG ingestion task failed (attempt %d/%d): %s",
-            task_id,
-            retries + 1,
-            max_retries + 1,
-            exc,
+        will_retry = isinstance(exc, TRANSIENT_INGEST_ERRORS) and retries < (
+            max_retries or 0
         )
+        if prepared:
+            try:
+                finish(
+                    "processing" if will_retry else "failed",
+                    (
+                        f"Attempt {retries + 1} will retry: {humanize_error(exc)}"
+                        if will_retry
+                        else f"导入失败：{humanize_error(exc)}"
+                    )[:500],
+                )
+            except (IndexSourceChanged, PermissionError):
+                return {"status": "superseded", "document_id": document_id}
+            except Exception:
+                logger.exception(
+                    "Could not persist ingestion failure for %s", document_id
+                )
         raise
-
     finally:
-        if usage_token is not None:
-            from app.usage.runtime import reset
-
-            reset(usage_token)
-        if is_temp_file and os.path.exists(local_file_path):
-            os.unlink(local_file_path)
-            logger.info(
-                "[Task %s] Removed temporary document: %s",
-                task_id,
-                local_file_path,
-            )
-        db.close()
+        if path and os.path.exists(path):
+            os.unlink(path)

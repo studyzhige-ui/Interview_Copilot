@@ -26,7 +26,7 @@ from app.models.conversation_turn import ConversationTurn
 from app.models.file_asset import FileAsset
 from app.schemas.artifact import ArtifactProvenanceInput, ArtifactWriteInput
 from app.files.application.file_asset_service import READABLE_UPLOAD_STATUSES
-from app.files.application.file_asset_service import file_asset_version_token
+from app.files.identity import file_asset_version_token
 
 OwnerChecker: TypeAlias = Callable[[Session, int, str, str], bool]
 SubmissionProofChecker: TypeAlias = Callable[[Session, int, str, str, str, str], bool]

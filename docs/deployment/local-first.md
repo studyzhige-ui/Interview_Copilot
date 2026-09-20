@@ -129,3 +129,57 @@ Official references checked 2026-09-20:
 - [SentenceTransformer local loading](https://sbert.net/docs/package_reference/sentence_transformer/model.html).
 - [CrossEncoder loading and inference](https://sbert.net/docs/package_reference/cross_encoder/model.html).
 - [faster-whisper local models and lazy transcription](https://github.com/SYSTRAN/faster-whisper).
+
+
+## P3：PostgreSQL + pgvector 迁移与完整性（2026-09-20）
+
+生产检索默认只有 PostgreSQL/pgvector，一个数据库保存权威资料与可重建投影。
+`retrieval_generations` 保存完整语义身份，`retrieval_entries` 保存向量、词频和范围。
+不是仅比较维数；同维模型、切分、解析、前缀或词法合同变化会产生新代次。
+发布替换、块状态及文档索引指纹同事务提交；模型调用发生在事务外。
+源资料在解析/Embedding期间改变时，旧任务不能发布；删除与替换按文档行锁串行。
+查询在排名与BM25语料统计之前复核文档、块和文件的用户、状态与代次；
+私有会话附件不进入共享索引。召回后的正文授权复核继续保留。
+
+### 搜索质量和资源边界
+
+稠密检索先采用**有界精确搜索**，不是给小型单机默认叠加HNSW参数。
+词法路径使用版本化中文单字/双字和保留技术标识符的BM25；它不是PostgreSQL
+`ts_rank`冒充BM25，也不声称与原Milvus/jieba分词等价。范围内统计不混入其他用户。
+保留既有BGE Embedding/重排作为对照；本次模型权重与阈值不变。
+语义质量是否无回退必须用原有带证据标注的数据集对照，数据库正确性测试不能代替它。
+`RAG_INDEX_STATEMENT_TIMEOUT_MS`、`RAG_INDEX_LOCK_TIMEOUT_MS`、文档块数、查询字节和
+返回条数都有边界；超过容量明确报不可用，不把未完成查询当作没有资料。
+
+### 现有数据库与旧索引
+
+Compose的数据库基于原 `postgres:15.18-alpine`，只添加从官方精确提交
+`8ee86c96f0fd72390f890aa8a336fda6d3ab4c6c` 构建的pgvector0.8.6。保留原 `pgdata`
+卷和PostgreSQL主版本/系统库家族，不自动搬到Debian或新空卷。
+升级前备份PostgreSQL和原始文件；暂停API/Worker/Beat后统一升级代码与数据库，
+不支持旧Milvus Worker和新Worker混跑。`0056`不调用模型、不清空原始资料，也不读取
+或删除旧Milvus卷；旧outbox行只改分派类型，保留身份和幂等键。
+移除的是Milvus/etcd/专用MinIO的默认运行服务，不是用户旧磁盘数据。
+不要使用 `docker compose down -v` 当作升级命令。
+
+已发布的旧索引不会因为迁移建表就冒称可查询；后台代次对账会将可重建资料送入
+既有outbox。操作员也可先运行只读计划：
+
+```bash
+python scripts/reingest_hybrid.py --limit 100
+python scripts/reingest_hybrid.py --user 1 --limit 100
+# 核对范围后才明确执行；这会加载本地Embedding，或按当前配置调用远端模型。
+python scripts/reingest_hybrid.py --user 1 --limit 100 --execute
+# 使用计划返回的游标继续有限批次；不支持清空全部索引的 --drop。
+python scripts/reingest_hybrid.py --user 1 --after <document-id> --limit 100 --execute
+python scripts/consistency_scan.py
+```
+
+手动重建适用于已有规范块；没有任何解析块的资料仍通过正常导入流程重试，
+不把空资料伪装成一次成功恢复。旧外部索引与快照保留到质量对照和回退验收之后。
+已有投影数据时降级迁移要求先备份，不自动销毁；迁移失败保持原始资料。
+
+官方依据：pgvector的精确距离、不同维数列、Docker和构建说明
+https://github.com/pgvector/pgvector ；Python/SQLAlchemy类型
+https://github.com/pgvector/pgvector-python ；事务与行锁
+https://www.postgresql.org/docs/current/explicit-locking.html 。

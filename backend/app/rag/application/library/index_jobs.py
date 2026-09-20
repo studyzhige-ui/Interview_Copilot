@@ -1,16 +1,8 @@
-"""Durable job producers for the Milvus knowledge index.
+"""Durable PostgreSQL projection rebuild/cleanup intents.
 
-The knowledge document delete / reindex paths enqueue these in the SAME
-transaction as the Postgres state change; the outbox worker drains them,
-applying the Milvus side effect with retry/backoff. Keeping Milvus out of the
-business transaction means a Milvus outage delays index cleanup, never blocks
-(or silently corrupts) the delete — and the read path stays correct because
-visibility is decided by Postgres document/chunk state, not by Milvus.
-
-Reuses the shared ``OutboxJob`` / ``outbox_service`` infrastructure (no new
-table, no second retry framework). Convention: ``aggregate_id = document_id``.
-
-Worker-side handlers live in ``app.worker.outbox_handlers.knowledge``.
+Enqueued in the same transaction as source edits. Models run outside business
+transactions; the resulting projection and index fingerprint publish atomically.
+The existing outbox owns retry and dead-letter state; no second task system.
 """
 
 from __future__ import annotations
@@ -19,12 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.platform.outbox import enqueue_job
 
-JOB_MILVUS_DELETE = "milvus_delete_document"
-JOB_MILVUS_UPSERT = "milvus_upsert_document"
+JOB_RETRIEVAL_DELETE = "retrieval_delete_document"
+JOB_RETRIEVAL_UPSERT = "retrieval_upsert_document"
 
 
-def enqueue_milvus_delete(db: Session, *, user_pk: int, document_id: str) -> None:
-    """Queue a reliable Milvus row delete for a document (caller commits).
+def enqueue_retrieval_delete(db: Session, *, user_pk: int, document_id: str) -> None:
+    """Queue a reliable retrieval row delete for a document (caller commits).
 
     Idempotency-keyed per document so duplicate enqueues coalesce: a document is
     deleted once, so a single delete job per ``document_id`` is sufficient. No
@@ -35,29 +27,29 @@ def enqueue_milvus_delete(db: Session, *, user_pk: int, document_id: str) -> Non
     enqueue_job(
         db,
         user_pk=user_pk,
-        job_type=JOB_MILVUS_DELETE,
+        job_type=JOB_RETRIEVAL_DELETE,
         aggregate_type="knowledge_document",
         aggregate_id=document_id,
         payload={"user_id": user_pk},
-        idempotency_key=f"{JOB_MILVUS_DELETE}:{document_id}",
+        idempotency_key=f"{JOB_RETRIEVAL_DELETE}:{document_id}",
     )
 
 
-def enqueue_milvus_upsert(
+def enqueue_retrieval_upsert(
     db: Session,
     *,
     user_pk: int,
     document_id: str,
     idempotency_key: str | None = None,
 ) -> None:
-    """Queue a Milvus index (re)build for a document whose ingest-time write
-    failed (caller commits). No idempotency_key — unlike delete this is
-    repeatable across re-ingests, and the handler (rebuild-from-facts) is itself
+    """Queue a retrieval index (re)build for a document whose ingest-time write
+    failed (caller commits). An optional caller-supplied idempotency key distinguishes rebuild campaigns.
+    Unlike deletion, reindexing is repeatable across re-ingests, and the handler (rebuild-from-facts) is itself
     idempotent, so an occasional duplicate run is harmless."""
     enqueue_job(
         db,
         user_pk=user_pk,
-        job_type=JOB_MILVUS_UPSERT,
+        job_type=JOB_RETRIEVAL_UPSERT,
         aggregate_type="knowledge_document",
         aggregate_id=document_id,
         idempotency_key=idempotency_key,
@@ -65,8 +57,8 @@ def enqueue_milvus_upsert(
 
 
 __all__ = [
-    "JOB_MILVUS_DELETE",
-    "JOB_MILVUS_UPSERT",
-    "enqueue_milvus_delete",
-    "enqueue_milvus_upsert",
+    "JOB_RETRIEVAL_DELETE",
+    "JOB_RETRIEVAL_UPSERT",
+    "enqueue_retrieval_delete",
+    "enqueue_retrieval_upsert",
 ]

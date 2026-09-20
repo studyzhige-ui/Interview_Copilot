@@ -230,7 +230,7 @@ class InterviewAnalysisOrchestrator:
         to WhisperX. ``"auto"`` becomes ``None`` (let Whisper detect)
         inside the transcription service.
         """
-        from app.files.application.file_asset_service import file_asset_version_token
+        from app.files.identity import file_asset_version_token
         from app.media.application.audio_transcription_service import (
             transcribe_interview_evidence,
         )

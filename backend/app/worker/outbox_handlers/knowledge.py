@@ -3,12 +3,12 @@
 from sqlalchemy.orm import Session
 
 from app.models.outbox_job import OutboxJob
-from app.rag.application.library.index_jobs import JOB_MILVUS_DELETE
-from app.rag.application.library.index_jobs import JOB_MILVUS_UPSERT
+from app.rag.application.library.index_jobs import JOB_RETRIEVAL_DELETE
+from app.rag.application.library.index_jobs import JOB_RETRIEVAL_UPSERT
 from app.platform.outbox import register_handler
 
 
-def handle_milvus_upsert(db: Session, job: OutboxJob) -> None:
+def handle_retrieval_upsert(db: Session, job: OutboxJob) -> None:
     from app.rag.index.knowledge import reindex_document
     from app.rag.application.library.knowledge_service import mark_document_index_failed
     from app.rag.application.library.knowledge_service import (
@@ -17,7 +17,7 @@ def handle_milvus_upsert(db: Session, job: OutboxJob) -> None:
 
     document_id = job.aggregate_id
     if not document_id:
-        raise ValueError(f"{JOB_MILVUS_UPSERT}: job {job.id} has no document id")
+        raise ValueError(f"{JOB_RETRIEVAL_UPSERT}: job {job.id} has no document id")
     from app.models.knowledge import KnowledgeDocument
 
     owner = (
@@ -31,10 +31,13 @@ def handle_milvus_upsert(db: Session, job: OutboxJob) -> None:
     is_generation_job = bool(
         idempotency_key and idempotency_key.startswith("rag-generation:")
     )
+    max_attempts = job.max_attempts
+    attempts = job.attempts
+    db.rollback()  # read-only owner lookup; do not retain a connection across ML
     try:
-        reindex_document(db, document_id)
+        reindex_document(document_id)
     except Exception:
-        if job.attempts + 1 >= job.max_attempts:
+        if attempts + 1 >= max_attempts:
             mark_document_index_failed(
                 db,
                 document_id,
@@ -45,19 +48,19 @@ def handle_milvus_upsert(db: Session, job: OutboxJob) -> None:
     mark_document_indexed_ready(db, document_id)
 
 
-def handle_milvus_delete(db: Session, job: OutboxJob) -> None:
-    from app.rag import milvus_hybrid
+def handle_retrieval_delete(db: Session, job: OutboxJob) -> None:
+    from app.rag import hybrid_index
 
     document_id = job.aggregate_id
     if not document_id:
-        raise ValueError(f"{JOB_MILVUS_DELETE}: job {job.id} has no document id")
+        raise ValueError(f"{JOB_RETRIEVAL_DELETE}: job {job.id} has no document id")
     payload = job.payload_json or {}
     if payload.get("user_id") != job.user_id:
         raise PermissionError("knowledge-index job owner does not match payload owner")
-    milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document_id)
+    hybrid_index.delete_by_field("document_id", document_id, user_pk=job.user_id)
 
 
-register_handler(JOB_MILVUS_UPSERT, handle_milvus_upsert)
-register_handler(JOB_MILVUS_DELETE, handle_milvus_delete)
+register_handler(JOB_RETRIEVAL_UPSERT, handle_retrieval_upsert)
+register_handler(JOB_RETRIEVAL_DELETE, handle_retrieval_delete)
 
-__all__ = ["handle_milvus_delete", "handle_milvus_upsert"]
+__all__ = ["handle_retrieval_delete", "handle_retrieval_upsert"]

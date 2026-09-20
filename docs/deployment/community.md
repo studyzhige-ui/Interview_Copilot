@@ -11,7 +11,7 @@ database schema, and `data/` layout.
 ## Host development mode
 
 Use this mode to read, debug, test, or modify the source. Python, Celery, and
-Vite run on the host; Docker Compose runs PostgreSQL, Redis, MinIO, and Milvus.
+Vite run on the host; Docker Compose runs PostgreSQL/pgvector, Redis, and MinIO.
 
 Requirements:
 
@@ -103,7 +103,7 @@ docker compose --profile full down
 ```
 
 Application runtime data and model caches are mounted at `./data`; database,
-Redis, MinIO, and Milvus state use named Docker volumes. `docker compose down`
+Redis and MinIO state use named Docker volumes. `docker compose down`
 preserves them. Adding `--volumes` permanently removes database and service
 state and must only be used for an intentional reset.
 
@@ -157,7 +157,7 @@ All application-managed files live under the ignored `data/` tree:
 | `tmp/` | Document/audio downloads and parser conversions | Deleted after each operation; crash leftovers older than 24 hours are swept daily |
 | `backups/`, `evaluation/`, `release/` | Explicit operator command output | Created only when the corresponding script is run |
 
-PostgreSQL, Redis, MinIO, and Milvus data use named Docker volumes rather than
+PostgreSQL/pgvector, Redis, and MinIO data use named Docker volumes rather than
 arbitrary source folders. `docker compose down` keeps them; `down --volumes`
 deletes them. Cache cleanup is intentionally manual: stop application workers,
 then remove only the unused model directory under `data/cache`.
@@ -201,8 +201,10 @@ Before upgrading:
 4. Let setup/the Compose `migrate` service apply `alembic upgrade head`.
 5. Run the smoke test.
 
-Embedding model or dimension changes require rebuilding the affected Milvus
-collections with `python scripts/reingest_hybrid.py`.
+Embedding model, revision, dimension or index-contract changes require a new
+semantic generation. `python scripts/reingest_hybrid.py` is a read-only plan;
+pass `--execute` explicitly after checking its scope and follow the returned cursor.
+For existing databases, see [the non-destructive pgvector migration procedure](local-first.md#p3postgresql--pgvector-迁移与完整性2026-09-20).
 
 The optional quality harness is documented in
 [`evaluation/README.md`](../../evaluation/README.md). Its code and example

@@ -508,3 +508,13 @@ Session 与事务在单一执行上下文使用；网络发送在事务外；消
 `python scripts/export_shared_contracts.py --check`、前端生成协议检查、
 TypeScript/ESLint/Vitest/生产构建。准确的命令、环境、跳过清单、JUnit
 与源码哈希在恢复包中记录，不将旧 PR 的通过数字复制到新补丁。
+
+
+### 2026-09-20 P3 / PostgreSQL retrieval convergence
+
+已实现的代码：pgvector完整语义代次、范围内BM25、权威三层权限过滤、原子投影发布、
+解析/Embedding源版本校验、无副作用计划CLI、既有outbox迁移、固定扩展构建。
+不保留Milvus客户端或双默认实现；文件/资料权威层及旧磁盘不删除。
+真实PostgreSQL新测试覆盖距离、BM25对照、租户隔离、源修改、回滚、锁竞争、超时与迁移。
+测试状态以本次CI实际JUnit为准；本条记录不是实机GPU或真实检索质量通过声明。
+P2统一GPU调度、P4长音频功能增强、P6实时语音及其余功能继续单独登记，不外推完成。

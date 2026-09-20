@@ -28,7 +28,7 @@ from app.models.interview_record import InterviewRecord
 from app.models.interview_source import InterviewSourceRef
 from app.models.knowledge import KnowledgeDocument
 from app.models.pending_submission import PendingSubmission
-from app.files.application.file_asset_service import file_asset_version_token
+from app.files.identity import file_asset_version_token
 
 AttachmentProcessingStatus = Literal["processing", "ready", "failed"]
 AttachmentSourceKind = Literal[

@@ -257,7 +257,7 @@ def test_enqueue_job_coalesces_immediate_wakeup_by_resource_lane(db_session):
     outbox_service.enqueue_job(
         db_session,
         user_pk=user.id,
-        job_type="milvus_upsert_document",
+        job_type="retrieval_upsert_document",
     )
 
     assert db_session.info["outbox_wakeup_lanes"] == {"cleanup", "index"}
@@ -348,7 +348,7 @@ def test_run_due_outbox_jobs_claims_only_requested_resource_class(
 ):
     user = _make_user(db_session)
     db_session.commit()
-    for job_type in ("delete_object", "milvus_upsert_document"):
+    for job_type in ("delete_object", "retrieval_upsert_document"):
         outbox_service.enqueue_job(
             db_session,
             user_pk=user.id,
@@ -373,7 +373,7 @@ def test_run_due_outbox_jobs_claims_only_requested_resource_class(
     statuses = {job.job_type: job.status for job in db_session.query(OutboxJob).all()}
     assert statuses == {
         "delete_object": "succeeded",
-        "milvus_upsert_document": "pending",
+        "retrieval_upsert_document": "pending",
     }
 
 

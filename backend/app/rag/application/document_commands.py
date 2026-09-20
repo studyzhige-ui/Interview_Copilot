@@ -152,9 +152,9 @@ def update_document(
     ):
         # The title is part of the retrieval passage. Publish its new index view
         # through the same durable outbox as every other external-index update.
-        from app.rag.application.library.index_jobs import enqueue_milvus_upsert
+        from app.rag.application.library.index_jobs import enqueue_retrieval_upsert
 
-        enqueue_milvus_upsert(
+        enqueue_retrieval_upsert(
             db,
             user_pk=document.user_id,
             document_id=document.id,

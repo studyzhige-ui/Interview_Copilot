@@ -18,7 +18,7 @@ from app.rag.retrieval.reranking import select_coverage_aware
 
 @pytest.mark.asyncio
 async def test_candidate_search_runs_lexical_once_and_dense_per_variant(monkeypatch):
-    from app.rag import milvus_hybrid
+    from app.rag import hybrid_index
     from app.rag.retrieval import candidates
 
     calls: list[tuple[str, str]] = []
@@ -51,7 +51,7 @@ async def test_candidate_search_runs_lexical_once_and_dense_per_variant(monkeypa
         ),
     )
 
-    def sparse(_collection, *, query_text, **_kwargs):
+    def sparse(*, query_text, **_kwargs):
         calls.append(("sparse", query_text))
         return [
             {
@@ -62,7 +62,7 @@ async def test_candidate_search_runs_lexical_once_and_dense_per_variant(monkeypa
             }
         ]
 
-    def dense(_collection, *, query_dense, **_kwargs):
+    def dense(*, query_dense, **_kwargs):
         calls.append(("dense", str(query_dense)))
         return [
             {
@@ -73,8 +73,8 @@ async def test_candidate_search_runs_lexical_once_and_dense_per_variant(monkeypa
             }
         ]
 
-    monkeypatch.setattr(milvus_hybrid, "sparse_search", sparse)
-    monkeypatch.setattr(milvus_hybrid, "dense_search", dense)
+    monkeypatch.setattr(hybrid_index, "sparse_search", sparse)
+    monkeypatch.setattr(hybrid_index, "dense_search", dense)
     intent = SearchIntent(
         intent_id="I1",
         query="缓存雪崩",
@@ -303,7 +303,7 @@ async def test_pipeline_reranker_failure_fails_closed(monkeypatch):
 async def test_candidate_fusion_does_not_mask_consumption_errors(
     monkeypatch, error_type
 ):
-    from app.rag import milvus_hybrid
+    from app.rag import hybrid_index
     from app.rag.retrieval import candidates
 
     error = error_type("synthetic consumption boundary")
@@ -318,7 +318,7 @@ async def test_candidate_fusion_does_not_mask_consumption_errors(
         return [{"id": "n1", "text": "real lexical candidate", "user_id": 7}]
 
     monkeypatch.setattr(candidates, "_query_embedding", embedding)
-    monkeypatch.setattr(milvus_hybrid, "sparse_search", sparse)
+    monkeypatch.setattr(hybrid_index, "sparse_search", sparse)
     with pytest.raises(error_type) as caught:
         await candidates.search_intent_candidates(
             SearchIntent(query="redis"), user_pk=7, source_kind=None, candidate_count=10

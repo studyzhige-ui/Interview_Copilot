@@ -2,7 +2,7 @@
 
 There is one write order for file uploads, text documents, and reindex jobs:
 parse → quality gate → chunk → stable ids → embed → pending facts → versioned
-Milvus rows → atomic Postgres publication.
+PostgreSQL projection and publication in one transaction.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from app.rag.chunking import chunk_document
 from app.rag.cleaning import EmptyContentError, canonicalize_document
 from app.rag.documents import ParsedDocument, ParsedPage
 from app.rag.index.knowledge import replace_document_rows
-from app.rag.index.publication import publish_document
 from app.rag.ingest.embedding import (
     build_retrieval_passages,
     drop_blank_nodes,
@@ -66,8 +65,12 @@ def _persist_nodes(
     document_title_loader=_document_title,
     assign_stable_ids: bool = True,
     index_document: bool = True,
+    source_snapshot=None,
 ) -> dict[str, Any]:
     from app.rag.document_chunk_service import write_chunks
+    from app.rag.index.source import capture_source
+
+    snapshot = source_snapshot or capture_source(document_id, user_id, source_kind)
 
     if assign_stable_ids:
         _stamp_stable_ids(nodes, document_id)
@@ -75,9 +78,9 @@ def _persist_nodes(
     if not index_document:
         # Conversation attachments are private facts, not global knowledge.
         # Persist their parsed chunks for exact reads / per-turn grounding, but
-        # never embed or publish them into the user's Milvus collection. A
+        # never embed or publish them into the user's shared retrieval corpus. A
         # read-time post-filter would be too late: private rows could already
-        # have displaced library candidates from Milvus' top-k result.
+        # have displaced library candidates from the top-k result.
         with database_module.SessionLocal() as db:
             chunk_info = write_chunks(
                 db,
@@ -86,6 +89,7 @@ def _persist_nodes(
                 source_kind=source_kind,
                 document_id=document_id,
                 index_status="private",
+                source_snapshot=snapshot,
             )
         return {**chunk_info, "indexed": True, "vector_indexed": False}
 
@@ -105,6 +109,7 @@ def _persist_nodes(
             source_kind=source_kind,
             document_id=document_id,
             index_status="pending",
+            source_snapshot=snapshot,
         )
 
     try:
@@ -115,22 +120,26 @@ def _persist_nodes(
             user_id=user_id,
             source_kind=source_kind,
             document_id=document_id,
+            expected_source=snapshot,
+            embedding_profile=batch.profile,
         )
     except Exception as exc:  # external index is repaired through the outbox
+        from app.rag.index.source import IndexSourceChanged
+
+        if isinstance(exc, (IndexSourceChanged, PermissionError, ValueError)):
+            raise
         logger.warning(
             "Versioned index write failed for document %s; queued for retry: %s",
             document_id,
             exc,
         )
-        from app.rag.application.library.index_jobs import enqueue_milvus_upsert
+        from app.rag.application.library.index_jobs import enqueue_retrieval_upsert
 
         with database_module.SessionLocal() as db:
-            enqueue_milvus_upsert(db, user_pk=user_id, document_id=document_id)
+            enqueue_retrieval_upsert(db, user_pk=user_id, document_id=document_id)
             db.commit()
         return {**chunk_info, "indexed": False}
 
-    with database_module.SessionLocal() as db:
-        publish_document(db, document_id)
     return {**chunk_info, "indexed": True}
 
 
@@ -167,6 +176,7 @@ async def ingest_document(
     _document_title_loader=_document_title,
     _embed_model: Any | None = None,
     index_document: bool = True,
+    expected_source=None,
 ) -> dict[str, Any]:
     from app.usage.runtime import for_owner
 
@@ -174,6 +184,9 @@ async def ingest_document(
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"未找到待摄取的档案: {file_path}")
         from app.rag.parsing import parse_document
+        from app.rag.index.source import capture_source
+
+        snapshot = expected_source or capture_source(document_id, user_id, source_kind)
 
         canonical = parse_document(file_path)
         metadata: dict[str, Any] = {
@@ -202,6 +215,7 @@ async def ingest_document(
             embed_model=_embed_model,
             document_title_loader=_document_title_loader,
             index_document=index_document,
+            source_snapshot=snapshot,
         )
         return {
             "success": True,
@@ -251,13 +265,14 @@ async def ingest_transcript(
     upload_id: str,
     _chunker=chunk_document,
     _document_title_loader=_document_title,
+    expected_source=None,
 ) -> dict[str, Any]:
     """Persist an audio transcript as a private, citable text projection.
 
     The original media remains owned by ``FileAsset``.  This function only
     writes the same rebuildable ``KnowledgeDocument`` chunks used by other
     Conversation attachments; it never publishes audio-derived text into the
-    user's global Milvus collection.
+    user's shared retrieval corpus.
     """
     from app.usage.runtime import for_owner
 
@@ -279,6 +294,7 @@ async def ingest_transcript(
             document_title_loader=_document_title_loader,
             embed_model=None,
             index_document=False,
+            expected_source=expected_source,
         )
 
 
@@ -296,7 +312,10 @@ async def _ingest_textual_source(
     document_title_loader=_document_title,
     embed_model: Any | None = None,
     index_document: bool,
+    expected_source=None,
 ) -> dict[str, Any]:
+    from app.rag.index.source import capture_source
+
     canonical = canonicalize_document(
         ParsedDocument(
             pages=[ParsedPage(text=text)],
@@ -322,6 +341,7 @@ async def _ingest_textual_source(
     if upload_id:
         for node in nodes:
             node.metadata["upload_id"] = upload_id
+    snapshot = expected_source or capture_source(document_id, user_id, source_kind)
     chunk_info = _persist_nodes(
         nodes,
         user_id=user_id,
@@ -330,6 +350,7 @@ async def _ingest_textual_source(
         embed_model=embed_model,
         document_title_loader=document_title_loader,
         index_document=index_document,
+        source_snapshot=snapshot,
     )
     return {
         "success": True,

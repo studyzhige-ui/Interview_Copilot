@@ -68,7 +68,7 @@ async def search_intent_candidates(
 ) -> IntentCandidates:
     """Run one BM25 request and one dense request per query-language variant."""
 
-    from app.rag import milvus_hybrid
+    from app.rag import hybrid_index
 
     policy = current_rag_policy().retrieval
     document_ids = set(intent.document_ids)
@@ -80,8 +80,7 @@ async def search_intent_candidates(
 
     async def sparse() -> list[dict[str, Any]]:
         return await pool("search").run(
-            lambda: milvus_hybrid.sparse_search(
-                milvus_hybrid.KNOWLEDGE,
+            lambda: hybrid_index.sparse_search(
                 query_text=intent.sparse_query,
                 user_pk=user_pk,
                 top_k=candidate_count,
@@ -92,8 +91,7 @@ async def search_intent_candidates(
     async def dense(query: str) -> list[dict[str, Any]]:
         vector = await _query_embedding(query)
         return await pool("search").run(
-            lambda: milvus_hybrid.dense_search(
-                milvus_hybrid.KNOWLEDGE,
+            lambda: hybrid_index.dense_search(
                 query_dense=vector,
                 user_pk=user_pk,
                 top_k=candidate_count,

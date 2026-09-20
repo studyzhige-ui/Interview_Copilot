@@ -133,7 +133,7 @@ def create_backup(args: argparse.Namespace) -> Path:
         "database_dump": dump_path.name,
         "objects_included": args.include_objects,
         "object_count": object_count,
-        "milvus_rebuild_command": "python scripts/reingest_hybrid.py",
+        "retrieval_rebuild_command": "python scripts/reingest_hybrid.py --execute",
     }
     (destination / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),

@@ -22,7 +22,7 @@ dependencies = [
     "celery==5.6.3",
     "boto3==1.43.67",
     # Match the deployed Milvus 2.6 server line; PyMilvus 3.x targets Milvus 3.
-    "pymilvus==2.6.17",
+    "pgvector==0.5.0",
     # Configuration and security
     "python-dotenv==1.2.2",
     "pydantic[email]==2.13.4",

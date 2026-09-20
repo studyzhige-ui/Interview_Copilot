@@ -25,7 +25,7 @@ from app.rag.application.library.document_formats import UnsupportedDocumentForm
 from app.rag.application.library.document_formats import (
     validate_knowledge_document_format,
 )
-from app.files.application.file_asset_service import file_asset_version_token
+from app.files.identity import file_asset_version_token
 from app.files.application.file_asset_service import mark_file_asset_consumed
 
 

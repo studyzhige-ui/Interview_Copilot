@@ -3,7 +3,7 @@
 Vector dimensions alone do not define a semantic space.  Every setting that
 changes parsing, chunk text, embedding coordinates, or ANN interpretation is
 part of the identity.  A different identity receives a different physical
-Milvus collection, so same-dimension model changes can never mix silently.
+PostgreSQL generation, so same-dimension model changes can never mix silently.
 """
 
 from __future__ import annotations
@@ -14,13 +14,13 @@ import re
 from dataclasses import asdict, dataclass
 
 from app.core.config import settings
+from app.rag.index.lexical import ANALYZER_VERSION
 
-INDEX_SCHEMA_VERSION = "knowledge-rag-v2"
+INDEX_SCHEMA_VERSION = "knowledge-pgvector-v3"
 PARSER_CONTRACT_VERSION = "canonical-document-v2"
 CLEANING_CONTRACT_VERSION = "canonical-cleaning-v1"
 CHUNKER_CONTRACT_VERSION = "structure-aware-v2"
 RETRIEVAL_TEXT_VERSION = "structural-prefix-v1"
-ANALYZER_VERSION = "milvus-chinese-v1"
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,8 @@ class IndexIdentity:
     schema_version: str
     embedding_provider: str
     embedding_model: str
+    embedding_revision: str | None
+    namespace: str
     embedding_dim: int
     similarity_metric: str
     parser_contract: str
@@ -42,18 +44,16 @@ class IndexIdentity:
     retrieval_text_contract: str
     analyzer_contract: str
     dense_index_type: str
-    hnsw_m: int
-    hnsw_ef_construction: int
 
     @property
     def fingerprint(self) -> str:
         payload = json.dumps(asdict(self), ensure_ascii=True, sort_keys=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def physical_collection(self, base_name: str) -> str:
+    def display_name(self, base_name: str) -> str:
         safe = re.sub(r"[^A-Za-z0-9_]", "_", base_name).strip("_") or "knowledge"
-        # Milvus collection names are identifiers.  Keep the readable base and
-        # append enough digest bits to make accidental collisions negligible.
+        # Informational label only, never interpolated as a SQL identifier. Actual
+        # storage and authorization use the complete 64-character fingerprint.
         return f"{safe[:220]}__{self.fingerprint[:16]}"
 
     def to_dict(self) -> dict[str, object]:
@@ -65,8 +65,10 @@ def current_index_identity() -> IndexIdentity:
         schema_version=INDEX_SCHEMA_VERSION,
         embedding_provider=(settings.EMBEDDING_PROVIDER or "").strip().lower(),
         embedding_model=(settings.EMBEDDING_MODEL or "").strip(),
+        embedding_revision=settings.MODEL_REVISIONS_JSON.get(settings.EMBEDDING_MODEL),
+        namespace=settings.RAG_INDEX_NAMESPACE,
         embedding_dim=int(settings.EMBEDDING_DIM),
-        similarity_metric=(settings.MILVUS_SIMILARITY_METRIC or "").strip().upper(),
+        similarity_metric=(settings.RAG_SIMILARITY_METRIC or "").strip().upper(),
         parser_contract=PARSER_CONTRACT_VERSION,
         parser_provider=(settings.PARSER_PROVIDER or "").strip().lower(),
         ocr_enabled=bool(settings.RAG_OCR_ENABLED),
@@ -78,14 +80,12 @@ def current_index_identity() -> IndexIdentity:
         query_token_reserve=int(settings.RAG_QUERY_TOKEN_RESERVE),
         retrieval_text_contract=RETRIEVAL_TEXT_VERSION,
         analyzer_contract=ANALYZER_VERSION,
-        dense_index_type=(settings.MILVUS_DENSE_INDEX_TYPE or "").strip().upper(),
-        hnsw_m=int(settings.MILVUS_HNSW_M),
-        hnsw_ef_construction=int(settings.MILVUS_HNSW_EF_CONSTRUCTION),
+        dense_index_type="EXACT",
     )
 
 
-def active_knowledge_collection_name() -> str:
-    return current_index_identity().physical_collection(settings.MILVUS_COLLECTION)
+def active_index_label() -> str:
+    return current_index_identity().display_name(settings.RAG_INDEX_NAMESPACE)
 
 
 __all__ = [
@@ -96,6 +96,6 @@ __all__ = [
     "IndexIdentity",
     "PARSER_CONTRACT_VERSION",
     "RETRIEVAL_TEXT_VERSION",
-    "active_knowledge_collection_name",
+    "active_index_label",
     "current_index_identity",
 ]

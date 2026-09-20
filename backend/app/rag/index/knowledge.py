@@ -1,19 +1,19 @@
-"""Knowledge-specific vector index repository."""
+"""Prepare embeddings outside transactions; publish canonical snapshots once."""
 
 from __future__ import annotations
 
-import json
 from typing import Any
+from dataclasses import dataclass
 
-from sqlalchemy.orm import Session
-
+from app.db import database
 from app.models.knowledge import KnowledgeDocument
-from app.rag.index.identity import current_index_identity
-from app.rag.index.publication import publish_document
+from app.rag import hybrid_index
+from app.rag.index.source import source_snapshot, SourceSnapshot
 from app.rag.ingest.embedding import (
     build_retrieval_passages,
     embed_passages,
     node_id,
+    node_text,
 )
 
 
@@ -25,89 +25,81 @@ def replace_document_rows(
     user_id: int,
     source_kind: str,
     document_id: str,
+    expected_source: SourceSnapshot | None = None,
+    embedding_profile: dict | None = None,
 ) -> None:
-    """Replace one document inside the active, versioned physical collection."""
-
-    from app.rag import milvus_hybrid
-
+    if not len(nodes) == len(passages) == len(vectors):
+        raise ValueError(
+            "every canonical chunk requires exactly one passage and vector"
+        )
     rows = [
-        {
-            "id": node_id(node),
-            "user_id": int(user_id),
-            "source_kind": source_kind,
-            "document_id": document_id,
-            "text": passage,
-            "dense": vector,
-        }
-        for node, passage, vector in zip(nodes, passages, vectors)
+        dict(id=node_id(node), source_text=node_text(node), text=passage, dense=vector)
+        for node, passage, vector in zip(nodes, passages, vectors, strict=True)
     ]
-    milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document_id)
-    milvus_hybrid.insert(milvus_hybrid.KNOWLEDGE, rows)
+    hybrid_index.replace_document(
+        user_pk=user_id,
+        document_id=document_id,
+        source_kind=source_kind,
+        rows=rows,
+        expected_source=expected_source,
+        embedding_profile=embedding_profile,
+    )
 
 
-def _update_embedding_profiles(db: Session, chunks: list[Any], profile: dict) -> None:
-    for chunk in chunks:
-        try:
-            metadata = json.loads(chunk.metadata_json) if chunk.metadata_json else {}
-        except (TypeError, json.JSONDecodeError):
-            metadata = {}
-        metadata["embedding_profile"] = profile
-        chunk.metadata_json = json.dumps(metadata, ensure_ascii=False)
-        db.add(chunk)
+@dataclass(frozen=True)
+class _ChunkSnapshot:
+    node_id: str
+    text: str
+    metadata_json: str | None
 
 
-def reindex_document(
-    db: Session,
-    document_id: str,
-    *,
-    embed_model: Any | None = None,
-) -> int:
-    """Rebuild a document from Postgres facts into the active index generation."""
+def reindex_document(document_id: str, *, embed_model: Any | None = None) -> int:
+    """Rebuild from current canonical facts, never from an old vector index.
 
-    from app.rag import milvus_hybrid
+    This operation owns its short Sessions. Callers must not hold a business
+    transaction/row lock while waiting for it. Source edits and deletions during
+    model execution are caught before any projection is committed.
+    """
     from app.rag.document_chunk_service import read_indexable_chunks
-
-    document = (
-        db.query(KnowledgeDocument)
-        .filter(
-            KnowledgeDocument.id == document_id,
-            KnowledgeDocument.deleted_at.is_(None),
-        )
-        .first()
-    )
-    chunks = read_indexable_chunks(db, document_id)
-    if not chunks:
-        milvus_hybrid.delete_by_field(
-            milvus_hybrid.KNOWLEDGE, "document_id", document_id
-        )
-        if document is not None:
-            document.index_fingerprint = current_index_identity().fingerprint
-            db.add(document)
-            db.commit()
-        return 0
-    passages = build_retrieval_passages(
-        chunks,
-        document_title=document.title if document is not None else None,
-    )
     from app.usage.runtime import for_owner
 
-    with for_owner(int(chunks[0].user_id), operation=f"reindex:{document_id}"):
+    with database.SessionLocal() as db:
+        document = db.get(KnowledgeDocument, document_id)
+        if document is None or document.deleted_at is not None:
+            # Deletion owns projection cleanup via FK/outbox. A late upsert
+            # cannot resurrect a deleted document.
+            return 0
+        snapshot = source_snapshot(db, document)
+        if document.source_kind == "chat_attachment" or document.conversation_id:
+            raise PermissionError(
+                "private conversation sources cannot be globally indexed"
+            )
+        chunks = read_indexable_chunks(db, document_id)
+        if any(
+            c.user_id != snapshot.user_id or c.source_kind != snapshot.source_kind
+            for c in chunks
+        ):
+            raise PermissionError("canonical chunk ownership/type mismatch")
+        nodes = [_ChunkSnapshot(c.node_id, c.text, c.metadata_json) for c in chunks]
+    if not nodes:
+        raise ValueError(
+            "canonical_chunks_missing: reparse the source before reindexing"
+        )
+    passages = build_retrieval_passages(nodes, document_title=snapshot.title)
+    with for_owner(snapshot.user_id, operation=f"reindex:{document_id}"):
         batch = embed_passages(passages, embed_model=embed_model)
+    vectors, profile = batch.vectors, batch.profile
     replace_document_rows(
-        chunks,
+        nodes,
         passages,
-        batch.vectors,
-        user_id=int(chunks[0].user_id),
-        source_kind=chunks[0].source_kind or "",
+        vectors,
+        user_id=snapshot.user_id,
+        source_kind=snapshot.source_kind,
         document_id=document_id,
+        expected_source=snapshot,
+        embedding_profile=profile,
     )
-    _update_embedding_profiles(db, chunks, batch.profile)
-    publish_document(db, document_id, commit=False)
-    if document is not None:
-        document.index_fingerprint = current_index_identity().fingerprint
-        db.add(document)
-    db.commit()
-    return len(chunks)
+    return len(nodes)
 
 
 __all__ = ["reindex_document", "replace_document_rows"]

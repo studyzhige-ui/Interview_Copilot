@@ -117,12 +117,11 @@ def test_insert_milvus_rows_payload_has_only_index_fields(monkeypatch):
     """The Milvus row payload carries only scope + text + dense; diagnostic
     fields like embedding_profile never become Milvus scalars (§4.5.4). The
     profile-on-node stamping is covered by the _index_nodes order tests."""
-    import app.rag.milvus_hybrid as mh
+    import app.rag.hybrid_index as mh
 
     captured: dict = {}
-    monkeypatch.setattr(mh, "delete_by_field", lambda *a, **k: None)
     monkeypatch.setattr(
-        mh, "insert", lambda coll, rows: captured.__setitem__("rows", rows)
+        mh, "replace_document", lambda **kwargs: captured.update(kwargs)
     )
 
     nodes = [
@@ -142,9 +141,7 @@ def test_insert_milvus_rows_payload_has_only_index_fields(monkeypatch):
     for row in captured["rows"]:
         assert set(row) == {
             "id",
-            "user_id",
-            "source_kind",
-            "document_id",
+            "source_text",
             "text",
             "dense",
         }

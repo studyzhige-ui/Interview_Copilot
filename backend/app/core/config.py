@@ -48,14 +48,12 @@ class Settings(BaseSettings):
     # Runtime data paths
     APP_DATA_DIR: str = _default_app_data_dir()
 
-    # Database and vector-store data
-    MILVUS_URI: str = "http://localhost:19530"
-    MILVUS_COLLECTION: str = "interview_copilot_rag"
-    MILVUS_SIMILARITY_METRIC: str = "IP"
-    MILVUS_DENSE_INDEX_TYPE: str = "HNSW"
-    MILVUS_HNSW_M: int = 16
-    MILVUS_HNSW_EF_CONSTRUCTION: int = 200
-    MILVUS_HNSW_EF_SEARCH: int = 64
+    # One PostgreSQL store; all new indexes use pgvector and scoped BM25.
+    RAG_SIMILARITY_METRIC: Literal["IP", "COSINE", "L2"] = "IP"
+    RAG_INDEX_NAMESPACE: str = "interview_copilot_rag"
+    RAG_INDEX_STATEMENT_TIMEOUT_MS: int = Field(5000, ge=100, le=60000)
+    RAG_INDEX_LOCK_TIMEOUT_MS: int = Field(3000, ge=100, le=60000)
+    RAG_INDEX_MAX_DOCUMENT_CHUNKS: int = Field(10000, ge=1, le=100000)
     # Hugging Face, model, and framework caches
     CACHE_DIR: str = ""
     # Optional read-only weights shared from a Windows data drive into WSL.
@@ -85,7 +83,7 @@ class Settings(BaseSettings):
     #
     # ⚠ EMBEDDING_DIM must match the model's actual output dimension.
     #   Switching to a different-dim model after data is indexed requires
-    #   dropping the Milvus collection and re-ingesting.
+    #   building a new generation from the retained source facts.
 
     # Platform-owned internal LLM. End users cannot select this model or
     # supply its credential; both latency-sensitive routing and background

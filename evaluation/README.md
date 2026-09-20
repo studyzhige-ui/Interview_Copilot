@@ -1,7 +1,7 @@
 # RAG evaluation
 
 This directory validates the production path: parsing, cleaning, chunking,
-embedding, Milvus dense/BM25 retrieval, RRF, CrossEncoder reranking, evidence
+embedding, PostgreSQL/pgvector exact dense + scoped BM25 retrieval, RRF, CrossEncoder reranking, evidence
 gating, streaming generation, and citations. Gold annotations are never added
 to retrieval requests.
 

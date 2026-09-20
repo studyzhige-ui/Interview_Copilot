@@ -37,8 +37,8 @@ OutboxLane = Literal["index", "cleanup"]
 
 INDEX_JOB_TYPES = frozenset(
     {
-        "milvus_delete_document",
-        "milvus_upsert_document",
+        "retrieval_delete_document",
+        "retrieval_upsert_document",
     }
 )
 # Pre-cut-over ``milvus_reindex_resume`` rows are intentionally outside every

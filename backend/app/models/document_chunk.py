@@ -1,19 +1,19 @@
 """``document_chunks``: the Postgres fact source for knowledge-base chunks.
 
-Postgres owns the chunk TEXT (this table); Milvus owns the retrieval INDEX —
+Postgres owns the chunk TEXT (this table); retrieval projection owns the retrieval INDEX —
 dense vector + native server-side BM25 sparse over the chunk text (see
-``app.rag.milvus_hybrid``). The authoritative chunk text lives here. This
+``app.rag.hybrid_index``). The authoritative chunk text lives here. This
 replaced the LlamaIndex ``PostgresDocumentStore`` as the project's chunk store:
 full-text reconstruction (``app.rag.document_chunk_service.read_document_text``) reads
-this table; BM25 retrieval is now served by Milvus, not from here.
+this table; BM25 retrieval is now served by retrieval projection, not from here.
 
 A row is one chunk owned by one ``knowledge_documents`` row.
 
 ``user_id`` / ``source_kind`` are denormalised so diagnostics
 scoped reads don't need a join. ``user_id`` here is the stable ``users.id`` FK —
-the same value used as the Milvus retrieval-scope key. CLEANUP #2 moved the whole
+the same value used as the retrieval projection retrieval-scope key. CLEANUP #2 moved the whole
 RAG scope key from username to ``users.id``; ingestion writes the pk to both the
-Milvus node metadata and this column, and retrieval filters both by the pk.
+retrieval projection node metadata and this column, and retrieval filters both by the pk.
 """
 
 import uuid
@@ -52,7 +52,7 @@ class DocumentChunk(Base):
         index=True,
         nullable=False,
     )
-    # Milvus node id this chunk is indexed under — used to delete the matching
+    # retrieval projection node id this chunk is indexed under — used to delete the matching
     # vector when the chunk is removed.
     node_id = Column(String, index=True, nullable=True)
     user_id = Column(
@@ -75,10 +75,10 @@ class DocumentChunk(Base):
     # NULL until the chunking stage computes it.
     token_count = Column(Integer, nullable=True)
     metadata_json = Column(Text, nullable=True)
-    # Index lifecycle: pending -> indexed (Milvus written) / failed / deleted.
+    # Index lifecycle: pending -> indexed (retrieval projection written) / failed / deleted.
     index_status = Column(String, nullable=False, default="pending")
     # Soft delete — read paths exclude deleted_at IS NOT NULL / index_status=
-    # 'deleted' immediately, so a not-yet-completed Milvus delete can't leak a
+    # 'deleted' immediately, so a not-yet-completed retrieval projection delete can't leak a
     # removed chunk back into RAG context.
     deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)

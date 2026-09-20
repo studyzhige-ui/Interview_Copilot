@@ -27,7 +27,7 @@ from app.conversation.application.attachment_source_service import (
     AttachmentSourceNotFoundError,
 )
 from app.career.application.resumes import resume_artifact_service
-from app.files.application.file_asset_service import file_asset_version_token
+from app.files.identity import file_asset_version_token
 from app.files.application.file_asset_service import mark_file_asset_consumed
 
 
