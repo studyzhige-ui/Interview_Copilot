@@ -1,0 +1,96 @@
+name: Publish verified pgvector refactor
+on:
+  push:
+    branches: [refactor/product-runtime-convergence]
+    paths:
+      - .github/workflows/refactor-apply-pgvector.yml
+      - .refactor-transfer/**
+permissions:
+  contents: write
+concurrency:
+  group: refactor-pgvector-transfer-only
+  cancel-in-progress: false
+jobs:
+  recover:
+    if: github.repository == 'studyzhige-ui/Interview_Copilot' && github.ref == 'refs/heads/refactor/product-runtime-convergence'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+      - name: Validate exact source preimages and postimages without executing project code
+        env:
+          EXPECTED_EVENT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_EVENT_SHA"
+          test "$(git rev-parse HEAD^)" = '5625487160760382f8960358997a934dd75b114a'
+          python - <<'PY'
+          import bz2, hashlib, json, subprocess
+          from pathlib import Path, PurePosixPath
+          root = Path.cwd()
+          parts = ('00', '01', '02a', '02b', '03', '04', '05a', '05b', '06a', '06b')
+          payload = b''.join((root / '.refactor-transfer' / ('part-' + name + '.bin')).read_bytes() for name in parts)
+          if len(payload) != 34652 or hashlib.sha256(payload).hexdigest() != 'a3e166ade7b2bc26a41c039235636bd44d3dfb57e4a16b1a75b2732d47725afa':
+              raise SystemExit('Source transport digest mismatch')
+          decoder = bz2.BZ2Decompressor()
+          raw = decoder.decompress(payload, max_length=200000)
+          if not decoder.eof or decoder.unused_data or len(raw) != 133691 or hashlib.sha256(raw).hexdigest() != '318f4d7a88873e1c98f76b1c058dd335940b88cdd901ee09183d93935f0ae1ea':
+              raise SystemExit('Source manifest digest mismatch')
+          operations = json.loads(raw)
+          if not isinstance(operations, dict) or len(operations) != 73:
+              raise SystemExit('Unexpected change count')
+          prepared = []
+          roots = {'alembic', 'backend', 'docs', 'evaluation', 'infra', 'scripts'}
+          root_files = {'.env.cloud.example', '.env.community.example', '.github/workflows/ci.yml', 'README.md', 'docker-compose.yml', 'pyproject.toml'}
+          for name, (before_hash, after_hash, edits) in operations.items():
+              relative = PurePosixPath(name)
+              if relative.is_absolute() or '..' in relative.parts or (relative.parts[0] not in roots and name not in root_files):
+                  raise SystemExit('Unsafe source path')
+              path = root.joinpath(*relative.parts)
+              if any(p.is_symlink() for p in (path, *path.parents)):
+                  raise SystemExit('Source replacement refuses symbolic links')
+              before = path.read_bytes() if path.exists() else None
+              actual = hashlib.sha256(before).hexdigest() if before is not None else None
+              if actual != before_hash:
+                  raise SystemExit('Preimage mismatch: ' + name)
+              lines = (before or b'').decode('utf-8').splitlines(keepends=True)
+              upper = len(lines)
+              for start, stop, replacement in reversed(edits):
+                  if type(start) is not int or type(stop) is not int or not 0 <= start <= stop <= upper or not isinstance(replacement, str):
+                      raise SystemExit('Invalid source edit')
+                  lines[start:stop] = replacement.splitlines(keepends=True)
+                  upper = start
+              result = ''.join(lines).encode('utf-8') if after_hash is not None else None
+              if (hashlib.sha256(result).hexdigest() if result is not None else None) != after_hash:
+                  raise SystemExit('Postimage mismatch: ' + name)
+              prepared.append((path, result))
+          for path, result in prepared:
+              if result is None:
+                  path.unlink()
+              else:
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  path.write_bytes(result)
+          subprocess.run(['git', 'add', '--', *operations], check=True)
+          changed = subprocess.check_output(['git', 'diff', '--cached', '--name-only', '-z']).decode().split('\0')
+          if set(filter(None, changed)) != set(operations):
+              raise SystemExit('Staged source paths differ from manifest')
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          print('Verified and staged exactly 73 source changes. No model, migration or application code executed.')
+          PY
+      - name: Commit on the existing refactor branch without force or merging
+        env:
+          EXPECTED_EVENT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch='refactor/product-runtime-convergence'
+          test "$(git ls-remote --heads origin "refs/heads/$branch" | cut -f1)" = "$EXPECTED_EVENT_SHA"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor: replace Milvus with canonical tenant-filtered pgvector retrieval' -m 'Publish hash-verified source: atomic index publication, generation isolation, authorized SQL BM25 and dense retrieval, short ingestion transactions and source fencing, read-only-by-default rebuild plans, same-Alpine PostgreSQL extension image. Removes old Milvus runtime/dependencies; includes 9 real PostgreSQL contracts requiring fresh CI. No real model-quality or GPU completion claim.'
+          git push origin "HEAD:refs/heads/$branch"
+          printf 'Published commit: `%s`\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
