@@ -23,7 +23,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15.18-alpine
+        image: pgvector/pgvector:0.8.6-pg15-bookworm
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -140,6 +140,19 @@ jobs:
           cp .env.community.example .env
           docker compose --profile full config --quiet
 
+      - name: Build and exercise the deployment's Alpine pgvector extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -f infra/postgres/Dockerfile -t copilot-pg-ci .
+          docker run -d --name copilot-pg-extension -e POSTGRES_PASSWORD=ci-only copilot-pg-ci
+          trap 'docker rm -f copilot-pg-extension >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec copilot-pg-extension pg_isready -U postgres; then break; fi
+            sleep 1
+          done
+          docker exec copilot-pg-extension psql -U postgres -v ON_ERROR_STOP=1 -c "CREATE EXTENSION vector; SELECT '[1,2,3]'::vector <-> '[1,2,3]'::vector;"
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -201,7 +214,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:15.18-alpine
+        image: pgvector/pgvector:0.8.6-pg15-bookworm
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
