@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 import sys
 
 import pytest
 
 from app.core.isolated_process import IsolatedProcessError, run_isolated
+from tests.process_assertions import process_stopped
 
 pytestmark = pytest.mark.skipif(
     os.name != "posix", reason="Linux/WSL process group contract"
@@ -27,9 +27,8 @@ async def execute(tmp_path, code, **kwargs):
 
 
 def alive(pid):
-    state = Path(f"/proc/{pid}/stat")
-    if state.exists() and state.read_text().split(") ", 1)[1].split()[0] == "Z":
-        return False
+    if sys.platform.startswith("linux"):
+        return not process_stopped(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

@@ -14,6 +14,7 @@ from app.local_inference.client import (
 )
 from app.local_inference.server import Server
 from app.local_inference import process
+from tests.process_assertions import process_stopped
 from .conftest import task
 
 # This test-owned executable obeys the actual framing protocol. Production has
@@ -282,14 +283,7 @@ asyncio.run(main())
         with pytest.raises(LocalInferenceUnknown):
             await run
 
-        def stopped():
-            try:
-                status = Path(f"/proc/{child_pid}/status").read_text()
-                return "State:\tZ" in status  # Adopted zombie cannot execute/use CUDA.
-            except FileNotFoundError:
-                return True
-
-        await eventually(stopped)
+        await eventually(lambda: process_stopped(child_pid))
     finally:
         if run and not run.done():
             run.cancel()
