@@ -62,8 +62,17 @@ jobs:
           if len(raw) > 200_000:
               raise SystemExit('preparation input too large')
           plan = json.loads(raw)
-          if set(plan) != {'schema', 'base_sha', 'message', 'patch_zlib_b64', 'patch_sha256'} or plan['schema'] != 1:
+          if set(plan) != {'schema', 'base_sha', 'message', 'patch_parts', 'patch_sha256'} or plan['schema'] != 2:
               raise SystemExit('invalid preparation schema')
+          parts = plan['patch_parts']
+          if not isinstance(parts, list) or not 1 <= len(parts) <= 32 or any(not isinstance(p, str) or not re.fullmatch(r'[0-9a-f]{40}', p) for p in parts):
+              raise SystemExit('invalid patch part identities')
+          encoded = bytearray()
+          for part in parts:
+              content = base64.b64decode(request('/git/blobs/' + part)['content'])
+              if len(content) > 20_000 or len(encoded) + len(content) > 200_000:
+                  raise SystemExit('patch part capacity')
+              encoded.extend(content)
           base = event['pull_request']['head']['sha']
           if plan['base_sha'] != base or git('rev-parse', 'HEAD').decode().strip() != base:
               raise SystemExit('preparation base mismatch')
@@ -71,7 +80,7 @@ jobs:
           if ref['object']['sha'] != base:
               raise SystemExit('branch advanced before preparation')
           dec = zlib.decompressobj()
-          patch = dec.decompress(base64.b64decode(plan['patch_zlib_b64'], validate=True), 2_000_001)
+          patch = dec.decompress(base64.b64decode(encoded, validate=True), 2_000_001)
           if len(patch) > 2_000_000 or not dec.eof or dec.unused_data or dec.unconsumed_tail:
               raise SystemExit('invalid bounded patch envelope')
           if hashlib.sha256(patch).hexdigest() != plan['patch_sha256']:
