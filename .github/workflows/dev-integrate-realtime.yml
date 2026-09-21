@@ -16,7 +16,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: interview_copilot
         ports: ['5432:5432']
-        options: --health-cmd 'pg_isready -U postgres' --health-interval 5s --health-timeout 5s --health-retries 10
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
       redis:
         image: redis:8.10.0-alpine
         ports: ['6379:6379']
@@ -31,13 +31,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 3
+          fetch-depth: 4
           persist-credentials: false
       - name: Apply fixed integration patch
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = 697884fa691f5f0c7087f7989b44ee934cf51dc4
-          test "$(git rev-parse HEAD^^)" = 51d86db6b6cd2854111d5b2c38484c0d5e21ff05
+          test "$(git rev-parse HEAD^)" = e4ef0b1788e5d323ca131518d29c1b3dbf28bf32
+          test "$(git rev-parse HEAD~3)" = 51d86db6b6cd2854111d5b2c38484c0d5e21ff05
           echo '5a6b36b048818ec6abd446341a0b286f5f8c9dc092f11ec160cb30d1a5428ed8  .dev-realtime.patch' | sha256sum -c -
           git apply --check .dev-realtime.patch
           git apply .dev-realtime.patch
