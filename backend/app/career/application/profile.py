@@ -550,6 +550,7 @@ def resolve_profile_candidate_items(
             CareerProfileCandidateItem.id.in_(requested_ids),
         )
         .with_for_update()
+        .populate_existing()
         .all()
     )
     by_id = {row.id: row for row in rows}

@@ -90,6 +90,7 @@ def replace_copilot_preference(
         db.query(CopilotPreference)
         .filter(CopilotPreference.user_id == user_pk)
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if row is None:
@@ -137,6 +138,7 @@ def update_conversation_guidance(
             Conversation.user_id == user_pk,
         )
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if row is None:
@@ -191,6 +193,7 @@ def update_debrief_guidance(
             InterviewRecord.user_id == user_pk,
         )
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if row is None:

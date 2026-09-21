@@ -1006,6 +1006,7 @@ def retract_job_opportunity_merge(
             JobOpportunityMerge.user_id == user_pk,
         )
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if row is None:
@@ -1179,6 +1180,7 @@ def _rebuild_projection(db: Session, opportunity: JobOpportunity) -> None:
                 NextAction.status.in_(("suggested", "planned")),
             )
             .with_for_update()
+            .populate_existing()
             .all()
         ):
             transition = NextActionTransition(
@@ -1273,6 +1275,7 @@ def _locked_opportunity(
             JobOpportunity.user_id == user_pk,
         )
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if row is None:
@@ -1400,6 +1403,7 @@ def _locked_action(db: Session, user_pk: int, action_id: str) -> NextAction:
         db.query(NextAction)
         .filter(NextAction.id == action_id, NextAction.user_id == user_pk)
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if row is None:
