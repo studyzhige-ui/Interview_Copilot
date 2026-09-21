@@ -11,12 +11,15 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.sqltypes import DateTime
 
-APP_ROOT = Path(__file__).parents[3] / "app"
+APP_ROOT = Path(__file__).parents[2] / "app"
 
 
 def test_application_never_creates_naive_utc_timestamps() -> None:
     violations = []
-    for path in APP_ROOT.rglob("*.py"):
+    paths = list(APP_ROOT.rglob("*.py"))
+    assert APP_ROOT.is_dir() and (APP_ROOT / "main.py") in paths
+    assert (APP_ROOT / "usage/service.py") in paths
+    for path in paths:
         if path.name == "types.py" and path.parent.name == "db":
             continue
         source = path.read_text(encoding="utf-8")

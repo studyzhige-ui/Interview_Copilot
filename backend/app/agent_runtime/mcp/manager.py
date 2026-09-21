@@ -14,7 +14,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.ssrf import resolve_safe_url, validate_safe_url
-from app.services.capabilities.mcp_server_service import MCPServerConfig
+from app.capabilities.application.mcp_server_service import MCPServerConfig
 from .schema import tool_validator
 
 
@@ -217,7 +217,7 @@ class MCPManager:
             await asyncio.gather(*(self._close(runtime) for runtime in stale))
 
     async def _validate(self, config: MCPServerConfig) -> None:
-        from app.services.capabilities.mcp_server_service import validate_transport
+        from app.capabilities.application.mcp_server_service import validate_transport
 
         validate_transport(config.transport)
         if config.transport == "stdio":
@@ -282,11 +282,9 @@ class MCPManager:
             yield session
 
     def _handle_notification(self, config: MCPServerConfig, message) -> None:
-        from mcp.types import ServerNotification, ToolListChangedNotification
+        from mcp.types import ToolListChangedNotification
 
-        if isinstance(message, ServerNotification) and isinstance(
-            message.root, ToolListChangedNotification
-        ):
+        if isinstance(message, ToolListChangedNotification):
             runtime = self._runtimes.get((config.user_id, config.id))
             if runtime is not None and runtime.config.revision == config.revision:
                 runtime.tools = None
@@ -376,20 +374,55 @@ class MCPManager:
         operation: str,
         arguments: dict[str, Any] | None = None,
     ) -> Any:
+        from app.usage import runtime as accounting
+        from app.usage.external import owned_scope
+
         runtime = await self._get_runtime(config)
+        receipt = None
+        if operation != "list_tools":
+            with owned_scope(config.user_id):
+                receipt = await accounting.begin_async(
+                    meter="external_tool",
+                    provider=f"mcp:{config.id}",
+                    model=str((arguments or {}).get("name") or operation),
+                    content={
+                        "operation": operation,
+                        "arguments": arguments,
+                        "revision": config.revision,
+                    },
+                    units={"requests": 1, "tool_invocations": 1},
+                )
         future = asyncio.get_running_loop().create_future()
         request = _Request(operation, arguments or {}, future)
         runtime.pending += 1
         runtime.queue.put_nowait(request)
         try:
-            async with asyncio.timeout(settings.AGENT_TOOL_TIMEOUT_SECONDS):
-                return await future
-        except BaseException:
-            # Cancelling a queued request must not abort another caller's
-            # currently executing operation on the shared server session.
-            if request.started:
-                await self._discard(runtime)
-            raise
+            try:
+                async with asyncio.timeout(settings.AGENT_TOOL_TIMEOUT_SECONDS):
+                    result = await future
+            except BaseException as exc:
+                # Cancelling a queued request must not abort another caller's
+                # currently executing operation on the shared server session.
+                try:
+                    if request.started:
+                        await self._discard(runtime)
+                finally:
+                    if receipt is not None:
+                        await accounting.finish_async(
+                            receipt,
+                            accounting.failure_outcome(exc)
+                            if request.started
+                            else "rejected",
+                        )
+                raise
+            # Success at the provider and success at the accounting COMMIT are
+            # distinct. Never discard a healthy session or settle again because
+            # the local COMMIT acknowledgement was lost.
+            if receipt is not None:
+                await accounting.finish_async(
+                    receipt, "completed", {"requests": 1, "tool_invocations": 1}
+                )
+            return result
         finally:
             runtime.pending -= 1
             runtime.last_used = time.monotonic()
@@ -416,7 +449,7 @@ class MCPManager:
             remote_tools.extend(response.tools)
             if len(remote_tools) > 10_000:
                 raise ValueError("MCP tool catalog exceeds limit")
-            cursor = response.nextCursor
+            cursor = response.next_cursor
             if not cursor:
                 break
             if cursor in seen_cursors:
@@ -432,7 +465,7 @@ class MCPManager:
                 remote_name=tool.name,
                 description=tool.description or tool.title or tool.name,
                 input_schema=dict(
-                    tool.inputSchema or {"type": "object", "properties": {}}
+                    tool.input_schema or {"type": "object", "properties": {}}
                 ),
             )
             for tool in remote_tools

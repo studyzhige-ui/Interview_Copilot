@@ -15,3 +15,8 @@ export interface WorkspaceOverview {
 export async function getWorkspaceOverview(): Promise<WorkspaceOverview> {
   return (await apiClient.get('/workspace')).data;
 }
+
+
+/** Compatibility export: /usage is the only current consumption projection. */
+export { getAccountUsage as getPrimaryModelUsage } from './usage';
+export type { AccountUsage as PrimaryModelUsage } from './usage';

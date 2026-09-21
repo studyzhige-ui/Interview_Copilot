@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy.exc import IntegrityError
-from app.services.interview import mock_runtime_service as svc
+from app.interviews.application import mock_runtime_service as svc
 
 
 @pytest.fixture(autouse=True)

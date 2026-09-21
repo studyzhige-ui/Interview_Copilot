@@ -19,7 +19,7 @@ from app.schemas.agent_memory import (
     AgentMemoryUpdate,
     ConversationMemoryControlsUpdate,
 )
-from app.services import agent_memory_service
+from app.memory import lifecycle as agent_memory_service
 from tests.conftest import NoCloseSession
 
 
@@ -143,8 +143,8 @@ def test_single_producer_rechecks_source_deduplicates_and_deleted_never_revives(
         support_quote="这种并排比较的方式对我更有帮助",
     )
 
-    from app.services import memory_pipeline
-    from app.services.memory_prompts import EXTRACT
+    from app.memory import consolidation as memory_pipeline
+    from app.memory.prompts import EXTRACT
 
     async def fake_model(prompt, data):
         if prompt == EXTRACT:
@@ -177,8 +177,8 @@ def test_single_producer_rechecks_source_deduplicates_and_deleted_never_revives(
         memory_pipeline, "SessionLocal", lambda: NoCloseSession(db_session)
     )
 
-    assert asyncio.run(agent_memory_service.consolidate_completed_turn(turn.id)) == 1
-    assert asyncio.run(agent_memory_service.consolidate_completed_turn(turn.id)) == 0
+    assert asyncio.run(memory_pipeline.process_turn(turn.id)) == 1
+    assert asyncio.run(memory_pipeline.process_turn(turn.id)) == 0
     memory = db_session.query(LongTermAgentMemory).one()
     deleted = agent_memory_service.delete_memory(
         db_session,
@@ -195,7 +195,7 @@ def test_single_producer_rechecks_source_deduplicates_and_deleted_never_revives(
     assert deleted.applicability == ""
     assert deleted.tags == []
 
-    assert asyncio.run(agent_memory_service.consolidate_completed_turn(turn.id)) == 0
+    assert asyncio.run(memory_pipeline.process_turn(turn.id)) == 0
     assert db_session.get(LongTermAgentMemory, memory.id).status == "deleted"
     assert db_session.query(LongTermAgentMemory).count() == 1
 
@@ -280,7 +280,7 @@ def test_recall_is_selective_low_authority_and_current_turn_can_disable_it(
     db_session.add(row)
     db_session.flush()
 
-    from app.services import memory_recall
+    from app.memory import recall as memory_recall
 
     monkeypatch.setattr(
         memory_recall, "SessionLocal", lambda: NoCloseSession(db_session)

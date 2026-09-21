@@ -35,7 +35,7 @@ bash ./scripts/setup.sh
 `COMMUNITY_MODEL_PROFILE=local-cpu bash ./scripts/setup.sh`，可选值同上。
 
 安装时选择 Community。脚本会在缺少 `.env` 时创建配置，安装依赖，生成缺失的
-`SECRET_KEY`，启动 PostgreSQL、Redis、MinIO 和 Milvus，执行数据库迁移，并
+`SECRET_KEY`，启动 PostgreSQL/pgvector、Redis 和 MinIO，执行数据库迁移，并
 通过 `npm ci` 安装前端依赖。
 
 日常启动：

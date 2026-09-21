@@ -17,7 +17,7 @@ from app.schemas.interview_invitation import (
     ObjectReference,
     OpportunityMatchOption,
 )
-from app.services.chat.interaction_service import create_pending_interaction
+from app.conversation.application.interaction_service import create_pending_interaction
 
 from .interview_invitation_context import compile_invitation_confirmation_context
 from .interview_invitation_operations import (
@@ -53,10 +53,8 @@ def _opportunity_options(
     user_pk: int,
     facts: InterviewInvitationCandidateFacts,
 ) -> list[OpportunityMatchOption]:
-    if not facts.company_name or not facts.job_title:
-        return []
-    company = facts.company_name.casefold().strip()
-    title = facts.job_title.casefold().strip()
+    company = (facts.company_name or "").casefold().strip()
+    title = (facts.job_title or "").casefold().strip()
     candidates = (
         db.query(JobOpportunity)
         .filter(
@@ -76,8 +74,8 @@ def _opportunity_options(
             current_step=row.current_step,
         )
         for row in candidates
-        if row.company_name.casefold().strip() == company
-        and row.job_title.casefold().strip() == title
+        if (not company or row.company_name.casefold().strip() == company)
+        and (not title or row.job_title.casefold().strip() == title)
     ][:20]
 
 
@@ -116,11 +114,9 @@ def create_invitation_fact_confirmation(
         raise InvitationVersionConflictError(
             f"candidate version is {candidate.version}"
         )
-    if candidate.status == "needs_clarification":
-        raise InvitationStateConflictError(
-            "candidate requires clarification before fact confirmation"
-        )
-    if candidate.status != "pending_confirmation":
+    # Missing/conflicting fields can be shown for an explicit user correction.
+    # Neither confidence nor a bare `confirm` is allowed to fill the gaps.
+    if candidate.status not in {"pending_confirmation", "needs_clarification"}:
         raise InvitationStateConflictError(
             f"candidate cannot be confirmed from {candidate.status}"
         )

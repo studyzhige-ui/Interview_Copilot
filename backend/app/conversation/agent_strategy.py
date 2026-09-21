@@ -27,17 +27,21 @@ free, and the user-facing tool cards still come from
 
 from __future__ import annotations
 
+from dataclasses import replace
+from app.usage import runtime as usage_runtime
+from app.usage.service import reservation_id
+
 import asyncio
 import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
 
 # Trigger tool self-registration on first import.
-import app.agent_runtime.tools  # noqa: F401
+import app.agent_runtime.builtin_tools  # noqa: F401
 from app.agent_runtime.context_compactor import ActiveTurnContextReducer
 from app.agent_runtime.react_agent import (
     AgentRunState,
@@ -57,13 +61,11 @@ from app.agent_runtime.tool_call_executor import (
 )
 from app.agent_runtime.tool_policy import ToolEffect, ToolPolicyContext
 from app.agent_runtime.tool_call_streaming import _ToolCallAccumulator
-from app.agent_runtime.tool_registry import (
-    AgentToolContext,
-    ToolDispatchPlan,
-    parse_tool_arguments,
-    registry,
-    safe_json_dumps,
-)
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.tool_registry import ToolDispatchPlan
+from app.agent_runtime.tool_registry import parse_tool_arguments
+from app.agent_runtime.builtin_tools import registry
+from app.agent_runtime.tool_registry import safe_json_dumps
 from app.agent_runtime.tool_redaction import redact_tool_value
 from app.agent_runtime.turn_tool_catalog import TurnToolCatalog
 from app.conversation.events import HarnessEvent
@@ -87,14 +89,14 @@ from app.models.agent_execution import AgentToolCall
 from app.models.agent_interaction import AgentInteraction
 from app.prompts.agent import agent_system_prompt_for_runtime
 from app.schemas.agent_task import AgentTaskView
-from app.services.chat.agent_task_service import (
-    AgentTaskNotFoundError,
-    get_agent_task,
-)
-from app.services.chat.model_dispatch_service import (
-    durable_model_stream,
-    finish_model_dispatch,
-    request_fingerprint,
+from app.conversation.application.agent_task_service import AgentTaskNotFoundError
+from app.conversation.application.agent_task_service import get_agent_task
+from app.conversation.application.model_dispatch_service import ModelOutcomeUnknownError
+from app.conversation.application.model_dispatch_service import dispatch_failure_status
+from app.conversation.application.model_dispatch_service import durable_model_stream
+from app.conversation.application.model_dispatch_service import finish_model_dispatch
+from app.conversation.application.model_dispatch_service import request_fingerprint
+from app.conversation.application.model_dispatch_service import (
     start_model_dispatch_for_turn,
 )
 
@@ -202,8 +204,15 @@ def _load_tool_resume_snapshot(
             None,
         )
         if interaction is None:
-            return None
-        waiting = waiting_by_id[str(interaction.tool_call_id)]
+            from app.conversation.application.invitation_turn_recovery import (
+                is_local_recovery_call,
+            )
+
+            waiting = next((row for row in calls if is_local_recovery_call(row)), None)
+            if waiting is None:
+                return None
+        else:
+            waiting = waiting_by_id[str(interaction.tool_call_id)]
         return {
             "prior": [
                 {
@@ -222,9 +231,13 @@ def _load_tool_resume_snapshot(
                 "tool_name": waiting.tool_name,
                 "arguments": dict(waiting.arguments_json or {}),
             },
-            "resolution_status": interaction.status,
-            "interaction_kind": interaction.kind,
-            "resolution": dict(interaction.resolution_json or {}),
+            "resolution_status": interaction.status if interaction else "resolved",
+            "interaction_kind": interaction.kind
+            if interaction
+            else "local_operation_recovery",
+            "resolution": dict(interaction.resolution_json or {})
+            if interaction
+            else {},
             "suspended": [
                 {
                     "call_id": row.call_id,
@@ -498,7 +511,9 @@ class AgentLoopStrategy:
         # ``current_input`` is skipped here and sent as the user message
         # instead, so the model has a user turn to answer and the loop can
         # append assistant/tool turns after it.
-        from app.services.chat.context_assembly_pipeline import prompt_renderer
+        from app.conversation.application.context_assembly_pipeline import (
+            prompt_renderer,
+        )
 
         runtime_prompt = agent_system_prompt_for_runtime(ctx.runtime_profile)
         agent_system_prompt = f"{runtime_prompt}\n\n{tool_catalog.format_prompt()}"
@@ -638,7 +653,12 @@ class AgentLoopStrategy:
             waiting_call = dict(resume["waiting"])
             waiting_id = str(waiting_call["call_id"])
             suspended_calls = [dict(call) for call in resume.get("suspended") or []]
-            if resume["resolution_status"] == "rejected":
+            if (
+                resume["resolution_status"] == "rejected"
+                and resume.get("interaction_kind") != "fact_confirmation"
+            ):
+                # A fact rejection is itself a domain decision: run the original
+                # thin adapter so the candidate reaches its canonical rejected state.
                 rejected = await asyncio.to_thread(
                     reject_waiting_tool_call,
                     call_id=waiting_id,
@@ -1110,9 +1130,10 @@ class AgentLoopStrategy:
     ) -> tuple[Any, float]:
         attempt = 0
         current_call_id: str | None = None
+        current_deadline: float | None = None
 
         async def _make_call() -> Any:
-            nonlocal attempt, current_call_id
+            nonlocal attempt, current_call_id, current_deadline
             attempt += 1
             request = build_provider_request(
                 messages=messages,
@@ -1139,15 +1160,45 @@ class AgentLoopStrategy:
                     provider=str(getattr(profile, "provider", "unknown") or "unknown"),
                     model=str(getattr(profile, "model", "unknown") or "unknown"),
                     fingerprint=request_fingerprint(
-                        messages=messages,
-                        tools=tool_schemas,
+                        messages=request.messages,
+                        tools=request.tools,
+                        system=request.system,
+                        max_tokens=request.max_tokens,
+                        temperature=request.temperature,
                     ),
+                    token_allowance=usage_runtime.llm_allowance(
+                        {
+                            "system": request.system,
+                            "messages": request.messages,
+                            "tools": request.tools,
+                        },
+                        request.max_tokens,
+                    )[1],
+                    usage_units=usage_runtime.llm_allowance(
+                        {
+                            "system": request.system,
+                            "messages": request.messages,
+                            "tools": request.tools,
+                        },
+                        request.max_tokens,
+                    )[0],
                 )
+                request = replace(
+                    request,
+                    usage_permit=reservation_id(user_pk, turn_id, current_call_id),
+                )
+            current_deadline = (
+                asyncio.get_running_loop().time()
+                + settings.MODEL_STREAM_DEADLINE_SECONDS
+            )
             try:
-                return await ModelProviderAdapter(
-                    client=client,
-                    profile=profile,
-                ).start_stream(request)
+                return await asyncio.wait_for(
+                    ModelProviderAdapter(
+                        client=client,
+                        profile=profile,
+                    ).start_stream(request),
+                    settings.MODEL_STREAM_DEADLINE_SECONDS,
+                )
             except BaseException as exc:
                 if current_call_id:
                     await asyncio.to_thread(
@@ -1155,13 +1206,13 @@ class AgentLoopStrategy:
                         turn_id=turn_id,
                         call_id=current_call_id,
                         dispatch_generation=dispatch_generation,
-                        status=(
-                            "cancelled"
-                            if isinstance(exc, asyncio.CancelledError)
-                            else "failed"
-                        ),
+                        status=dispatch_failure_status(exc),
                         error_code=type(exc).__name__,
                     )
+                if dispatch_failure_status(exc) == "unknown" and not isinstance(
+                    exc, asyncio.CancelledError
+                ):
+                    raise ModelOutcomeUnknownError("model_outcome_unknown") from exc
                 raise
 
         async def _on_context_too_long() -> bool:
@@ -1181,6 +1232,7 @@ class AgentLoopStrategy:
             turn_id=turn_id,
             call_id=current_call_id,
             dispatch_generation=dispatch_generation,
+            deadline=current_deadline,
         )
         return tracked, round((time.perf_counter() - started) * 1000, 2)
 
@@ -1208,6 +1260,7 @@ class AgentLoopStrategy:
         otherwise — see issue C in commit message).
         """
         from app.agent_runtime.tool_call_streaming import ToolCallAssembler
+
         assembler = ToolCallAssembler()
         async for chunk in stream:
             event = (
@@ -1463,6 +1516,7 @@ class AgentLoopStrategy:
                 connection_identity=dispatch_plan.connection_identity,
                 resource_identities=dispatch_plan.resource_identities,
                 receipt_ref_resolver=dispatch_plan.receipt_ref_resolver,
+                max_argument_chars=dispatch_plan.max_argument_chars,
             )
             return _PreparedToolCall(
                 model_index=model_index,

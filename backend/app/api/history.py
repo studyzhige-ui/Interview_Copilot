@@ -13,11 +13,9 @@ from app.schemas.history_search import (
     HistorySearchQuery,
     HistorySearchResponse,
 )
-from app.services.interaction_history_service import (
-    HistorySearchNotFoundError,
-    get_interaction_history_record,
-    search_interaction_history,
-)
+from app.conversation.history_queries import HistorySearchNotFoundError
+from app.conversation.history_queries import get_interaction_history_record
+from app.conversation.history_queries import search_interaction_history
 
 router = APIRouter(prefix="/history", tags=["history"])
 

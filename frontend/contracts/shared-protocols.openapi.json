@@ -1,0 +1,4561 @@
+{
+  "components": {
+    "schemas": {
+      "ActivityObjectReference": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "version"
+        ],
+        "title": "ActivityObjectReference",
+        "type": "object"
+      },
+      "AgentInteractionView": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "clarification",
+              "connection",
+              "approval",
+              "fact_confirmation",
+              "profile_update_confirmation",
+              "client_readiness"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "request": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Request",
+            "type": "object"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resolution"
+          },
+          "resolution_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution Identity"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "schema_version": {
+            "exclusiveMinimum": 0,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "resolved",
+              "rejected",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Call Id"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "version": {
+            "exclusiveMinimum": 0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "turn_id",
+          "tool_call_id",
+          "kind",
+          "schema_version",
+          "status",
+          "request",
+          "resolution",
+          "version",
+          "created_at",
+          "expires_at",
+          "resolved_at",
+          "resolution_identity"
+        ],
+        "title": "AgentInteractionView",
+        "type": "object"
+      },
+      "AgentInteractionViewResponseContract": {
+        "$ref": "#/components/schemas/AgentInteractionView"
+      },
+      "CandidateConfirmationBasis": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "decision_identity": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Decision Identity",
+            "type": "string"
+          },
+          "expected_candidate_version": {
+            "exclusiveMinimum": 0,
+            "title": "Expected Candidate Version",
+            "type": "integer"
+          },
+          "interaction_id": {
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "candidate_confirmation",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "candidate_id",
+          "expected_candidate_version",
+          "interaction_id",
+          "decision_identity"
+        ],
+        "title": "CandidateConfirmationBasis",
+        "type": "object"
+      },
+      "CareerActivityEvent": {
+        "additionalProperties": false,
+        "description": "Contract-shaped envelope over a canonical event or owner projection.",
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Conversation Id"
+          },
+          "event_category": {
+            "enum": [
+              "domain",
+              "harness",
+              "experience"
+            ],
+            "title": "Event Category",
+            "type": "string"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
+          "event_kind": {
+            "title": "Event Kind",
+            "type": "string"
+          },
+          "interaction_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Interaction Id"
+          },
+          "object_references": {
+            "items": {
+              "$ref": "#/components/schemas/ActivityObjectReference"
+            },
+            "title": "Object References",
+            "type": "array"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation Id"
+          },
+          "payload": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Payload",
+            "type": "object"
+          },
+          "replayable": {
+            "title": "Replayable",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "minimum": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "sequence_or_cursor": {
+            "title": "Sequence Or Cursor",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task Id"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Call Id"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Turn Id"
+          },
+          "user_scope": {
+            "title": "User Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "event_kind",
+          "event_category",
+          "schema_version",
+          "occurred_at",
+          "sequence_or_cursor",
+          "user_scope",
+          "conversation_id",
+          "turn_id",
+          "task_id",
+          "operation_id",
+          "tool_call_id",
+          "interaction_id",
+          "object_references",
+          "replayable",
+          "payload"
+        ],
+        "title": "CareerActivityEvent",
+        "type": "object"
+      },
+      "CareerActivityEventResponseContract": {
+        "$ref": "#/components/schemas/CareerActivityEvent"
+      },
+      "ConfirmInterviewInvitation-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_kind": {
+            "enum": [
+              "user",
+              "agent_on_behalf",
+              "automation",
+              "system_connector"
+            ],
+            "title": "Actor Kind",
+            "type": "string"
+          },
+          "asserted_at": {
+            "format": "date-time",
+            "title": "Asserted At",
+            "type": "string"
+          },
+          "causation": {
+            "$ref": "#/components/schemas/OperationCausation-Input"
+          },
+          "confirmation_basis": {
+            "discriminator": {
+              "mapping": {
+                "candidate_confirmation": "#/components/schemas/CandidateConfirmationBasis",
+                "explicit_user_assertion": "#/components/schemas/ExplicitUserAssertionBasis-Input"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExplicitUserAssertionBasis-Input"
+              },
+              {
+                "$ref": "#/components/schemas/CandidateConfirmationBasis"
+              }
+            ],
+            "title": "Confirmation Basis"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/InvitationFieldEvidence-Input"
+            },
+            "maxItems": 30,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "facts": {
+            "$ref": "#/components/schemas/InterviewInvitationFacts-Input"
+          },
+          "idempotency_key": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "interview": {
+            "discriminator": {
+              "mapping": {
+                "create": "#/components/schemas/CreateInterview-Input",
+                "update_existing": "#/components/schemas/UpdateExistingInterview"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CreateInterview-Input"
+              },
+              {
+                "$ref": "#/components/schemas/UpdateExistingInterview"
+              }
+            ],
+            "title": "Interview"
+          },
+          "opportunity": {
+            "discriminator": {
+              "mapping": {
+                "create_new": "#/components/schemas/CreateOpportunity-Input",
+                "link_existing": "#/components/schemas/LinkExistingOpportunity"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LinkExistingOpportunity"
+              },
+              {
+                "$ref": "#/components/schemas/CreateOpportunity-Input"
+              }
+            ],
+            "title": "Opportunity"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "actor_kind",
+          "asserted_at",
+          "confirmation_basis",
+          "facts",
+          "opportunity"
+        ],
+        "title": "ConfirmInterviewInvitation",
+        "type": "object"
+      },
+      "ConfirmInterviewInvitation-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_kind": {
+            "enum": [
+              "user",
+              "agent_on_behalf",
+              "automation",
+              "system_connector"
+            ],
+            "title": "Actor Kind",
+            "type": "string"
+          },
+          "asserted_at": {
+            "format": "date-time",
+            "title": "Asserted At",
+            "type": "string"
+          },
+          "causation": {
+            "$ref": "#/components/schemas/OperationCausation-Output"
+          },
+          "confirmation_basis": {
+            "discriminator": {
+              "mapping": {
+                "candidate_confirmation": "#/components/schemas/CandidateConfirmationBasis",
+                "explicit_user_assertion": "#/components/schemas/ExplicitUserAssertionBasis-Output"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExplicitUserAssertionBasis-Output"
+              },
+              {
+                "$ref": "#/components/schemas/CandidateConfirmationBasis"
+              }
+            ],
+            "title": "Confirmation Basis"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/InvitationFieldEvidence-Output"
+            },
+            "maxItems": 30,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "facts": {
+            "$ref": "#/components/schemas/InterviewInvitationFacts-Output"
+          },
+          "idempotency_key": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "interview": {
+            "discriminator": {
+              "mapping": {
+                "create": "#/components/schemas/CreateInterview-Output",
+                "update_existing": "#/components/schemas/UpdateExistingInterview"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CreateInterview-Output"
+              },
+              {
+                "$ref": "#/components/schemas/UpdateExistingInterview"
+              }
+            ],
+            "title": "Interview"
+          },
+          "opportunity": {
+            "discriminator": {
+              "mapping": {
+                "create_new": "#/components/schemas/CreateOpportunity-Output",
+                "link_existing": "#/components/schemas/LinkExistingOpportunity"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LinkExistingOpportunity"
+              },
+              {
+                "$ref": "#/components/schemas/CreateOpportunity-Output"
+              }
+            ],
+            "title": "Opportunity"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "idempotency_key",
+          "actor_kind",
+          "asserted_at",
+          "confirmation_basis",
+          "facts",
+          "opportunity",
+          "interview",
+          "evidence",
+          "causation"
+        ],
+        "title": "ConfirmInterviewInvitation",
+        "type": "object"
+      },
+      "ConfirmInterviewInvitationRequestContract": {
+        "$ref": "#/components/schemas/ConfirmInterviewInvitation-Input"
+      },
+      "ConfirmInterviewInvitationResult": {
+        "properties": {
+          "domain_events": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectReference"
+            },
+            "title": "Domain Events",
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectReference"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "interview": {
+            "$ref": "#/components/schemas/ObjectReference"
+          },
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "opportunity": {
+            "$ref": "#/components/schemas/ObjectReference"
+          },
+          "process_event": {
+            "$ref": "#/components/schemas/ObjectReference"
+          },
+          "projection_invalidations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Projection Invalidations",
+            "type": "array"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationView"
+          }
+        },
+        "required": [
+          "operation_id",
+          "replayed",
+          "opportunity",
+          "interview",
+          "process_event",
+          "evidence",
+          "domain_events",
+          "verification",
+          "projection_invalidations"
+        ],
+        "title": "ConfirmInterviewInvitationResult",
+        "type": "object"
+      },
+      "ConfirmInterviewInvitationResultResponseContract": {
+        "$ref": "#/components/schemas/ConfirmInterviewInvitationResult"
+      },
+      "ContextBudget": {
+        "additionalProperties": false,
+        "properties": {
+          "max_opportunity_options": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Max Opportunity Options",
+            "type": "integer"
+          },
+          "max_sections": {
+            "default": 8,
+            "maximum": 32,
+            "minimum": 1,
+            "title": "Max Sections",
+            "type": "integer"
+          },
+          "max_source_references": {
+            "default": 30,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Max Source References",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_sections",
+          "max_source_references",
+          "max_opportunity_options"
+        ],
+        "title": "ContextBudget",
+        "type": "object"
+      },
+      "ContextObjectReference": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Kind",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "version"
+        ],
+        "title": "ContextObjectReference",
+        "type": "object"
+      },
+      "ContextPackage": {
+        "additionalProperties": false,
+        "description": "Execution snapshot; never the owner of canonical product facts.",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/ContextBudget"
+          },
+          "compiled_at": {
+            "format": "date-time",
+            "title": "Compiled At",
+            "type": "string"
+          },
+          "compiler_version": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Compiler Version",
+            "type": "string"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "object_scope": {
+            "items": {
+              "$ref": "#/components/schemas/ContextObjectReference"
+            },
+            "title": "Object Scope",
+            "type": "array"
+          },
+          "package_id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Package Id",
+            "type": "string"
+          },
+          "policy_scope": {
+            "$ref": "#/components/schemas/ContextPolicyScope"
+          },
+          "purpose": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Purpose",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/ContextPackageSection"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Sections",
+            "type": "array"
+          },
+          "source_manifest": {
+            "items": {
+              "$ref": "#/components/schemas/ContextSourceManifestItem"
+            },
+            "maxItems": 100,
+            "title": "Source Manifest",
+            "type": "array"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task Id"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "user_scope": {
+            "title": "User Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "package_id",
+          "schema_version",
+          "compiled_at",
+          "user_scope",
+          "conversation_id",
+          "turn_id",
+          "task_id",
+          "purpose",
+          "object_scope",
+          "policy_scope",
+          "budget",
+          "sections",
+          "source_manifest",
+          "compiler_version"
+        ],
+        "title": "ContextPackage",
+        "type": "object"
+      },
+      "ContextPackageResponseContract": {
+        "$ref": "#/components/schemas/ContextPackage"
+      },
+      "ContextPackageSection": {
+        "additionalProperties": false,
+        "properties": {
+          "authority": {
+            "enum": [
+              "user_assertion",
+              "canonical",
+              "interaction_decision",
+              "evidence",
+              "candidate",
+              "learned",
+              "historical",
+              "working",
+              "runtime"
+            ],
+            "title": "Authority",
+            "type": "string"
+          },
+          "content_or_reference": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Content Or Reference",
+            "type": "object"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "object_versions": {
+            "items": {
+              "$ref": "#/components/schemas/ContextObjectReference"
+            },
+            "title": "Object Versions",
+            "type": "array"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Observed At"
+          },
+          "role": {
+            "enum": [
+              "current_user_input",
+              "canonical_state",
+              "interaction_decision",
+              "source_evidence",
+              "observation_candidate",
+              "learned_memory",
+              "conversation_history",
+              "working_ui_context",
+              "runtime_controls"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "sensitivity": {
+            "const": "career_private",
+            "default": "career_private",
+            "title": "Sensitivity",
+            "type": "string"
+          },
+          "source_references": {
+            "items": {
+              "$ref": "#/components/schemas/ContextSourceReference"
+            },
+            "title": "Source References",
+            "type": "array"
+          },
+          "truncation_state": {
+            "enum": [
+              "complete",
+              "bounded",
+              "reference_only"
+            ],
+            "title": "Truncation State",
+            "type": "string"
+          },
+          "valid_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid At"
+          }
+        },
+        "required": [
+          "role",
+          "authority",
+          "content_or_reference",
+          "source_references",
+          "object_versions",
+          "observed_at",
+          "valid_at",
+          "expires_at",
+          "sensitivity",
+          "truncation_state"
+        ],
+        "title": "ContextPackageSection",
+        "type": "object"
+      },
+      "ContextPolicyScope": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_kind": {
+            "enum": [
+              "user",
+              "agent",
+              "automation"
+            ],
+            "title": "Actor Kind",
+            "type": "string"
+          },
+          "allowed_operations": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Allowed Operations",
+            "type": "array"
+          },
+          "canonical_write_requires_user_decision": {
+            "default": true,
+            "title": "Canonical Write Requires User Decision",
+            "type": "boolean"
+          },
+          "execution_time_policy_recheck": {
+            "default": true,
+            "title": "Execution Time Policy Recheck",
+            "type": "boolean"
+          },
+          "user_scope_enforced": {
+            "default": true,
+            "title": "User Scope Enforced",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actor_kind",
+          "allowed_operations",
+          "canonical_write_requires_user_decision",
+          "execution_time_policy_recheck",
+          "user_scope_enforced"
+        ],
+        "title": "ContextPolicyScope",
+        "type": "object"
+      },
+      "ContextSourceManifestItem": {
+        "additionalProperties": false,
+        "properties": {
+          "authority": {
+            "enum": [
+              "user_assertion",
+              "evidence",
+              "candidate",
+              "canonical"
+            ],
+            "title": "Authority",
+            "type": "string"
+          },
+          "captured_or_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Captured Or Observed At"
+          },
+          "content_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "invalidated": {
+            "default": false,
+            "title": "Invalidated",
+            "type": "boolean"
+          },
+          "object_owner": {
+            "title": "Object Owner",
+            "type": "string"
+          },
+          "producer": {
+            "title": "Producer",
+            "type": "string"
+          },
+          "redaction": {
+            "default": "reference_only",
+            "enum": [
+              "reference_only",
+              "bounded_fields"
+            ],
+            "title": "Redaction",
+            "type": "string"
+          },
+          "sensitivity": {
+            "const": "career_private",
+            "default": "career_private",
+            "title": "Sensitivity",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ContextSourceReference"
+          }
+        },
+        "required": [
+          "source",
+          "object_owner",
+          "producer",
+          "captured_or_observed_at",
+          "authority",
+          "content_hash",
+          "sensitivity",
+          "redaction",
+          "invalidated"
+        ],
+        "title": "ContextSourceManifestItem",
+        "type": "object"
+      },
+      "ContextSourceReference": {
+        "additionalProperties": false,
+        "properties": {
+          "identity": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Identity",
+            "type": "string"
+          },
+          "kind": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Kind",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version"
+          }
+        },
+        "required": [
+          "kind",
+          "identity",
+          "version",
+          "snapshot_id"
+        ],
+        "title": "ContextSourceReference",
+        "type": "object"
+      },
+      "CreateInterview-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "create",
+            "default": "create",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "title": "CreateInterview",
+        "type": "object"
+      },
+      "CreateInterview-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "create",
+            "default": "create",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "CreateInterview",
+        "type": "object"
+      },
+      "CreateOpportunity-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "external_job_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "External Job Id"
+          },
+          "kind": {
+            "const": "create_new",
+            "title": "Kind",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "source_provider": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Provider"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Url"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Team"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "CreateOpportunity",
+        "type": "object"
+      },
+      "CreateOpportunity-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "external_job_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "External Job Id"
+          },
+          "kind": {
+            "const": "create_new",
+            "title": "Kind",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "source_provider": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Provider"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Url"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Team"
+          }
+        },
+        "required": [
+          "kind",
+          "location",
+          "team",
+          "source_url",
+          "source_provider",
+          "external_job_id"
+        ],
+        "title": "CreateOpportunity",
+        "type": "object"
+      },
+      "Excerpt": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "exclusiveMinimum": 0,
+            "title": "End",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "start": {
+            "minimum": 0,
+            "title": "Start",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "start",
+          "end",
+          "text"
+        ],
+        "title": "Excerpt",
+        "type": "object"
+      },
+      "ExplicitUserAssertionBasis-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "explicit_user_assertion",
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/InvitationSourceReference-Input"
+          }
+        },
+        "required": [
+          "kind",
+          "source"
+        ],
+        "title": "ExplicitUserAssertionBasis",
+        "type": "object"
+      },
+      "ExplicitUserAssertionBasis-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "explicit_user_assertion",
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/InvitationSourceReference-Output"
+          }
+        },
+        "required": [
+          "kind",
+          "source"
+        ],
+        "title": "ExplicitUserAssertionBasis",
+        "type": "object"
+      },
+      "FactConfirmationRequest": {
+        "additionalProperties": false,
+        "description": "Durable ``fact_confirmation@1`` request shown by any experience surface.",
+        "properties": {
+          "allowed_decisions": {
+            "items": {
+              "enum": [
+                "confirm",
+                "correct_and_confirm",
+                "reject"
+              ],
+              "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Allowed Decisions",
+            "type": "array"
+          },
+          "candidate_reference": {
+            "$ref": "#/components/schemas/ObjectReference"
+          },
+          "conflicts": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Conflicts",
+            "type": "array"
+          },
+          "context_package": {
+            "$ref": "#/components/schemas/ContextPackage"
+          },
+          "expected_candidate_version": {
+            "exclusiveMinimum": 0,
+            "title": "Expected Candidate Version",
+            "type": "integer"
+          },
+          "field_provenance": {
+            "items": {
+              "$ref": "#/components/schemas/InvitationFieldEvidence-Output"
+            },
+            "maxItems": 30,
+            "title": "Field Provenance",
+            "type": "array"
+          },
+          "invitation_facts": {
+            "$ref": "#/components/schemas/InterviewInvitationCandidateFacts"
+          },
+          "missing_or_uncertain_fields": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Missing Or Uncertain Fields",
+            "type": "array"
+          },
+          "opportunity_match_options": {
+            "items": {
+              "$ref": "#/components/schemas/OpportunityMatchOption"
+            },
+            "maxItems": 20,
+            "title": "Opportunity Match Options",
+            "type": "array"
+          },
+          "protocol": {
+            "const": "interview_invitation.fact_confirmation.v1",
+            "default": "interview_invitation.fact_confirmation.v1",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "source_and_evidence_references": {
+            "items": {
+              "$ref": "#/components/schemas/InvitationSourceReference-Output"
+            },
+            "maxItems": 30,
+            "title": "Source And Evidence References",
+            "type": "array"
+          }
+        },
+        "required": [
+          "protocol",
+          "candidate_reference",
+          "expected_candidate_version",
+          "invitation_facts",
+          "field_provenance",
+          "missing_or_uncertain_fields",
+          "conflicts",
+          "source_and_evidence_references",
+          "opportunity_match_options",
+          "context_package",
+          "allowed_decisions"
+        ],
+        "title": "FactConfirmationRequest",
+        "type": "object"
+      },
+      "FactConfirmationRequestResponseContract": {
+        "$ref": "#/components/schemas/FactConfirmationRequest"
+      },
+      "FactConfirmationResolution": {
+        "additionalProperties": false,
+        "description": "Typed user decision that resumes the owning Turn.",
+        "properties": {
+          "corrected_facts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InterviewInvitationFacts-Input"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "decision": {
+            "enum": [
+              "confirm",
+              "correct_and_confirm",
+              "reject"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "interview": {
+            "discriminator": {
+              "mapping": {
+                "create": "#/components/schemas/CreateInterview-Input",
+                "update_existing": "#/components/schemas/UpdateExistingInterview"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CreateInterview-Input"
+              },
+              {
+                "$ref": "#/components/schemas/UpdateExistingInterview"
+              }
+            ],
+            "title": "Interview"
+          },
+          "opportunity": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "create_new": "#/components/schemas/CreateOpportunity-Input",
+                    "link_existing": "#/components/schemas/LinkExistingOpportunity"
+                  },
+                  "propertyName": "kind"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/LinkExistingOpportunity"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateOpportunity-Input"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Opportunity"
+          },
+          "protocol": {
+            "const": "interview_invitation.fact_confirmation.v1",
+            "default": "interview_invitation.fact_confirmation.v1",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "FactConfirmationResolution",
+        "type": "object"
+      },
+      "FactConfirmationResolutionRequestContract": {
+        "$ref": "#/components/schemas/FactConfirmationResolution"
+      },
+      "InteractionPayload": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/JsonValue"
+        },
+        "description": "A structured JSON object for callers without a narrower payload model.",
+        "title": "InteractionPayload",
+        "type": "object"
+      },
+      "InterviewInvitationCandidateFacts": {
+        "additionalProperties": false,
+        "description": "Partial facts are valid only while the candidate is non-canonical.",
+        "properties": {
+          "company_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Company Name"
+          },
+          "contact_email": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Email"
+          },
+          "contact_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Name"
+          },
+          "job_title": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Title"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "meeting_url": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meeting Url"
+          },
+          "original_time_text": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Original Time Text"
+          },
+          "scheduled_end_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scheduled End At"
+          },
+          "scheduled_start_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scheduled Start At"
+          },
+          "source_timezone": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Timezone"
+          },
+          "stage_label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stage Label"
+          }
+        },
+        "required": [
+          "company_name",
+          "job_title",
+          "scheduled_start_at",
+          "original_time_text",
+          "source_timezone",
+          "scheduled_end_at",
+          "stage_label",
+          "location",
+          "meeting_url",
+          "contact_name",
+          "contact_email"
+        ],
+        "title": "InterviewInvitationCandidateFacts",
+        "type": "object"
+      },
+      "InterviewInvitationCandidateFactsResponseContract": {
+        "$ref": "#/components/schemas/InterviewInvitationCandidateFacts"
+      },
+      "InterviewInvitationFacts-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "company_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Company Name",
+            "type": "string"
+          },
+          "contact_email": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Email"
+          },
+          "contact_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Name"
+          },
+          "job_title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Job Title",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "meeting_url": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meeting Url"
+          },
+          "original_time_text": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Original Time Text",
+            "type": "string"
+          },
+          "scheduled_end_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scheduled End At"
+          },
+          "scheduled_start_at": {
+            "format": "date-time",
+            "title": "Scheduled Start At",
+            "type": "string"
+          },
+          "source_timezone": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Source Timezone",
+            "type": "string"
+          },
+          "stage_label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stage Label"
+          }
+        },
+        "required": [
+          "company_name",
+          "job_title",
+          "scheduled_start_at",
+          "original_time_text",
+          "source_timezone"
+        ],
+        "title": "InterviewInvitationFacts",
+        "type": "object"
+      },
+      "InterviewInvitationFacts-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "company_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Company Name",
+            "type": "string"
+          },
+          "contact_email": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Email"
+          },
+          "contact_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Name"
+          },
+          "job_title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Job Title",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "meeting_url": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Meeting Url"
+          },
+          "original_time_text": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Original Time Text",
+            "type": "string"
+          },
+          "scheduled_end_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scheduled End At"
+          },
+          "scheduled_start_at": {
+            "format": "date-time",
+            "title": "Scheduled Start At",
+            "type": "string"
+          },
+          "source_timezone": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Source Timezone",
+            "type": "string"
+          },
+          "stage_label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stage Label"
+          }
+        },
+        "required": [
+          "company_name",
+          "job_title",
+          "scheduled_start_at",
+          "original_time_text",
+          "source_timezone",
+          "scheduled_end_at",
+          "stage_label",
+          "location",
+          "meeting_url",
+          "contact_name",
+          "contact_email"
+        ],
+        "title": "InterviewInvitationFacts",
+        "type": "object"
+      },
+      "InterviewInvitationHandoffView": {
+        "properties": {
+          "company_name": {
+            "title": "Company Name",
+            "type": "string"
+          },
+          "interview": {
+            "$ref": "#/components/schemas/ObjectReference"
+          },
+          "job_title": {
+            "title": "Job Title",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "meeting_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meeting Url"
+          },
+          "opportunity": {
+            "$ref": "#/components/schemas/ObjectReference"
+          },
+          "original_time_text": {
+            "title": "Original Time Text",
+            "type": "string"
+          },
+          "scheduled_end_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled End At"
+          },
+          "scheduled_start_at": {
+            "format": "date-time",
+            "title": "Scheduled Start At",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/InvitationSourceReference-Output"
+          },
+          "source_timezone": {
+            "title": "Source Timezone",
+            "type": "string"
+          },
+          "stage_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Label"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationView"
+          }
+        },
+        "required": [
+          "opportunity",
+          "interview",
+          "company_name",
+          "job_title",
+          "scheduled_start_at",
+          "scheduled_end_at",
+          "original_time_text",
+          "source_timezone",
+          "stage_label",
+          "location",
+          "meeting_url",
+          "source",
+          "verification"
+        ],
+        "title": "InterviewInvitationHandoffView",
+        "type": "object"
+      },
+      "InterviewInvitationHandoffViewResponseContract": {
+        "$ref": "#/components/schemas/InterviewInvitationHandoffView"
+      },
+      "InterviewPreparationOpenPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_interview_version": {
+            "minimum": 1,
+            "title": "Expected Interview Version",
+            "type": "integer"
+          },
+          "expected_opportunity_version": {
+            "minimum": 1,
+            "title": "Expected Opportunity Version",
+            "type": "integer"
+          },
+          "interview_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Interview Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "interview_preparation_open",
+            "default": "interview_preparation_open",
+            "title": "Kind",
+            "type": "string"
+          },
+          "opportunity_id": {
+            "maxLength": 35,
+            "minLength": 1,
+            "title": "Opportunity Id",
+            "type": "string"
+          },
+          "preferred_surface": {
+            "const": "interviews",
+            "default": "interviews",
+            "title": "Preferred Surface",
+            "type": "string"
+          },
+          "source_operation_id": {
+            "maxLength": 36,
+            "minLength": 1,
+            "title": "Source Operation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "interview_id",
+          "opportunity_id",
+          "expected_interview_version",
+          "expected_opportunity_version",
+          "source_operation_id",
+          "preferred_surface"
+        ],
+        "title": "InterviewPreparationOpenPayload",
+        "type": "object"
+      },
+      "InvitationFieldEvidence-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "field_name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Field Name",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/InvitationSourceReference-Input"
+          },
+          "value_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Value Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field_name",
+          "source",
+          "value_hash"
+        ],
+        "title": "InvitationFieldEvidence",
+        "type": "object"
+      },
+      "InvitationFieldEvidence-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "field_name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Field Name",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/InvitationSourceReference-Output"
+          },
+          "value_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Value Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field_name",
+          "source",
+          "value_hash"
+        ],
+        "title": "InvitationFieldEvidence",
+        "type": "object"
+      },
+      "InvitationSourceReference-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "identity": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Identity",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "fixture",
+              "manual",
+              "user_message",
+              "gmail"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version"
+          }
+        },
+        "required": [
+          "kind",
+          "identity"
+        ],
+        "title": "InvitationSourceReference",
+        "type": "object"
+      },
+      "InvitationSourceReference-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "identity": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Identity",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "fixture",
+              "manual",
+              "user_message",
+              "gmail"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version"
+          }
+        },
+        "required": [
+          "kind",
+          "identity",
+          "version",
+          "snapshot_id"
+        ],
+        "title": "InvitationSourceReference",
+        "type": "object"
+      },
+      "InvitationSubmissionReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfirmInterviewInvitation-Output"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "idempotency_key": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConfirmInterviewInvitationResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "enum": [
+              "not_received",
+              "pending",
+              "committed",
+              "rejected",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "status",
+          "command",
+          "result"
+        ],
+        "title": "InvitationSubmissionReceipt",
+        "type": "object"
+      },
+      "InvitationSubmissionReceiptResponseContract": {
+        "$ref": "#/components/schemas/InvitationSubmissionReceipt"
+      },
+      "JsonValue": {},
+      "LinkExistingOpportunity": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "exclusiveMinimum": 0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "kind": {
+            "const": "link_existing",
+            "title": "Kind",
+            "type": "string"
+          },
+          "opportunity_id": {
+            "maxLength": 35,
+            "minLength": 1,
+            "title": "Opportunity Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "opportunity_id",
+          "expected_version"
+        ],
+        "title": "LinkExistingOpportunity",
+        "type": "object"
+      },
+      "MockAnswerReceipt": {
+        "properties": {
+          "question_message_id": {
+            "title": "Question Message Id",
+            "type": "integer"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MockAnswerResp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "enum": [
+              "in_progress",
+              "completed",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "question_message_id",
+          "status",
+          "response"
+        ],
+        "title": "MockAnswerReceipt",
+        "type": "object"
+      },
+      "MockAnswerReceiptResponseContract": {
+        "$ref": "#/components/schemas/MockAnswerReceipt"
+      },
+      "MockAnswerRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_audio_file_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Answer Audio File Asset Id"
+          },
+          "answer_text": {
+            "maxLength": 50000,
+            "minLength": 1,
+            "title": "Answer Text",
+            "type": "string"
+          },
+          "question_message_id": {
+            "exclusiveMinimum": 0,
+            "title": "Question Message Id",
+            "type": "integer"
+          },
+          "request_id": {
+            "maxLength": 36,
+            "minLength": 36,
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "answer_text",
+          "question_message_id"
+        ],
+        "title": "MockAnswerRequest",
+        "type": "object"
+      },
+      "MockAnswerRequestRequestContract": {
+        "$ref": "#/components/schemas/MockAnswerRequest"
+      },
+      "MockAnswerResp": {
+        "description": "``POST /mock-interviews/{record_id}/answer`` — next interviewer line.",
+        "properties": {
+          "end_suggested": {
+            "title": "End Suggested",
+            "type": "boolean"
+          },
+          "message": {
+            "$ref": "#/components/schemas/MockLiveMessage"
+          }
+        },
+        "required": [
+          "message",
+          "end_suggested"
+        ],
+        "title": "MockAnswerResp",
+        "type": "object"
+      },
+      "MockAnswerRespResponseContract": {
+        "$ref": "#/components/schemas/MockAnswerResp"
+      },
+      "MockClientActionRequest": {
+        "additionalProperties": false,
+        "description": "Durable request stored in the existing AgentInteraction record.",
+        "properties": {
+          "action": {
+            "enum": [
+              "mock_interview.prefill",
+              "mock_interview.check_readiness",
+              "mock_interview.enter_live",
+              "interview.preparation.open"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "action_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Action Id",
+            "type": "string"
+          },
+          "bound_client_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Bound Client Id",
+            "type": "string"
+          },
+          "original_client_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Original Client Id",
+            "type": "string"
+          },
+          "payload": {
+            "discriminator": {
+              "mapping": {
+                "interview_preparation_open": "#/components/schemas/InterviewPreparationOpenPayload",
+                "mock_enter_live": "#/components/schemas/MockEnterLivePayload",
+                "mock_prefill": "#/components/schemas/MockPrefillPayload",
+                "mock_readiness": "#/components/schemas/MockReadinessPayload"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MockPrefillPayload"
+              },
+              {
+                "$ref": "#/components/schemas/MockReadinessPayload"
+              },
+              {
+                "$ref": "#/components/schemas/MockEnterLivePayload"
+              },
+              {
+                "$ref": "#/components/schemas/InterviewPreparationOpenPayload"
+              }
+            ],
+            "title": "Payload"
+          },
+          "protocol": {
+            "default": "mock_handoff.v1",
+            "enum": [
+              "mock_handoff.v1",
+              "client_action.v1"
+            ],
+            "title": "Protocol",
+            "type": "string"
+          },
+          "takeover_generation": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Takeover Generation",
+            "type": "integer"
+          },
+          "takeover_history": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Takeover History",
+            "type": "array"
+          }
+        },
+        "required": [
+          "protocol",
+          "action_id",
+          "action",
+          "original_client_id",
+          "bound_client_id",
+          "takeover_generation",
+          "takeover_history",
+          "payload"
+        ],
+        "title": "MockClientActionRequest",
+        "type": "object"
+      },
+      "MockClientActionRequestResponseContract": {
+        "$ref": "#/components/schemas/MockClientActionRequest"
+      },
+      "MockClientActionResolutionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted": {
+            "default": true,
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "action_id": {
+            "title": "Action Id",
+            "type": "string"
+          },
+          "dispatch_generation": {
+            "minimum": 1,
+            "title": "Dispatch Generation",
+            "type": "integer"
+          },
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "turn_status": {
+            "enum": [
+              "pending",
+              "running",
+              "waiting",
+              "completed",
+              "blocked",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Turn Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "interaction_id",
+          "accepted",
+          "replayed",
+          "turn_status",
+          "dispatch_generation"
+        ],
+        "title": "MockClientActionResolutionResponse",
+        "type": "object"
+      },
+      "MockClientActionResolutionResponseResponseContract": {
+        "$ref": "#/components/schemas/MockClientActionResolutionResponse"
+      },
+      "MockClientActionResultRequest": {
+        "additionalProperties": false,
+        "description": "Authenticated response from the one client bound to an action.",
+        "properties": {
+          "action_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Action Id",
+            "type": "string"
+          },
+          "client_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Id",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "fallback_mode": {
+            "anyOf": [
+              {
+                "const": "text",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fallback Mode"
+          },
+          "outcome": {
+            "enum": [
+              "acknowledged",
+              "refused",
+              "unsupported",
+              "failed",
+              "expired"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "readiness": {
+            "anyOf": [
+              {
+                "const": "ready",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Readiness"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "action_id",
+          "client_id",
+          "expected_version",
+          "outcome"
+        ],
+        "title": "MockClientActionResultRequest",
+        "type": "object"
+      },
+      "MockClientActionResultRequestRequestContract": {
+        "$ref": "#/components/schemas/MockClientActionResultRequest"
+      },
+      "MockClientActionTakeoverRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Action Id",
+            "type": "string"
+          },
+          "client_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Id",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action_id",
+          "expected_version",
+          "client_id"
+        ],
+        "title": "MockClientActionTakeoverRequest",
+        "type": "object"
+      },
+      "MockClientActionTakeoverRequestRequestContract": {
+        "$ref": "#/components/schemas/MockClientActionTakeoverRequest"
+      },
+      "MockClientActionView": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "mock_interview.prefill",
+              "mock_interview.check_readiness",
+              "mock_interview.enter_live",
+              "interview.preparation.open"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "action_id": {
+            "title": "Action Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "interaction_id": {
+            "title": "Interaction Id",
+            "type": "string"
+          },
+          "payload": {
+            "discriminator": {
+              "mapping": {
+                "interview_preparation_open": "#/components/schemas/InterviewPreparationOpenPayload",
+                "mock_enter_live": "#/components/schemas/MockEnterLivePayload",
+                "mock_prefill": "#/components/schemas/MockPrefillPayload",
+                "mock_readiness": "#/components/schemas/MockReadinessPayload"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MockPrefillPayload"
+              },
+              {
+                "$ref": "#/components/schemas/MockReadinessPayload"
+              },
+              {
+                "$ref": "#/components/schemas/MockEnterLivePayload"
+              },
+              {
+                "$ref": "#/components/schemas/InterviewPreparationOpenPayload"
+              }
+            ],
+            "title": "Payload"
+          },
+          "takeover_generation": {
+            "title": "Takeover Generation",
+            "type": "integer"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          },
+          "turn_id": {
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "interaction_id",
+          "turn_id",
+          "tool_call_id",
+          "version",
+          "action_id",
+          "action",
+          "payload",
+          "takeover_generation",
+          "created_at"
+        ],
+        "title": "MockClientActionView",
+        "type": "object"
+      },
+      "MockClientActionViewResponseContract": {
+        "$ref": "#/components/schemas/MockClientActionView"
+      },
+      "MockEnterLivePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "conversation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "input_mode": {
+            "default": "voice",
+            "enum": [
+              "text",
+              "voice"
+            ],
+            "title": "Input Mode",
+            "type": "string"
+          },
+          "kind": {
+            "const": "mock_enter_live",
+            "default": "mock_enter_live",
+            "title": "Kind",
+            "type": "string"
+          },
+          "record_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Record Id",
+            "type": "string"
+          },
+          "runtime_status": {
+            "const": "mock_in_progress",
+            "default": "mock_in_progress",
+            "title": "Runtime Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "input_mode",
+          "record_id",
+          "conversation_id",
+          "runtime_status"
+        ],
+        "title": "MockEnterLivePayload",
+        "type": "object"
+      },
+      "MockLiveMessage": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "speaker": {
+            "enum": [
+              "interviewer",
+              "candidate"
+            ],
+            "title": "Speaker",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "speaker",
+          "text"
+        ],
+        "title": "MockLiveMessage",
+        "type": "object"
+      },
+      "MockPrefillPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "focus": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "minLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Focus"
+          },
+          "input_mode": {
+            "default": "voice",
+            "enum": [
+              "text",
+              "voice"
+            ],
+            "title": "Input Mode",
+            "type": "string"
+          },
+          "interviewer_style": {
+            "enum": [
+              "friendly",
+              "professional",
+              "rigorous",
+              "pressure"
+            ],
+            "title": "Interviewer Style",
+            "type": "string"
+          },
+          "jd_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jd Sha256"
+          },
+          "jd_snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jd Snapshot Id"
+          },
+          "jd_snapshot_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jd Snapshot Version"
+          },
+          "jd_text": {
+            "default": "",
+            "maxLength": 50000,
+            "title": "Jd Text",
+            "type": "string"
+          },
+          "job_opportunity_id": {
+            "anyOf": [
+              {
+                "maxLength": 35,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Opportunity Id"
+          },
+          "kind": {
+            "const": "mock_prefill",
+            "default": "mock_prefill",
+            "title": "Kind",
+            "type": "string"
+          },
+          "purpose": {
+            "default": "full",
+            "enum": [
+              "full",
+              "project_deep_dive",
+              "focused_practice"
+            ],
+            "title": "Purpose",
+            "type": "string"
+          },
+          "resume_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Id"
+          },
+          "resume_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Sha256"
+          },
+          "resume_version_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Version Id"
+          },
+          "target_question_count": {
+            "enum": [
+              15,
+              20,
+              30
+            ],
+            "title": "Target Question Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "input_mode",
+          "jd_snapshot_id",
+          "jd_snapshot_version",
+          "purpose",
+          "focus",
+          "resume_id",
+          "resume_version_id",
+          "resume_sha256",
+          "jd_sha256",
+          "jd_text",
+          "interviewer_style",
+          "target_question_count",
+          "job_opportunity_id"
+        ],
+        "title": "MockPrefillPayload",
+        "type": "object"
+      },
+      "MockPreparationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "focus": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "minLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Focus"
+          },
+          "input_mode": {
+            "default": "text",
+            "enum": [
+              "text",
+              "voice"
+            ],
+            "title": "Input Mode",
+            "type": "string"
+          },
+          "interviewer_style": {
+            "default": "professional",
+            "enum": [
+              "friendly",
+              "professional",
+              "rigorous",
+              "pressure"
+            ],
+            "title": "Interviewer Style",
+            "type": "string"
+          },
+          "jd_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jd Sha256"
+          },
+          "jd_snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jd Snapshot Id"
+          },
+          "jd_snapshot_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jd Snapshot Version"
+          },
+          "jd_text": {
+            "anyOf": [
+              {
+                "maxLength": 50000,
+                "minLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Inline JD. Prefer an exact owned JD snapshot for long/reused descriptions.",
+            "title": "Jd Text"
+          },
+          "job_opportunity_id": {
+            "anyOf": [
+              {
+                "maxLength": 35,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Opportunity Id"
+          },
+          "purpose": {
+            "default": "full",
+            "enum": [
+              "full",
+              "project_deep_dive",
+              "focused_practice"
+            ],
+            "title": "Purpose",
+            "type": "string"
+          },
+          "resume_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Id"
+          },
+          "resume_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Sha256"
+          },
+          "resume_version_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Version Id"
+          },
+          "target_question_count": {
+            "default": 20,
+            "enum": [
+              15,
+              20,
+              30
+            ],
+            "title": "Target Question Count",
+            "type": "integer"
+          }
+        },
+        "title": "MockPreparationRequest",
+        "type": "object"
+      },
+      "MockPreparationRequestRequestContract": {
+        "$ref": "#/components/schemas/MockPreparationRequest"
+      },
+      "MockReadinessPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "mock_readiness",
+            "default": "mock_readiness",
+            "title": "Kind",
+            "type": "string"
+          },
+          "requirements": {
+            "items": {
+              "const": "microphone",
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Requirements",
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "requirements"
+        ],
+        "title": "MockReadinessPayload",
+        "type": "object"
+      },
+      "ObjectReference": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "version"
+        ],
+        "title": "ObjectReference",
+        "type": "object"
+      },
+      "OperationCausation-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Conversation Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task Id"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Call Id"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Turn Id"
+          }
+        },
+        "title": "OperationCausation",
+        "type": "object"
+      },
+      "OperationCausation-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Conversation Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task Id"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Call Id"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Turn Id"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "turn_id",
+          "task_id",
+          "tool_call_id"
+        ],
+        "title": "OperationCausation",
+        "type": "object"
+      },
+      "OpportunityMatchOption": {
+        "additionalProperties": false,
+        "description": "One owned canonical opportunity the user may explicitly select.",
+        "properties": {
+          "company_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Company Name",
+            "type": "string"
+          },
+          "current_step": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Current Step",
+            "type": "string"
+          },
+          "expected_version": {
+            "exclusiveMinimum": 0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "job_title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Job Title",
+            "type": "string"
+          },
+          "opportunity_id": {
+            "maxLength": 35,
+            "minLength": 1,
+            "title": "Opportunity Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "opportunity_id",
+          "expected_version",
+          "company_name",
+          "job_title",
+          "current_step"
+        ],
+        "title": "OpportunityMatchOption",
+        "type": "object"
+      },
+      "PendingInteractionProjection": {
+        "additionalProperties": false,
+        "description": "User-level query projection; the Interaction remains the sole owner.",
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "interaction": {
+            "$ref": "#/components/schemas/AgentInteractionView"
+          },
+          "turn_status": {
+            "title": "Turn Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "turn_status",
+          "interaction"
+        ],
+        "title": "PendingInteractionProjection",
+        "type": "object"
+      },
+      "PendingInteractionProjectionResponseContract": {
+        "$ref": "#/components/schemas/PendingInteractionProjection"
+      },
+      "PreparationBrief": {
+        "additionalProperties": false,
+        "properties": {
+          "disclaimer": {
+            "title": "Disclaimer",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PreparationItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "jd_sha256": {
+            "title": "Jd Sha256",
+            "type": "string"
+          },
+          "markdown": {
+            "title": "Markdown",
+            "type": "string"
+          },
+          "method": {
+            "const": "source-excerpts-v1",
+            "default": "source-excerpts-v1",
+            "title": "Method",
+            "type": "string"
+          },
+          "omitted_resume_excerpt_count": {
+            "minimum": 0,
+            "title": "Omitted Resume Excerpt Count",
+            "type": "integer"
+          },
+          "resume_excerpts": {
+            "items": {
+              "$ref": "#/components/schemas/Excerpt"
+            },
+            "title": "Resume Excerpts",
+            "type": "array"
+          },
+          "resume_sha256": {
+            "title": "Resume Sha256",
+            "type": "string"
+          },
+          "resume_version_id": {
+            "title": "Resume Version Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "start_request": {
+            "$ref": "#/components/schemas/MockPreparationRequest"
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "resume_version_id",
+          "resume_sha256",
+          "jd_sha256",
+          "items",
+          "resume_excerpts",
+          "omitted_resume_excerpt_count",
+          "start_request",
+          "markdown",
+          "disclaimer"
+        ],
+        "title": "PreparationBrief",
+        "type": "object"
+      },
+      "PreparationBriefResponseContract": {
+        "$ref": "#/components/schemas/PreparationBrief"
+      },
+      "PreparationItem": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/Excerpt"
+            },
+            "title": "Evidence Candidates",
+            "type": "array"
+          },
+          "practice_focus": {
+            "title": "Practice Focus",
+            "type": "string"
+          },
+          "requirement": {
+            "$ref": "#/components/schemas/Excerpt"
+          },
+          "shared_terms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Shared Terms",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "review_evidence",
+              "evidence_not_located"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requirement",
+          "evidence_candidates",
+          "shared_terms",
+          "status",
+          "practice_focus"
+        ],
+        "title": "PreparationItem",
+        "type": "object"
+      },
+      "QACorrectionPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QACorrectionView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "QACorrectionPage",
+        "type": "object"
+      },
+      "QACorrectionPageResponseContract": {
+        "$ref": "#/components/schemas/QACorrectionPage"
+      },
+      "QACorrectionView": {
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/QATextSnapshot"
+          },
+          "before": {
+            "$ref": "#/components/schemas/QATextSnapshot"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "new_version": {
+            "title": "New Version",
+            "type": "integer"
+          },
+          "previous_version": {
+            "title": "Previous Version",
+            "type": "integer"
+          },
+          "qa_id": {
+            "title": "Qa Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "qa_id",
+          "previous_version",
+          "new_version",
+          "before",
+          "after",
+          "created_at"
+        ],
+        "title": "QACorrectionView",
+        "type": "object"
+      },
+      "QAEditRequest": {
+        "additionalProperties": false,
+        "description": "``PATCH /interview-records/{record_id}/qa/{qa_id}`` request body.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "maxLength": 100000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Answer"
+          },
+          "critique": {
+            "anyOf": [
+              {
+                "maxLength": 50000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Critique"
+          },
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "improved_answer": {
+            "anyOf": [
+              {
+                "maxLength": 100000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Improved Answer"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "maxLength": 50000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Question"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "QAEditRequest",
+        "type": "object"
+      },
+      "QAEditRequestRequestContract": {
+        "$ref": "#/components/schemas/QAEditRequest"
+      },
+      "QATextSnapshot": {
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "critique": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Critique"
+          },
+          "improved_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Improved Answer"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          }
+        },
+        "required": [
+          "question",
+          "answer",
+          "critique",
+          "improved_answer"
+        ],
+        "title": "QATextSnapshot",
+        "type": "object"
+      },
+      "ResolveInteractionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "exclusiveMinimum": 0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/InteractionPayload"
+          },
+          "resolution_identity": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resolution Identity"
+          },
+          "status": {
+            "enum": [
+              "resolved",
+              "rejected",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_version",
+          "status",
+          "resolution"
+        ],
+        "title": "ResolveInteractionRequest",
+        "type": "object"
+      },
+      "ResolveInteractionRequestRequestContract": {
+        "$ref": "#/components/schemas/ResolveInteractionRequest"
+      },
+      "ResolveInteractionResponse": {
+        "properties": {
+          "dispatch_generation": {
+            "exclusiveMinimum": 0,
+            "title": "Dispatch Generation",
+            "type": "integer"
+          },
+          "interaction": {
+            "$ref": "#/components/schemas/AgentInteractionView"
+          },
+          "turn_status": {
+            "enum": [
+              "pending",
+              "cancelled"
+            ],
+            "title": "Turn Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interaction",
+          "turn_status",
+          "dispatch_generation"
+        ],
+        "title": "ResolveInteractionResponse",
+        "type": "object"
+      },
+      "ResolveInteractionResponseResponseContract": {
+        "$ref": "#/components/schemas/ResolveInteractionResponse"
+      },
+      "SubmissionKey": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key"
+        ],
+        "title": "SubmissionKey",
+        "type": "object"
+      },
+      "SubmissionKeyRequestContract": {
+        "$ref": "#/components/schemas/SubmissionKey"
+      },
+      "TranscriptCorrectionReceipt": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_transcript_id": {
+            "title": "Current Transcript Id",
+            "type": "string"
+          },
+          "previous_transcript_id": {
+            "title": "Previous Transcript Id",
+            "type": "string"
+          },
+          "reanalysis_required": {
+            "default": true,
+            "title": "Reanalysis Required",
+            "type": "boolean"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "review_generation": {
+            "title": "Review Generation",
+            "type": "integer"
+          },
+          "transcript_id": {
+            "title": "Transcript Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "previous_transcript_id",
+          "transcript_id",
+          "current_transcript_id",
+          "review_generation",
+          "created_at",
+          "reanalysis_required"
+        ],
+        "title": "TranscriptCorrectionReceipt",
+        "type": "object"
+      },
+      "TranscriptCorrectionReceiptResponseContract": {
+        "$ref": "#/components/schemas/TranscriptCorrectionReceipt"
+      },
+      "TranscriptCorrectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_transcript_id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Expected Transcript Id",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 36,
+            "minLength": 36,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "speaker_roles": {
+            "additionalProperties": {
+              "enum": [
+                "candidate",
+                "interviewer",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "maxProperties": 32,
+            "title": "Speaker Roles",
+            "type": "object"
+          },
+          "words": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptWordEdit"
+            },
+            "maxItems": 200,
+            "title": "Words",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id",
+          "expected_transcript_id",
+          "reason"
+        ],
+        "title": "TranscriptCorrectionRequest",
+        "type": "object"
+      },
+      "TranscriptCorrectionRequestRequestContract": {
+        "$ref": "#/components/schemas/TranscriptCorrectionRequest"
+      },
+      "TranscriptHistoryItem": {
+        "properties": {
+          "confirmed_roles": {
+            "additionalProperties": {
+              "enum": [
+                "candidate",
+                "interviewer",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "title": "Confirmed Roles",
+            "type": "object"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "previous_transcript_id": {
+            "title": "Previous Transcript Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "transcript_id": {
+            "title": "Transcript Id",
+            "type": "string"
+          },
+          "word_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Word Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id",
+          "previous_transcript_id",
+          "transcript_id",
+          "reason",
+          "word_ids",
+          "confirmed_roles",
+          "created_at"
+        ],
+        "title": "TranscriptHistoryItem",
+        "type": "object"
+      },
+      "TranscriptHistoryPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptHistoryItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "TranscriptHistoryPage",
+        "type": "object"
+      },
+      "TranscriptHistoryPageResponseContract": {
+        "$ref": "#/components/schemas/TranscriptHistoryPage"
+      },
+      "TranscriptPage": {
+        "properties": {
+          "audio_file_asset_id": {
+            "title": "Audio File Asset Id",
+            "type": "string"
+          },
+          "audio_file_asset_version": {
+            "title": "Audio File Asset Version",
+            "type": "string"
+          },
+          "audio_sha256": {
+            "title": "Audio Sha256",
+            "type": "string"
+          },
+          "confirmed_roles": {
+            "additionalProperties": {
+              "enum": [
+                "candidate",
+                "interviewer",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "title": "Confirmed Roles",
+            "type": "object"
+          },
+          "current_transcript_id": {
+            "title": "Current Transcript Id",
+            "type": "string"
+          },
+          "duration_seconds": {
+            "title": "Duration Seconds",
+            "type": "number"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "speakers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Speakers",
+            "type": "array"
+          },
+          "suggested_roles": {
+            "additionalProperties": {
+              "enum": [
+                "candidate",
+                "interviewer",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "title": "Suggested Roles",
+            "type": "object"
+          },
+          "transcript_id": {
+            "title": "Transcript Id",
+            "type": "string"
+          },
+          "word_count": {
+            "title": "Word Count",
+            "type": "integer"
+          },
+          "words": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptWordView"
+            },
+            "title": "Words",
+            "type": "array"
+          }
+        },
+        "required": [
+          "transcript_id",
+          "current_transcript_id",
+          "source",
+          "language",
+          "audio_file_asset_id",
+          "audio_file_asset_version",
+          "audio_sha256",
+          "duration_seconds",
+          "word_count",
+          "words",
+          "speakers",
+          "confirmed_roles",
+          "suggested_roles",
+          "next_offset"
+        ],
+        "title": "TranscriptPage",
+        "type": "object"
+      },
+      "TranscriptPageResponseContract": {
+        "$ref": "#/components/schemas/TranscriptPage"
+      },
+      "TranscriptPlaybackRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "first_word_id": {
+            "pattern": "^w\\d{6}$",
+            "title": "First Word Id",
+            "type": "string"
+          },
+          "last_word_id": {
+            "pattern": "^w\\d{6}$",
+            "title": "Last Word Id",
+            "type": "string"
+          },
+          "transcript_id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Transcript Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transcript_id",
+          "first_word_id",
+          "last_word_id"
+        ],
+        "title": "TranscriptPlaybackRequest",
+        "type": "object"
+      },
+      "TranscriptPlaybackRequestRequestContract": {
+        "$ref": "#/components/schemas/TranscriptPlaybackRequest"
+      },
+      "TranscriptWordEdit": {
+        "additionalProperties": false,
+        "properties": {
+          "speaker_id": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speaker Id"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Text"
+          },
+          "word_id": {
+            "pattern": "^w\\d{6}$",
+            "title": "Word Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "word_id"
+        ],
+        "title": "TranscriptWordEdit",
+        "type": "object"
+      },
+      "TranscriptWordView": {
+        "properties": {
+          "alignment_status": {
+            "title": "Alignment Status",
+            "type": "string"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "overlap": {
+            "title": "Overlap",
+            "type": "boolean"
+          },
+          "speaker_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speaker Id"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "word_id": {
+            "title": "Word Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "word_id",
+          "text",
+          "start",
+          "end",
+          "alignment_status",
+          "speaker_id",
+          "overlap"
+        ],
+        "title": "TranscriptWordView",
+        "type": "object"
+      },
+      "UpdateExistingInterview": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_schedule_version": {
+            "exclusiveMinimum": 0,
+            "title": "Expected Schedule Version",
+            "type": "integer"
+          },
+          "interview_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Interview Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "update_existing",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "interview_id",
+          "expected_schedule_version"
+        ],
+        "title": "UpdateExistingInterview",
+        "type": "object"
+      },
+      "VerificationView": {
+        "properties": {
+          "attempt": {
+            "exclusiveMinimum": 0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "conclusion": {
+            "enum": [
+              "pending",
+              "verified",
+              "failed",
+              "unknown",
+              "reconciled"
+            ],
+            "title": "Conclusion",
+            "type": "string"
+          },
+          "expected_postconditions": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Expected Postconditions",
+            "type": "array"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "observed_evidence": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Observed Evidence",
+            "type": "array"
+          },
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "exclusiveMinimum": 0,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "operation_id",
+          "schema_version",
+          "conclusion",
+          "method",
+          "expected_postconditions",
+          "observed_evidence",
+          "failure_reason",
+          "attempt",
+          "completed_at"
+        ],
+        "title": "VerificationView",
+        "type": "object"
+      },
+      "VerificationViewResponseContract": {
+        "$ref": "#/components/schemas/VerificationView"
+      }
+    }
+  },
+  "info": {
+    "title": "Interview Copilot shared protocols",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {}
+}

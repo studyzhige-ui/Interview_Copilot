@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.services.interview.analysis import service as svc
+from app.interviews.application.analysis import service as svc
 
 
 class _FakeLLM:

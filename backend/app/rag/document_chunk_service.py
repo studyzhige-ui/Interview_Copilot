@@ -2,8 +2,8 @@
 
 This is the project's chunk store — it replaced the LlamaIndex
 ``PostgresDocumentStore`` for the knowledge base. Ingestion writes chunk rows
-here (alongside the Milvus hybrid index); full-text reconstruction reads from
-here. BM25 retrieval is served server-side by Milvus, not from this table.
+here; full-text reconstruction reads from here. The rebuildable pgvector/BM25
+projection lives in retrieval_entries in this same PostgreSQL database.
 """
 
 from __future__ import annotations
@@ -65,6 +65,7 @@ def write_chunks(
     document_id: str,
     index_status: str = "pending",
     commit: bool = True,
+    source_snapshot=None,
 ) -> dict[str, Any]:
     """Persist LlamaIndex ``nodes`` as ``document_chunks`` rows.
 
@@ -75,10 +76,25 @@ def write_chunks(
     Returns the chunk + node-id summary the worker stores on the document.
 
     Facts are written ``pending`` by default in a two-phase write: the
-    caller writes facts first, then Milvus rows, then flips the rows to
-    ``indexed`` via :func:`mark_chunks_indexed`. A Milvus failure then leaves
-    recoverable pending facts rather than a Milvus/Postgres inconsistency.
+    caller persists recoverable pending facts, then atomically replaces the
+    retrieval projection and publishes its generation. A failed publication
+    retains pending facts and a durable outbox retry.
     """
+    from app.models.knowledge import KnowledgeDocument
+    from app.rag.index.source import IndexSourceChanged, source_snapshot as snapshot_of
+
+    document = (
+        db.query(KnowledgeDocument).filter_by(id=document_id).with_for_update().first()
+    )
+    if document is None:
+        raise IndexSourceChanged("canonical document no longer exists")
+    if document.user_id != user_id or document.source_kind != source_kind:
+        raise PermissionError("canonical document owner/source mismatch")
+    current = snapshot_of(db, document)
+    if source_snapshot is not None and current != source_snapshot:
+        raise IndexSourceChanged("source changed during parsing or embedding")
+    # Projection rows use ON DELETE CASCADE. The document lock serializes this
+    # canonical replacement with pgvector publication for that same document.
     db.query(DocumentChunk).filter(
         DocumentChunk.document_id == document_id,
     ).delete(synchronize_session=False)
@@ -113,29 +129,10 @@ def write_chunks(
     return {"chunk_count": len(nodes), "node_ids": node_ids}
 
 
-def mark_chunks_indexed(
-    db: Session,
-    *,
-    document_id: str,
-    commit: bool = True,
-) -> int:
-    """Mark one document's pending chunks indexed after Milvus succeeds."""
-    q = db.query(DocumentChunk).filter(
-        DocumentChunk.index_status == "pending",
-        DocumentChunk.document_id == document_id,
-    )
-    updated = q.update(
-        {DocumentChunk.index_status: "indexed"}, synchronize_session=False
-    )
-    if commit:
-        db.commit()
-    return updated
-
-
 def read_indexable_chunks(db: Session, document_id: str) -> list[DocumentChunk]:
-    """A document's LIVE chunks in chunk order — the fact source a Milvus rebuild
+    """A document's LIVE chunks in chunk order — the fact source a projection rebuild
     reads from (plan §4.6.3: rebuild from Postgres facts, never reverse-infer
-    from old Milvus rows). Excludes soft-deleted chunks (``deleted_at`` /
+    from old projection rows). Excludes soft-deleted chunks (``deleted_at`` /
     ``index_status='deleted'``) so a rebuild never re-indexes removed content."""
     return (
         db.query(DocumentChunk)
@@ -178,7 +175,7 @@ def read_document_text(
 def delete_document_chunks(
     db: Session, document_id: str, *, commit: bool = True
 ) -> list[str]:
-    """Delete a document's chunks; return their Milvus node_ids for index cleanup."""
+    """Delete a document's chunks; return their stable node_ids for index cleanup."""
     rows = (
         db.query(DocumentChunk.node_id)
         .filter(DocumentChunk.document_id == document_id)

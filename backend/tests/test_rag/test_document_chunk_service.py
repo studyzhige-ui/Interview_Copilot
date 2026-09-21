@@ -11,6 +11,17 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from app.models.document_chunk import DocumentChunk
+from app.models.knowledge import KnowledgeDocument
+import pytest
+
+
+def _doc(db, name):
+    db.add(
+        KnowledgeDocument(
+            id=name, user_id=1, title="Fixture", source_kind="user_upload"
+        )
+    )
+    db.commit()
 
 
 def _seed(db, document_id, texts, user_id=1, **extra):
@@ -96,6 +107,7 @@ def test_read_document_text_excludes_soft_deleted(db_session):
 def test_write_chunks_defaults_to_pending(db_session):
     """Two-phase write (§4.6.3): facts land as ``pending`` — the caller flips
     them to ``indexed`` only after the Milvus rows are written."""
+    _doc(db_session, "kdoc_w")
     from app.rag.document_chunk_service import write_chunks
 
     nodes = [
@@ -120,30 +132,25 @@ def test_write_chunks_defaults_to_pending(db_session):
     assert all(r.text_hash for r in rows)
 
 
-def test_mark_chunks_indexed_by_document_id(db_session):
-    from app.rag.document_chunk_service import mark_chunks_indexed, write_chunks
+def test_unowned_chunk_write_is_rejected(db_session):
+    from app.rag.document_chunk_service import write_chunks
 
-    nodes = [SimpleNamespace(text="a", id_="n1"), SimpleNamespace(text="b", id_="n2")]
-    write_chunks(
-        db_session,
-        nodes=nodes,
-        user_id=1,
-        source_kind="user_upload",
-        document_id="kdoc_mi",
-    )
-    updated = mark_chunks_indexed(db_session, document_id="kdoc_mi")
-    assert updated == 2
-    rows = (
-        db_session.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == "kdoc_mi")
-        .all()
-    )
-    assert all(r.index_status == "indexed" for r in rows)
+    _doc(db_session, "owned")
+    with pytest.raises(PermissionError):
+        write_chunks(
+            db_session,
+            nodes=[SimpleNamespace(text="x", id_="n")],
+            user_id=2,
+            source_kind="user_upload",
+            document_id="owned",
+        )
+    assert db_session.query(DocumentChunk).count() == 0
 
 
 def test_write_chunks_persists_provenance_from_node_metadata(db_session):
     """page_start/page_end/token_count are lifted off each node's metadata
     (Phase B); a node without them leaves the columns NULL."""
+    _doc(db_session, "kdoc_prov")
     from app.rag.document_chunk_service import write_chunks
 
     nodes = [
@@ -188,6 +195,7 @@ def test_write_chunks_builds_metadata_json_from_node_diagnostics(db_session):
     category is NEVER written there (it lives on knowledge_documents)."""
     import json
 
+    _doc(db_session, "kdoc_m")
     from app.rag.document_chunk_service import write_chunks
 
     nodes = [

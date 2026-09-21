@@ -18,11 +18,9 @@ from app.schemas.job_description_snapshot import (
     JobDescriptionSnapshotFromProductUI,
     JobDescriptionSnapshotFromToolResult,
 )
-from app.services.job_description_snapshot_service import (
-    JobDescriptionSnapshotError,
-    create_job_description_snapshot,
-    list_job_description_snapshots,
-)
+from app.career.application.job_descriptions import JobDescriptionSnapshotError
+from app.career.application.job_descriptions import create_job_description_snapshot
+from app.career.application.job_descriptions import list_job_description_snapshots
 
 
 @pytest.fixture()

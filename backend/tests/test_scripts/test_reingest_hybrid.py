@@ -1,178 +1,116 @@
-"""C3 / §4.6.3: subset knowledge reingest (document / user / category) resolved
-from Postgres facts, funnelled through index.knowledge.reindex_document.
+"""No provider calls in default plan, exact owner/category scopes and bounded cursors."""
 
-A soft-deleted document is never re-indexed; category is read from
-knowledge_documents (not Milvus). reindex_document is stubbed here (its own
-rebuild-from-facts behaviour is covered in test_indexing_write_order).
-"""
-
-from __future__ import annotations
-
-from datetime import UTC, datetime
-
-import app.models  # noqa: F401 — register mappers
+from unittest.mock import MagicMock
+from datetime import datetime
 import pytest
-from app.db.database import Base
-from app.models.knowledge import KnowledgeDocument
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+import app.models  # noqa: F401
+from app.db.database import Base
+from app.models.knowledge import KnowledgeDocument
+import scripts.reingest_hybrid as script
 
 
 @pytest.fixture
-def reingest_db(monkeypatch):
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    Maker = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    import scripts.reingest_hybrid as rh
-
-    monkeypatch.setattr(rh, "SessionLocal", Maker)
-    try:
-        yield Maker
-    finally:
-        Base.metadata.drop_all(bind=engine)
-        engine.dispose()
-
-
-def _seed(maker, docs):
-    db = maker()
-    try:
-        for d in docs:
-            db.add(KnowledgeDocument(**d))
+def data(monkeypatch):
+    engine = create_engine("sqlite://", poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(engine)
+    monkeypatch.setattr(script, "SessionLocal", factory)
+    with factory() as db:
+        for name, owner, category, kind, status in [
+            ("a", 1, "题库", "manual_text", "ready"),
+            ("b", 1, "笔记", "manual_text", "ready"),
+            ("c", 2, "题库", "manual_text", "ready"),
+            ("d", 1, "题库", "chat_attachment", "ready"),
+            ("e", 1, "题库", "manual_text", "deleted"),
+        ]:
+            db.add(
+                KnowledgeDocument(
+                    id=name,
+                    user_id=owner,
+                    title=name,
+                    category=category,
+                    source_kind=kind,
+                    status=status,
+                    deleted_at=datetime.now() if status == "deleted" else None,
+                )
+            )
         db.commit()
-    finally:
-        db.close()
-
-
-def _patch_reindex(monkeypatch):
-    """Record reindex_document calls; return 1 'chunk' per document."""
-    calls: list[str] = []
-    import app.rag.index.knowledge as ing
-
+    calls = []
     monkeypatch.setattr(
-        ing, "reindex_document", lambda db, doc_id: calls.append(doc_id) or 1
+        "app.rag.index.knowledge.reindex_document", lambda doc: calls.append(doc) or 2
     )
-    return calls
-
-
-def test_reingest_full_skips_soft_deleted(reingest_db, monkeypatch):
-    _seed(
-        reingest_db,
-        [
-            dict(
-                id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"
-            ),
-            dict(
-                id="d2", user_id=1, title="t", source_kind="user_upload", status="ready"
-            ),
-            dict(
-                id="d3",
-                user_id=2,
-                title="t",
-                source_kind="user_upload",
-                status="ready",
-                deleted_at=datetime.now(UTC),
-            ),
-        ],
+    monkeypatch.setattr("app.rag.hybrid_index.validate_index_storage", lambda *a: None)
+    monkeypatch.setattr(
+        "app.rag.embedding_registry.build_embedding", lambda: MagicMock()
     )
-    calls = _patch_reindex(monkeypatch)
-    import scripts.reingest_hybrid as rh
-
-    total = rh.reingest_knowledge()
-
-    assert set(calls) == {"d1", "d2"}  # the soft-deleted d3 is excluded
-    assert total == 2
+    monkeypatch.setattr("llama_index.core.Settings", MagicMock())
+    yield calls
+    Base.metadata.drop_all(engine)
+    engine.dispose()
 
 
-def test_reingest_by_user(reingest_db, monkeypatch):
-    _seed(
-        reingest_db,
-        [
-            dict(
-                id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"
-            ),
-            dict(
-                id="d2", user_id=2, title="t", source_kind="user_upload", status="ready"
-            ),
-        ],
+def test_default_only_plans_and_does_not_load_model(data, monkeypatch):
+    monkeypatch.setattr(
+        "app.rag.embedding_registry.build_embedding",
+        lambda: pytest.fail("plan must not load model"),
     )
-    calls = _patch_reindex(monkeypatch)
-    import scripts.reingest_hybrid as rh
-
-    rh.reingest_knowledge(user_id=1)
-    assert calls == ["d1"]
+    report = script.reingest_knowledge()
+    assert report["mode"] == "plan" and data == []
+    assert [d["id"] for d in report["documents"]] == ["a", "b", "c"]
 
 
-def test_reingest_by_user_and_category(reingest_db, monkeypatch):
-    _seed(
-        reingest_db,
-        [
-            dict(
-                id="d1",
-                user_id=1,
-                title="t",
-                source_kind="user_upload",
-                status="ready",
-                category="面试题库",
-            ),
-            dict(
-                id="d2",
-                user_id=1,
-                title="t",
-                source_kind="user_upload",
-                status="ready",
-                category="笔记",
-            ),
-        ],
+def test_execute_is_explicit_and_skips_private_deleted_sources(data):
+    report = script.reingest_knowledge(execute=True)
+    assert data == ["a", "b", "c"] and report["indexed_chunks"] == 6
+
+
+def test_owner_and_category_filters_apply_even_to_explicit_ids(data):
+    report = script.reingest_knowledge(
+        user_id=1,
+        category="题库",
+        document_ids=["a", "b", "c", "missing"],
+        execute=True,
     )
-    calls = _patch_reindex(monkeypatch)
-    import scripts.reingest_hybrid as rh
-
-    rh.reingest_knowledge(user_id=1, category="面试题库")
-    assert calls == ["d1"]
+    assert data == ["a"] and report["completed_documents"] == ["a"]
 
 
-def test_reingest_explicit_document_ids(reingest_db, monkeypatch):
-    _seed(
-        reingest_db,
-        [
-            dict(
-                id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"
-            ),
-        ],
+def test_cursor_has_no_duplicate_or_lost_documents(data):
+    first = script.reingest_knowledge(limit=2)
+    second = script.reingest_knowledge(limit=2, after=first["next_cursor"])
+    assert [d["id"] for d in first["documents"] + second["documents"]] == [
+        "a",
+        "b",
+        "c",
+    ]
+    assert first["has_more"] and not second["has_more"]
+
+
+def test_empty_owner_has_no_model_side_effect(data, monkeypatch):
+    monkeypatch.setattr(
+        "app.rag.embedding_registry.build_embedding", lambda: pytest.fail("empty batch")
     )
-    calls = _patch_reindex(monkeypatch)
-    import scripts.reingest_hybrid as rh
-
-    n = rh.reingest_knowledge(document_ids=["d1", "dX"])
-    assert calls == ["d1", "dX"]  # explicit ids used as-is (no DB resolution)
-    assert n == 2
+    assert script.reingest_knowledge(user_id=999, execute=True)["indexed_chunks"] == 0
+    assert data == []
 
 
-def test_reingest_by_user_with_no_documents(reingest_db, monkeypatch):
-    _seed(
-        reingest_db,
-        [
-            dict(
-                id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"
-            ),
-        ],
-    )
-    calls = _patch_reindex(monkeypatch)
-    import scripts.reingest_hybrid as rh
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"category": "题库"},
+        {"limit": 0},
+        {"limit": 1001},
+        {"user_id": True},
+        {"document_ids": []},
+    ],
+)
+def test_invalid_batch_is_rejected(kwargs):
+    with pytest.raises(ValueError):
+        script.reingest_knowledge(**kwargs)
 
-    n = rh.reingest_knowledge(user_id=999)  # user with no docs
-    assert calls == [] and n == 0  # nothing resolved → no reindex calls
 
-
-def test_category_without_user_is_rejected(monkeypatch):
-    """--category alone must error (not silently fall through to a full reingest)."""
-    import scripts.reingest_hybrid as rh
-
-    monkeypatch.setattr("sys.argv", ["reingest_hybrid.py", "--category", "面试题库"])
+def test_drop_is_not_an_accepted_accidental_data_deletion_command():
     with pytest.raises(SystemExit):
-        rh.main()
+        script.main(["--drop"])

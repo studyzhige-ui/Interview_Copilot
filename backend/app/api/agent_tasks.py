@@ -15,11 +15,9 @@ from app.db.database import get_db
 from app.models.conversation_turn import ConversationTurn
 from app.models.user import User
 from app.schemas.agent_task import AgentTaskView
-from app.services.chat.agent_task_service import (
-    AgentTaskNotFoundError,
-    AgentTaskOwnershipError,
-    get_agent_task,
-)
+from app.conversation.application.agent_task_service import AgentTaskNotFoundError
+from app.conversation.application.agent_task_service import AgentTaskOwnershipError
+from app.conversation.application.agent_task_service import get_agent_task
 
 
 router = APIRouter(tags=["chat"])

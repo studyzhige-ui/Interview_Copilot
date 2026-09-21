@@ -25,6 +25,7 @@ export interface GmailObservationSnapshot {
 }
 
 export interface GmailObservation {
+  invitation_handoff?: GmailInvitationHandoff | null;
   id: string;
   gmail_account_id: string;
   provider_message_id: string;
@@ -90,7 +91,18 @@ export interface GmailObservationSyncResult {
   turn_ids: string[];
 }
 
+export interface GmailInvitationHandoff {
+  candidate_id: string;
+  candidate_version: number;
+  candidate_status: string;
+  conversation_id: string | null;
+  turn_id: string | null;
+  interaction_id: string | null;
+  canonical_write: false;
+}
+
 export interface GmailObservationResolution {
+  invitation_handoff?: GmailInvitationHandoff | null;
   outcome: string;
   observation: GmailObservation;
   review_card: GmailObservationReviewCard | null;

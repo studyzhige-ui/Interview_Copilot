@@ -17,13 +17,15 @@ from app.models.conversation_turn import ConversationTurn
 from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
-from app.services import artifact_service
+from app.career.application import artifacts as artifact_service
 from app.schemas.artifact import ArtifactWriteInput
-from app.services.chat.attachment_artifact_promotion_service import (
+from app.conversation.application.attachment_artifact_promotion_service import (
     promote_conversation_attachment_to_artifact,
 )
-from app.services.chat.attachment_source_service import (
+from app.conversation.application.attachment_source_service import (
     AttachmentSourceConflictError,
+)
+from app.conversation.application.attachment_source_service import (
     AttachmentSourceNotFoundError,
 )
 

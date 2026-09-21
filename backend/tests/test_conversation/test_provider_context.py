@@ -4,7 +4,8 @@ from app.conversation.provider_context import (
     compose_provider_context,
     reconstruct_history_messages,
 )
-from app.services.chat.context_assembly_pipeline import AssembledContext, PromptRenderer
+from app.conversation.application.context_assembly_pipeline import AssembledContext
+from app.conversation.application.context_assembly_pipeline import PromptRenderer
 
 
 def test_provider_context_keeps_instructions_history_and_turn_data_partitioned():

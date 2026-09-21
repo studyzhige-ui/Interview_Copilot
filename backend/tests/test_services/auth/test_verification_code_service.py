@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from app.services.auth import verification_code_service as service
+from app.identity.application import verification_code_service as service
 
 
 @pytest.fixture

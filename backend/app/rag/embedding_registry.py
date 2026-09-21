@@ -21,9 +21,8 @@ Adding a new provider:
 
 ⚠ Dimension lock-in
 -------------------
-Milvus collections are created with a fixed ``dim``. Once data is indexed
-you can NOT swap to a different-dim model without rebuilding the
-collection. Plan ahead.
+PostgreSQL generations freeze the complete embedding identity. A model,
+revision, dimension, prefix or adapter change requires rebuilding a generation.
 """
 
 from __future__ import annotations
@@ -34,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.core.config import settings
+from app.core.model_policy import require_local_model
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 ProviderKind = Literal[
-    "local_huggingface",  # in-process HuggingFaceEmbedding
+    "local_huggingface",  # isolated local broker
     "openai",  # OpenAI's official endpoint shape (uses dimensions= param)
     "openai_compat",  # /v1/embeddings drop-in (SiliconFlow / Jina / DashScope / etc)
 ]
@@ -53,7 +53,7 @@ class EmbeddingValidationError(Exception):
 
     A permanent (non-retryable) ingest error: a returned vector's dim != the
     configured ``EMBEDDING_DIM``, the vector count != the chunk count, or an
-    existing Milvus collection's dim differs from ``EMBEDDING_DIM``. The message
+    existing index generation's dim differs from ``EMBEDDING_DIM``. The message
     is user-facing — the worker surfaces it like ``EmptyContentError`` — and
     retrying never helps: fix the model/config or rebuild the index.
     """
@@ -132,13 +132,10 @@ def resolve_embedding() -> ResolvedEmbedding:
     """Read the three env vars + look the provider up."""
     pid = (settings.EMBEDDING_PROVIDER or "siliconflow").strip().lower()
     if pid not in PROVIDERS:
-        logger.warning(
-            "Unknown EMBEDDING_PROVIDER=%r, falling back to 'siliconflow'. "
-            "Known providers: %s",
-            pid,
-            ", ".join(PROVIDERS),
-        )
-        pid = "siliconflow"
+        raise ValueError(f"Unknown EMBEDDING_PROVIDER: {pid!r}")
+    require_local_model(
+        "embedding", is_local=PROVIDERS[pid].kind == "local_huggingface"
+    )
     model = (settings.EMBEDDING_MODEL or "BAAI/bge-m3").strip()
     dim = int(settings.EMBEDDING_DIM or 1024)
     return ResolvedEmbedding(
@@ -156,7 +153,10 @@ def list_providers() -> list[dict[str, Any]]:
             "china_friendly": p.china_friendly,
             "api_key_env": p.api_key_env,
             "ready": p.kind == "local_huggingface"
-            or bool(os.getenv(p.api_key_env, "").strip()),
+            or (
+                settings.AUXILIARY_MODEL_POLICY != "local_only"
+                and bool(os.getenv(p.api_key_env, "").strip())
+            ),
         }
         for pid, p in PROVIDERS.items()
     ]
@@ -172,38 +172,11 @@ def build_embedding() -> Any:
     p = cfg.provider
 
     if p.kind == "local_huggingface":
-        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+        from app.local_inference.rag import BrokerEmbedding
+        from app.usage.embedding import AccountLocalEmbedding
 
-        from app.core.hf_runtime import (
-            format_missing_model_error,
-            prepare_hf_runtime,
-            resolve_local_snapshot,
-        )
-
-        hf_cache_dir = prepare_hf_runtime()
-        from app.rag.policy import resolve_rag_device
-
-        device = resolve_rag_device()
-        model_name = resolve_local_snapshot(cfg.model)
-        if model_name is None:
-            raise RuntimeError(
-                format_missing_model_error(
-                    model_id=cfg.model,
-                    role="Embedding",
-                    fix_hint="python scripts/init_models.py --only embedding",
-                )
-            )
-        logger.info(
-            "Embedding: local HF model=%s device=%s dim=%d",
-            cfg.model,
-            device,
-            cfg.dim,
-        )
-        return HuggingFaceEmbedding(
-            model_name=model_name,
-            device=device,
-            cache_folder=str(hf_cache_dir),
-        )
+        # A thin proxy, no weights or CUDA in the web/Celery interpreter.
+        return AccountLocalEmbedding(BrokerEmbedding(cfg.model, cfg.dim), cfg.model)
 
     api_key = os.getenv(p.api_key_env, "").strip()
     if not api_key:
@@ -213,7 +186,7 @@ def build_embedding() -> Any:
         )
 
     if p.kind == "openai":
-        from llama_index.embeddings.openai import OpenAIEmbedding
+        from app.usage.embedding import AccountOpenAIEmbedding as OpenAIEmbedding
 
         logger.info("Embedding: OpenAI model=%s dim=%d", cfg.model, cfg.dim)
         return OpenAIEmbedding(
@@ -221,11 +194,16 @@ def build_embedding() -> Any:
             api_key=api_key,
             api_base=p.api_base or None,
             dimensions=cfg.dim,
+            max_retries=0,
+            embed_batch_size=10,
+            usage_provider=cfg.provider_id,
         )
 
     if p.kind == "openai_compat":
         try:
-            from llama_index.embeddings.openai_like import OpenAILikeEmbedding
+            from app.usage.embedding import (
+                AccountOpenAILikeEmbedding as OpenAILikeEmbedding,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "openai_compat embedding requires `llama-index-embeddings-openai-like`. "
@@ -242,6 +220,8 @@ def build_embedding() -> Any:
             api_key=api_key,
             api_base=p.api_base,
             embed_batch_size=10,
+            max_retries=0,
+            usage_provider=cfg.provider_id,
         )
 
     raise RuntimeError(f"Unknown provider kind: {p.kind!r}")

@@ -12,9 +12,9 @@ from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, re
 from app.db.database import SessionLocal
 from app.models.chat import Conversation
 from app.schemas.personalization import CopilotPreferenceUpdate, ScopedGuidanceUpdate
-from app.services import personalization_service
-from app.services.chat.current_turn_source import (
-    CurrentTurnSourceError,
+from app.career.application import personalization as personalization_service
+from app.conversation.application.current_turn_source import CurrentTurnSourceError
+from app.conversation.application.current_turn_source import (
     require_current_turn_user_message,
 )
 

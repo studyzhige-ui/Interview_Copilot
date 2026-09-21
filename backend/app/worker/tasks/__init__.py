@@ -11,7 +11,9 @@ submodule that owns the task.
 """
 
 from app.worker.tasks.agent_memory import (
-    consolidate_agent_memory, consolidate_user_memories, discover_agent_memories,
+    consolidate_agent_memory,
+    consolidate_user_memories,
+    discover_agent_memories,
 )
 from app.worker.tasks.catalog import refresh_model_catalog_task
 from app.worker.tasks.chat import process_conversation_turn

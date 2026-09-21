@@ -134,7 +134,10 @@ def validate_canonical_memory_boundary(
     engine = (project_root / "backend/app/conversation/engine.py").read_text(
         encoding="utf-8"
     )
-    if "from app.services.memory_recall import recall" not in engine or 'memory_block=""' in engine:
+    if (
+        "from app.memory.recall import recall" not in engine
+        or 'memory_block=""' in engine
+    ):
         raise CareerScenarioGateError(
             "Engine must use only the canonical selective Memory Recall path"
         )
@@ -145,7 +148,7 @@ def validate_canonical_memory_boundary(
         raise CareerScenarioGateError("legacy Memory Tool remains registered")
     required_paths = (
         "backend/app/models/long_term_memory.py",
-        "backend/app/services/agent_memory_service.py",
+        "backend/app/memory/lifecycle.py",
         "backend/app/worker/tasks/agent_memory.py",
         "backend/tests/test_services/test_agent_memory_service.py",
     )

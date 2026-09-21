@@ -38,33 +38,31 @@ from app.schemas.job_opportunity import (
 from app.schemas.job_description_snapshot import (
     JobDescriptionSnapshotFromToolResult,
 )
-from app.services import artifact_service
-from app.services.chat.attachment_source_service import (
+from app.career.application import artifacts as artifact_service
+from app.conversation.application.attachment_source_service import (
     AttachmentSourceCommandError,
+)
+from app.conversation.application.attachment_source_service import (
     AttachmentSourceNotFoundError,
 )
-from app.services.resume import resume_artifact_service
-from app.services.resume.resume_dispatch_service import dispatch_parse_after_commit
-from app.services.career_process_service import (
-    CareerObjectNotFoundError,
-    CareerProcessError,
-    append_confirmed_process_event,
-    create_job_opportunity,
-    create_next_action,
-    list_job_opportunities,
-    list_opportunity_merges,
-    list_next_actions,
-    list_process_events,
+from app.career.application.resumes import resume_artifact_service
+from app.career.application.resumes.resume_dispatch_service import (
+    dispatch_parse_after_commit,
 )
-from app.services.job_description_snapshot_service import (
-    JobDescriptionSnapshotError,
-    create_job_description_snapshot,
-    current_job_description_snapshot,
-)
-from app.services.career_profile_service import (
-    CareerProfileNotFoundError,
-    get_career_profile,
-)
+from app.career.application.process import CareerObjectNotFoundError
+from app.career.application.process import CareerProcessError
+from app.career.application.process import append_confirmed_process_event
+from app.career.application.process import create_job_opportunity
+from app.career.application.process import create_next_action
+from app.career.application.process import list_job_opportunities
+from app.career.application.process import list_opportunity_merges
+from app.career.application.process import list_next_actions
+from app.career.application.process import list_process_events
+from app.career.application.job_descriptions import JobDescriptionSnapshotError
+from app.career.application.job_descriptions import create_job_description_snapshot
+from app.career.application.job_descriptions import current_job_description_snapshot
+from app.career.application.profile import CareerProfileNotFoundError
+from app.career.application.profile import get_career_profile
 
 
 class CareerContextArgs(BaseModel):
@@ -510,7 +508,7 @@ def _owned_user_message(
     message_id: int,
     ctx: AgentToolContext,
 ) -> ConversationMessage:
-    from app.services.chat.current_turn_source import (
+    from app.conversation.application.current_turn_source import (
         require_current_turn_user_message,
     )
 
@@ -1066,7 +1064,7 @@ async def save_artifact(
             resume_record = None
             promoted_attachment = None
             if args.attachment_ref_id is not None:
-                from app.services.chat.attachment_artifact_promotion_service import (
+                from app.conversation.application.attachment_artifact_promotion_service import (
                     promote_conversation_attachment_to_artifact,
                 )
 

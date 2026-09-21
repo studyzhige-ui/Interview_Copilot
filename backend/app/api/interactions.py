@@ -12,7 +12,7 @@ from app.schemas.agent_interaction import (
     AgentInteractionView,
     PendingInteractionProjection,
 )
-from app.services.chat.interaction_service import list_pending_interactions
+from app.conversation.application.interaction_service import list_pending_interactions
 
 
 router = APIRouter(prefix="/interactions", tags=["interactions"])

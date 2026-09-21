@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { formatScore, validScore } from '@/lib/scoring';
+import { useState } from 'react';
 import {
   BookmarkCheck,
   BookmarkPlus,
@@ -9,7 +10,7 @@ import {
 } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pill } from '@/components/ui/Pill';
-import { editInterviewQA, saveQAToKnowledge, unsaveQAFromKnowledge } from '@/api/interview';
+import { saveQAToKnowledge, unsaveQAFromKnowledge } from '@/api/interview';
 import { toast } from '@/store/uiStore';
 import type {
   InterviewAnalysis,
@@ -19,8 +20,12 @@ import type {
 } from '@/types/api';
 import { DebriefGuidanceControl } from './DebriefGuidanceControl';
 import { InterviewOpportunityControl } from './InterviewOpportunityControl';
+import { CorrectionHistory } from './CorrectionHistory';
+import { QAEditor } from './QAEditor';
+import { TranscriptWorkbench } from './TranscriptWorkbench';
 
-type Tab = 'report' | 'qa' | 'transcript';
+export type ReviewTab = 'report' | 'qa' | 'transcript' | 'history';
+type Tab = ReviewTab;
 
 interface Props {
   detail: InterviewRecordDetail | null;
@@ -29,6 +34,9 @@ interface Props {
   onReanalyze?: (mode: 'report' | 'extract' | 'transcribe') => void;
   selectedQuestionIndexes?: number[];
   onToggleQuestion?: (index: number) => void;
+  onCorrected?: () => void;
+  activeTab?: ReviewTab;
+  onTabChange?: (tab: ReviewTab) => void;
 }
 
 function asAnalysis(detail: InterviewRecordDetail | null): InterviewAnalysis | null {
@@ -70,10 +78,17 @@ export function QAPanel({
   onReanalyze,
   selectedQuestionIndexes = [],
   onToggleQuestion,
+  onCorrected,
+  activeTab,
+  onTabChange,
 }: Props) {
   // Default to the report tab when content first lands; flip to QA only if the
   // user explicitly switches. This matches the design spec.
-  const [tab, setTab] = useState<Tab>('report');
+  const [localTab, setLocalTab] = useState<Tab>('report');
+  const tab = activeTab ?? localTab;
+  const setTab = (next: Tab) => { setLocalTab(next); onTabChange?.(next); };
+  const [invalidated, setInvalidated] = useState(false);
+  const [sourceInvalidated, setSourceInvalidated] = useState(false);
   if (loading) {
     return (
       <div className="flex-1 min-w-0 overflow-y-auto p-8">
@@ -93,8 +108,8 @@ export function QAPanel({
     );
   }
 
-  const analysis = asAnalysis(detail);
-  const qa = detail.qa ?? [];
+  const analysis = invalidated ? null : asAnalysis(detail);
+  const qa = sourceInvalidated ? [] : detail.qa ?? [];
 
   return (
     <div className="flex-1 min-w-0 overflow-y-auto p-6">
@@ -119,7 +134,8 @@ export function QAPanel({
           />
         </div>
 
-        <ReportTabs tab={tab} onChange={setTab} hasTranscript={!!detail.transcript} />
+        {invalidated && <div role="status" className="mb-4 rounded-lg bg-amber-50 p-3 text-sm">内容已纠正，旧评分和综合报告已失效。重新分析需要你的明确操作。</div>}
+        <ReportTabs tab={tab} onChange={setTab} hasTranscript={!!detail.transcript || detail.source === 'upload'} />
 
         {tab === 'report' && (
           <ReportView
@@ -147,24 +163,30 @@ export function QAPanel({
               )}
               {qa.map((q) => (
                 <QAItem
-                  key={`${q.id}:${q.question}:${q.answer}:${q.saved_document_id ?? ''}`}
-                  qa={q}
+                  key={q.id}
+                  qa={invalidated ? { ...q, score: null, critique: null, improved_answer: null, assessment: null } : q}
                   recordId={detail.id}
                   selected={selectedQuestionIndexes.includes(q.order_idx + 1)}
                   onToggleQuestion={onToggleQuestion}
+                  onCorrected={() => { setInvalidated(true); onCorrected?.(); }}
                 />
               ))}
             </div>
         )}
+        {tab === 'history' && <CorrectionHistory recordId={detail.id} />}
         {tab === 'transcript' && (
-          detail.transcript
-            ? (
-                <TranscriptView
-                  transcript={detail.transcript}
-                  structure={detail.transcript_structure}
-                />
-              )
-            : <EmptyState icon={<FileText size={24} />} title="暂无转录文本" description="该面试尚未完成语音转录。" />
+          detail.source === 'upload'
+            ? <>
+                <TranscriptWorkbench recordId={detail.id} reanalyzing={reanalyzing}
+                  onCorrected={(needsAnalysis) => { setInvalidated(needsAnalysis); setSourceInvalidated(needsAnalysis); onCorrected?.(); }}
+                  onReanalyze={onReanalyze ? () => onReanalyze('extract') : undefined} />
+                {detail.transcript && <details className="mt-5"><summary>原始文本快照</summary>
+                  <TranscriptView transcript={detail.transcript} structure={detail.transcript_structure} />
+                </details>}
+              </>
+            : detail.transcript
+              ? <TranscriptView transcript={detail.transcript} structure={detail.transcript_structure} />
+              : <EmptyState icon={<FileText size={24} />} title="暂无转录文本" description="该面试尚未完成语音转录。" />
         )}
       </div>
     </div>
@@ -175,6 +197,7 @@ function ReportTabs({ tab, onChange, hasTranscript }: { tab: Tab; onChange: (t: 
   const tabs: Array<{ k: Tab; l: string }> = [
     { k: 'report', l: '分析报告' },
     { k: 'qa', l: 'QA 对' },
+    { k: 'history', l: '修改历史' },
   ];
   if (hasTranscript) tabs.push({ k: 'transcript', l: '原始转录' });
 
@@ -359,7 +382,7 @@ function ReportView({
     );
   }
 
-  const score100 = typeof overall?.score === 'number' ? Math.round(overall.score * 10) : null;
+  const overallScore = validScore(overall?.score) ? overall.score : null;
   const summary = overall?.summary || '';
   const strengths = overall?.strengths ?? [];
   const weaknesses = overall?.weaknesses ?? [];
@@ -417,11 +440,11 @@ function ReportView({
       <div className="grid grid-cols-[200px_1fr] gap-5 bg-white border border-stone-200 rounded-2xl p-6 shadow-xs">
         <div className="flex flex-col items-center justify-center bg-cream-50 rounded-xl p-5">
           <div className="text-xs text-stone-500 uppercase tracking-wider">本次表现</div>
-          <div className={`${score100 === null ? 'text-2xl' : 'text-[52px]'} font-bold text-primary-600 leading-none mt-2`}>
-            {score100 === null ? '未评分' : score100}
+          <div className={`${overallScore === null ? 'text-2xl' : 'text-[52px]'} font-bold text-primary-600 leading-none mt-2`}>
+            {formatScore(overallScore)}
           </div>
-          {score100 !== null && (
-            <div className="text-xs text-stone-500 mt-1">/ 100 · 进步基准线</div>
+          {overallScore !== null && (
+            <div className="text-xs text-stone-500 mt-1">统一十分制 · 仅代表本次回答表现</div>
           )}
         </div>
         <div className="flex flex-col gap-3 justify-center">
@@ -446,7 +469,7 @@ function ReportView({
                   <span className="text-sm font-medium text-stone-800">{phase.phase_name}</span>
                   <span className="text-xs text-stone-400">{phase.question_count} 题</span>
                   <span className="ml-auto text-sm font-mono font-semibold text-primary-600">
-                    {typeof phase.score === 'number' ? `${Math.round(phase.score * 10)}分` : '未评分'}
+                    {formatScore(phase.score)}
                   </span>
                 </div>
                 {phase.summary && (
@@ -599,9 +622,8 @@ function BulletList({
 
 function scoreColor(score: number | undefined): string {
   if (typeof score !== 'number') return 'text-stone-400';
-  const s100 = score * 10;
-  if (s100 >= 80) return 'text-success-700';
-  if (s100 >= 60) return 'text-warning-700';
+  if (score >= 8) return 'text-success-700';
+  if (score >= 6) return 'text-warning-700';
   return 'text-danger-500';
 }
 
@@ -610,52 +632,35 @@ function QAItem({
   recordId,
   selected,
   onToggleQuestion,
+  onCorrected,
 }: {
   qa: InterviewQA;
   recordId: string;
   selected: boolean;
   onToggleQuestion?: (index: number) => void;
+  onCorrected?: () => void;
 }) {
   const [openS, setOpenS] = useState(false);
-  const [editingQ, setEditingQ] = useState(false);
-  const [editingA, setEditingA] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [currentQA, setCurrentQA] = useState(qa);
   const [question, setQuestion] = useState(qa.question);
   const [answer, setAnswer] = useState(qa.answer);
   const [savedDocId, setSavedDocId] = useState<string | null>(qa.saved_document_id ?? null);
+  const [savedDocStatus, setSavedDocStatus] = useState<string | null>(qa.saved_document_status ?? null);
   const [savingKb, setSavingKb] = useState(false);
-  const savedQuestion = useRef(qa.question);
-  const savedAnswer = useRef(qa.answer);
-
-  const saveQ = async () => {
-    setEditingQ(false);
-    if (question === savedQuestion.current) return;
-    try {
-      await editInterviewQA(recordId, qa.id, { question });
-      savedQuestion.current = question;
-      toast.success('问题已保存');
-    } catch { toast.error('保存失败'); setQuestion(savedQuestion.current); }
-  };
-  const saveA = async () => {
-    setEditingA(false);
-    if (answer === savedAnswer.current) return;
-    try {
-      await editInterviewQA(recordId, qa.id, { answer });
-      savedAnswer.current = answer;
-      toast.success('答案已保存');
-    } catch { toast.error('保存失败'); setAnswer(savedAnswer.current); }
-  };
-
   const toggleKb = async () => {
     setSavingKb(true);
     try {
-      if (savedDocId) {
+      if (savedDocId && savedDocStatus !== 'stale') {
         await unsaveQAFromKnowledge(recordId, qa.id);
         setSavedDocId(null);
+        setSavedDocStatus(null);
         toast.success('已从知识库移除');
       } else {
         const r = await saveQAToKnowledge(recordId, qa.id);
         setSavedDocId(r.saved_document_id);
-        toast.success('已保存到知识库');
+        setSavedDocStatus(r.document_status ?? null);
+        toast.success(r.document_status === 'ready' ? '已保存到知识库' : '保存已受理，索引状态请在资料库查看');
       }
     } catch {
       toast.error(savedDocId ? '移除失败' : '保存到知识库失败');
@@ -678,39 +683,23 @@ function QAItem({
         {qa.source_provenance?.manual_override && <Pill tone="sand">用户已编辑</Pill>}
         <span className={`ml-auto text-sm font-mono font-semibold ${scoreColor(score)}`}>
           {typeof score === 'number'
-            ? `${Math.round(score * 10)}分`
+            ? formatScore(score)
             : qa.critique
               ? '未评分'  /* grading was attempted but the model call failed (ANA-6) */
               : ''}
         </span>
         <button
-          onClick={() => setEditingQ((v) => !v)}
+          onClick={() => setEditing((v) => !v)}
           title="编辑问题"
           className="w-6 h-6 rounded text-stone-400 hover:text-stone-600 hover:bg-stone-100 flex items-center justify-center"
         >
           <Pencil size={12} />
         </button>
       </div>
-      {editingQ ? (
-        <textarea
-          autoFocus
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          onBlur={saveQ}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.currentTarget.blur();
-          }}
-          rows={2}
-          className="w-full p-3 text-base font-medium bg-stone-50 border border-primary-200 rounded-lg outline-none resize-y mb-4"
-        />
-      ) : (
-        <div
-          onDoubleClick={() => setEditingQ(true)}
-          className="text-base font-medium text-stone-800 leading-[1.6] mb-4 cursor-text"
-        >
-          {question}
-        </div>
-      )}
+      <div onDoubleClick={() => setEditing(true)}
+        className="text-base font-medium text-stone-800 leading-[1.6] mb-4 cursor-text">
+        {question}
+      </div>
 
       {/* A-row */}
       <div className="flex items-center gap-2 mb-2">
@@ -727,35 +716,29 @@ function QAItem({
           />
         )}
         <button
-          onClick={() => setEditingA((v) => !v)}
+          onClick={() => setEditing((v) => !v)}
           title="编辑回答"
           className="ml-auto w-6 h-6 rounded text-stone-400 hover:text-stone-600 hover:bg-stone-100 flex items-center justify-center"
         >
           <Pencil size={12} />
         </button>
       </div>
-      {editingA ? (
-        <textarea
-          autoFocus
-          value={answer}
-          onChange={(e) => setAnswer(e.target.value)}
-          onBlur={saveA}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.currentTarget.blur();
-          }}
-          rows={4}
-          className="w-full p-3.5 text-[15px] font-mono bg-stone-50 border border-primary-200 rounded-lg outline-none resize-y leading-[1.7]"
-        />
-      ) : (
-        <div
-          onDoubleClick={() => setEditingA(true)}
-          className="text-[15px] font-mono text-stone-700 leading-[1.7] bg-stone-50 p-3.5 rounded-lg cursor-text whitespace-pre-wrap"
-        >
-          {answer || <span className="text-stone-400 font-sans">（未作答）</span>}
-        </div>
-      )}
+      <div onDoubleClick={() => setEditing(true)}
+        className="text-[15px] font-mono text-stone-700 leading-[1.7] bg-stone-50 p-3.5 rounded-lg cursor-text whitespace-pre-wrap">
+        {answer || <span className="text-stone-400 font-sans">（未作答）</span>}
+      </div>
+      {editing && <QAEditor recordId={recordId} qa={currentQA} onClose={() => setEditing(false)}
+        onSaved={(updated) => {
+          setCurrentQA(updated);
+          setQuestion(updated.question);
+          setAnswer(updated.answer);
+          setEditing(false);
+          setSavedDocStatus(updated.saved_document_status ?? null);
+          toast.success('修改已保存，旧评分已失效');
+          onCorrected?.();
+        }} />}
 
-      {qa.source_provenance && (
+      {qa.source_provenance?.evidence_schema_version === 2 && (
         <details className="mt-3 text-xs text-stone-500">
           <summary className="cursor-pointer select-none hover:text-stone-700">
             查看原词整理记录
@@ -772,6 +755,20 @@ function QAItem({
         </details>
       )}
 
+      {!!qa.assessment?.criteria?.length && <details className="mt-3 rounded-lg bg-stone-50 p-3 text-sm">
+        <summary className="cursor-pointer">评分依据 · {qa.assessment.rubric_version}</summary>
+        {qa.assessment.criteria.map((criterion) => <div key={criterion.key} className="mt-2">
+          <span className="font-medium">{criterion.key} · {formatScore(criterion.score)}</span>
+          <p>{criterion.reason}</p>
+        </div>)}
+      </details>}
+      {!!qa.assessment?.competency_evidence?.length && <details className="mt-3 text-sm">
+        <summary>本回答实际支持的能力维度</summary>
+        {qa.assessment.competency_evidence.map((evidence) => <div key={evidence.dimension} className="mt-2 border-l-2 border-primary-200 pl-3">
+          <strong>{evidence.dimension} · {formatScore(evidence.score)}</strong>
+          <blockquote className="whitespace-pre-wrap">“{evidence.answer_quote}”</blockquote><p>{evidence.reason}</p>
+        </div>)}
+      </details>}
       {qa.critique && (
         <div className="mt-3.5 text-sm text-stone-600 leading-[1.7]">
           <span className="text-warning-700 font-semibold">回顾：</span>
@@ -820,6 +817,7 @@ function QAItem({
                 <span className="text-stone-500 italic">LLM 优化回答尚未生成</span>
               )}
             </div>
+            {savedDocStatus === 'stale' && <p className="mt-2 text-xs text-amber-700">原问答已经纠正，旧知识暂不参与检索。完成当前分析后可显式保存新版本。</p>}
             {hasImproved && (
               <button
                 type="button"
@@ -834,7 +832,7 @@ function QAItem({
                 ].join(' ')}
               >
                 {savedDocId ? <BookmarkCheck size={14} /> : <BookmarkPlus size={14} />}
-                {savedDocId ? '已保存到知识库 · 点击移除' : '保存到知识库'}
+                {savedDocId ? (savedDocStatus === 'stale' ? '旧知识已失效 · 保存当前版本' : savedDocStatus === 'processing' ? '索引处理中 · 点击移除' : '已保存到知识库 · 点击移除') : '保存到知识库'}
               </button>
             )}
           </>

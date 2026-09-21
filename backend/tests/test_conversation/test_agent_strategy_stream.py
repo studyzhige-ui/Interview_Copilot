@@ -168,7 +168,7 @@ def test_agent_provider_payload_partitions_stable_and_dynamic_context(monkeypatc
     from app.conversation.agent_strategy import AgentLoopStrategy
     from app.conversation.events import HarnessEvent
     from app.conversation.strategy import StrategyContext, StrategyResult
-    from app.services.chat.context_assembly_pipeline import AssembledContext
+    from app.conversation.application.context_assembly_pipeline import AssembledContext
 
     schema = {
         "type": "function",

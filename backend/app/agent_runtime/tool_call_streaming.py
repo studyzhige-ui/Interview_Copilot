@@ -53,7 +53,7 @@ class ToolCallAssembler:
                 raise ToolCallProtocolError("tool identity exceeds protocol limit")
             if (
                 len(call.arguments) + len(delta.arguments_delta)
-                > settings.AGENT_MAX_TOOL_ARG_CHARS
+                > settings.AGENT_MAX_TOOL_WIRE_ARG_CHARS
             ):
                 raise ToolCallProtocolError("tool arguments exceed streaming limit")
             call.arguments += delta.arguments_delta

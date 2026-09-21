@@ -257,12 +257,10 @@ def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, An
     from app.models.artifact import Artifact, ArtifactVersion
     from app.models.file_asset import FileAsset
     from app.schemas.artifact import ArtifactProvenanceInput, ArtifactWriteInput
-    from app.services import artifact_service
-    from app.services.uploads.file_asset_service import (
-        enqueue_asset_blob_delete,
-        mark_file_asset_consumed,
-        store_validated_file_asset,
-    )
+    from app.career.application import artifacts as artifact_service
+    from app.files.application.file_asset_service import enqueue_asset_blob_delete
+    from app.files.application.file_asset_service import mark_file_asset_consumed
+    from app.files.application.file_asset_service import store_validated_file_asset
 
     db = SessionLocal()
     upload_id: str | None = None

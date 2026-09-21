@@ -11,11 +11,19 @@ from app.models.conversation_deletion_receipt import ConversationDeletionReceipt
 from app.models.conversation_turn import ConversationTurn
 from app.models.pending_submission import PendingSubmission
 from app.models.user import User
-from app.services.chat.conversation_deletion_service import (
+from app.conversation.application.conversation_deletion_service import (
     ConversationDeletionConflictError,
+)
+from app.conversation.application.conversation_deletion_service import (
     delete_conversation,
+)
+from app.conversation.application.conversation_deletion_service import (
     purge_expired_conversation_deletion_receipts,
+)
+from app.conversation.application.conversation_deletion_service import (
     preview_conversation_deletion,
+)
+from app.conversation.application.conversation_deletion_service import (
     settle_deleted_conversation_receipt,
 )
 

@@ -1,3 +1,5 @@
+from app.api.command_errors import command_errors
+from app.rag.application import document_commands
 import asyncio
 import logging
 from typing import Optional
@@ -6,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.file_assets import require_uploaded, upload_too_large_http
+from app.api.file_assets import upload_too_large_http
 from app.core.edition import current_edition_policy
 from app.core.error_messages import humanize_error
 from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
@@ -24,21 +26,9 @@ from app.schemas.rag import (
     QueryRequest,
     SourceKindEnum,
 )
-from app.services.knowledge.document_formats import (
-    UnsupportedDocumentFormat,
-    validate_knowledge_document_format,
-)
-from app.services.knowledge.knowledge_service import (
-    default_title,
-    hard_delete_knowledge_document,
-)
-from app.services.uploads.file_asset_service import (
-    UPLOAD_STATUS_CONSUMED,
-    UploadTooLarge,
-    create_file_asset,
-    get_owned_file_asset,
-    mark_file_asset_consumed,
-)
+from app.rag.application.library.knowledge_service import hard_delete_knowledge_document
+from app.files.application.file_asset_service import UploadTooLarge
+from app.files.application.file_asset_service import create_file_asset
 from app.task_queue.dispatch import dispatch_document_ingestion
 
 logger = logging.getLogger(__name__)
@@ -157,86 +147,18 @@ def create_knowledge_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        upload = get_owned_file_asset(
+    with command_errors():
+        document, task_id = document_commands.create_document(
             db,
-            file_asset_id=body.upload_id,
-            user_id=current_user.username,
-            purpose="knowledge_document",
+            current_user=current_user,
+            body=body,
+            dispatch=dispatch_document_ingestion,
         )
-        if upload is None:
-            raise HTTPException(status_code=404, detail="Upload not found")
-        if upload.upload_status == UPLOAD_STATUS_CONSUMED:
-            raise HTTPException(
-                status_code=409, detail="Upload has already been consumed"
-            )
-        # Confirm-on-consume (UP-1): verification (exists / size cap / magic)
-        # can't be skipped by never calling /confirm.
-        upload = require_uploaded(db, upload, "文档")
-
-        # Format whitelist (ingestion §4.1.2) — the authoritative gate. The
-        # bytes never traverse the API (presigned upload), so this checks the
-        # declared extension/content_type before any worker work is dispatched.
-        try:
-            validate_knowledge_document_format(
-                upload.original_filename, upload.content_type
-            )
-        except UnsupportedDocumentFormat as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        document = KnowledgeDocument(
-            user_id=current_user.id,
-            conversation_id=None,
-            file_asset_id=upload.id,
-            title=body.title or default_title(upload),
-            category=body.category.strip() or "默认",
-            source_kind=body.source_kind.value,
-            storage_uri=upload.storage_uri,
-            object_key=upload.object_key,
-            status="processing",
-        )
-        db.add(document)
-        mark_file_asset_consumed(db, upload)
-        # Commit before dispatch. A flush is not visible to the Celery worker,
-        # so dispatching between flush and commit races with a fast worker that
-        # queries the document from another database connection.
-        db.flush()
-        document_id = document.id
-        db.commit()
-        db.refresh(document)
-
-        try:
-            task = dispatch_document_ingestion(document_id)
-        except Exception as exc:  # noqa: BLE001
-            # The document is already durable and visible. Park it in a
-            # terminal state so a broker outage cannot leave a zombie.
-            logger.error("Celery dispatch failed for document %s: %s", document_id, exc)
-            document.status = "failed"
-            document.error_message = "后台处理队列暂时不可用，请稍后重试。"
-            db.commit()
-            raise HTTPException(
-                status_code=503,
-                detail="后台处理队列暂时不可用，请稍后重试",
-            ) from exc
-
-        document.task_id = task.id
-        db.commit()
-        db.refresh(document)
-
-        return {
-            "status": document.status,
-            "document": _document_payload(document),
-            "task_id": task.id,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        db.rollback()
-        logger.error("Ingestion API dispatch error: %s", exc)
-        raise HTTPException(
-            status_code=500,
-            detail=humanize_error(exc),
-        ) from exc
+    return {
+        "status": document.status,
+        "document": _document_payload(document),
+        "task_id": task_id,
+    }
 
 
 @router.get("/knowledge/documents")
@@ -300,41 +222,10 @@ def update_knowledge_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    document = (
-        db.query(KnowledgeDocument)
-        .filter(
-            KnowledgeDocument.id == document_id,
-            KnowledgeDocument.user_id == current_user.id,
-            KnowledgeDocument.source_kind != "chat_attachment",
+    with command_errors():
+        document = document_commands.update_document(
+            db, document_id=document_id, request=request, current_user=current_user
         )
-        .first()
-    )
-    if document is None:
-        raise HTTPException(status_code=404, detail="Knowledge document not found")
-    title_changed = False
-    if request.title is not None:
-        new_title = request.title.strip() or document.title
-        title_changed = new_title != document.title
-        document.title = new_title
-    if request.category is not None:
-        document.category = request.category.strip() or "默认"
-    db.add(document)
-    if (
-        title_changed
-        and document.status == "ready"
-        and document.source_kind != "chat_attachment"
-    ):
-        # The title is part of the retrieval passage. Publish its new index view
-        # through the same durable outbox as every other external-index update.
-        from app.services.knowledge.index_jobs import enqueue_milvus_upsert
-
-        enqueue_milvus_upsert(
-            db,
-            user_pk=document.user_id,
-            document_id=document.id,
-        )
-    db.commit()
-    db.refresh(document)
     return {"status": "success", "document": _document_payload(document)}
 
 

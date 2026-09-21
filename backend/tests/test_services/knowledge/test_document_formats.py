@@ -3,71 +3,61 @@
 from __future__ import annotations
 
 import pytest
-from app.services.knowledge.document_formats import (
-    ALLOWED_KNOWLEDGE_EXTENSIONS,
-    UnsupportedDocumentFormat,
+from app.rag.application.library.document_formats import ALLOWED_KNOWLEDGE_EXTENSIONS
+from app.rag.application.library.document_formats import UnsupportedDocumentFormat
+from app.rag.application.library.document_formats import (
     validate_knowledge_document_format,
 )
 
 
-@pytest.mark.parametrize(
-    "filename",
-    [
-        "redis.pdf",
-        "notes.docx",
-        "deck.pptx",
-        "data.xlsx",
-        "page.html",
-        "page.htm",
-        "readme.md",
-        "guide.markdown",
-        "log.txt",
-        "rows.csv",
-        "rows.tsv",
-        "config.json",
-        "main.py",
-        "App.java",
-        "engine.cpp",
-        "kernel.c",
-        "UPPER.PDF",  # case-insensitive
-    ],
-)
-def test_allowed_formats_pass(filename):
-    ext = validate_knowledge_document_format(filename)
-    assert ext in ALLOWED_KNOWLEDGE_EXTENSIONS
+def test_supported_format_matrix_returns_exact_normalized_extensions():
+    # Upload eligibility is independent of which local parser is available.
+    # Retain every former document/image/legacy-office/case-folding input.
+    expected = {
+        "redis.pdf": ".pdf",
+        "notes.docx": ".docx",
+        "deck.pptx": ".pptx",
+        "data.xlsx": ".xlsx",
+        "page.html": ".html",
+        "page.htm": ".htm",
+        "readme.md": ".md",
+        "guide.markdown": ".markdown",
+        "log.txt": ".txt",
+        "rows.csv": ".csv",
+        "rows.tsv": ".tsv",
+        "config.json": ".json",
+        "main.py": ".py",
+        "App.java": ".java",
+        "engine.cpp": ".cpp",
+        "kernel.c": ".c",
+        "UPPER.PDF": ".pdf",
+        "scan.png": ".png",
+        "photo.jpg": ".jpg",
+        "img.jpeg": ".jpeg",
+        "x.tiff": ".tiff",
+        "y.bmp": ".bmp",
+        "z.webp": ".webp",
+        "old.doc": ".doc",
+        "slides.ppt": ".ppt",
+        "sheet.xls": ".xls",
+    }
+    assert set(expected.values()) == ALLOWED_KNOWLEDGE_EXTENSIONS
+    assert {
+        filename: validate_knowledge_document_format(filename) for filename in expected
+    } == expected
 
 
-@pytest.mark.parametrize(
-    "filename", ["scan.png", "photo.jpg", "img.jpeg", "x.tiff", "y.bmp", "z.webp"]
-)
-def test_image_formats_now_allowed(filename):
-    """Images are OCR-ingested (Docling RapidOCR / LlamaParse cloud) as of the
-    OCR round — they moved out of the deferred set into the whitelist."""
-    ext = validate_knowledge_document_format(filename)
-    assert ext in ALLOWED_KNOWLEDGE_EXTENSIONS
-
-
-@pytest.mark.parametrize("filename", ["old.doc", "slides.ppt", "sheet.xls"])
-def test_legacy_office_now_allowed(filename):
-    """Legacy Office is business-allowed now (LlamaParse direct, or a server-side
-    LibreOffice→OOXML conversion); the parse layer gives a friendly error if the
-    server can do neither, but the whitelist no longer rejects the upload."""
-    ext = validate_knowledge_document_format(filename)
-    assert ext in ALLOWED_KNOWLEDGE_EXTENSIONS
-
-
-@pytest.mark.parametrize(
-    "filename", ["malware.exe", "archive.zip", "movie.mkv", "noext"]
-)
+@pytest.mark.parametrize("filename", ["malware.exe", "archive.zip", "movie.mkv"])
 def test_unknown_formats_rejected_generic(filename):
     with pytest.raises(UnsupportedDocumentFormat):
         validate_knowledge_document_format(filename)
 
 
 def test_no_extension_rejected():
-    with pytest.raises(UnsupportedDocumentFormat) as exc:
-        validate_knowledge_document_format("plainname")
-    assert "无法识别" in str(exc.value)
+    for filename in ("noext", "plainname"):
+        with pytest.raises(UnsupportedDocumentFormat) as exc:
+            validate_knowledge_document_format(filename)
+        assert "无法识别" in str(exc.value), filename
 
 
 def test_audio_video_content_type_rejected_even_with_ok_ext():

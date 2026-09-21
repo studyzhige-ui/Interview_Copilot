@@ -64,24 +64,22 @@ from app.schemas.persistent_task import (
     PersistentTaskUpdate,
     PersistentTaskView,
 )
-from app.services import (
-    ability_signal_service,
-    artifact_service,
-    career_profile_service,
-    offer_analysis_service,
-    offer_service,
-)
-from app.services.career_process_service import (
-    CareerObjectNotFoundError,
-    CareerProcessError,
-    close_next_action,
-    complete_next_action,
-    create_next_action,
-    edit_next_action,
-    plan_next_action,
-)
-from app.services.chat.current_turn_source import (
+from app.career.application import signals as ability_signal_service
+from app.career.application import artifacts as artifact_service
+from app.career.application import profile as career_profile_service
+from app.career.application import offer_analysis as offer_analysis_service
+from app.career.application import offers as offer_service
+from app.career.application.process import CareerObjectNotFoundError
+from app.career.application.process import CareerProcessError
+from app.career.application.process import close_next_action
+from app.career.application.process import complete_next_action
+from app.career.application.process import create_next_action
+from app.career.application.process import edit_next_action
+from app.career.application.process import plan_next_action
+from app.conversation.application.current_turn_source import (
     CurrentTurnSourceError as CurrentTurnProofError,
+)
+from app.conversation.application.current_turn_source import (
     require_current_turn_user_message,
 )
 
@@ -134,7 +132,7 @@ def _command_operation(arguments: dict[str, Any]) -> str:
 def _persistent_tasks():
     """Import lazily to avoid Turn executor -> tools -> automation recursion."""
 
-    from app.services import persistent_task_service
+    from app.automation.application import tasks as persistent_task_service
 
     return persistent_task_service
 
@@ -1057,16 +1055,14 @@ async def _start_interview_debrief_flow(
     args: StartInterviewDebriefArgs,
     ctx: AgentToolContext,
 ) -> dict[str, Any]:
-    from app.services.interview import analysis_intake
-    from app.services.interview.interview_record_service import (
+    from app.interviews.application import analysis_intake
+    from app.interviews.application.interview_record_service import (
         InterviewOpportunityNotFoundError,
     )
-    from app.services.uploads.file_asset_service import (
-        UPLOAD_STATUS_CONSUMED,
-        UPLOAD_STATUS_UPLOADED,
-        ensure_uploaded,
-        get_owned_file_asset,
-    )
+    from app.files.application.file_asset_service import UPLOAD_STATUS_CONSUMED
+    from app.files.application.file_asset_service import UPLOAD_STATUS_UPLOADED
+    from app.files.application.file_asset_service import ensure_uploaded
+    from app.files.application.file_asset_service import get_owned_file_asset
 
     db = SessionLocal()
     try:
@@ -1391,7 +1387,7 @@ def _task_authorizes_persistent_task(
 
 
 def _persistent_task_tools() -> frozenset[str]:
-    from app.agent_runtime.turn_tool_catalog import (
+    from app.agent_runtime.automation_policy import (
         cloud_sustainable_automation_tool_names,
     )
 
@@ -1517,11 +1513,11 @@ async def manage_persistent_task(
         dispatch_deferred = False
         if admission.should_dispatch and admission.run_request is not None:
             try:
-                from app.services.chat.turn_executor import schedule_turn
+                from app.task_queue.dispatch import dispatch_conversation_turn
 
                 dispatch_requested = persistent_tasks.dispatch_automation_run(
                     admission,
-                    lambda request: schedule_turn(request.turn_id),
+                    lambda request: dispatch_conversation_turn(request.turn_id),
                 )
             except Exception:  # durable repair will retry broker dispatch
                 dispatch_deferred = True

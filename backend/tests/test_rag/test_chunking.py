@@ -93,18 +93,34 @@ def test_normalized_table_records_are_not_duplicated(small_policy):
     assert all(node.metadata["chunk_type"] == "table" for node in nodes)
 
 
-def test_code_uses_language_parser(small_policy):
-    document = _document("def answer():\n    return 42\n", "code")
-    nodes = chunking.chunk_document(
-        document,
-        metadata={
-            "file_name": "answer.py",
-            "source_kind": "user_upload",
-            "user_id": 1,
-        },
-    )
-    assert nodes
-    assert all(node.metadata["splitter_id"] == "code" for node in nodes)
+def test_all_supported_code_grammars_work_without_network(small_policy, monkeypatch):
+    import socket
+
+    def deny(*args, **kwargs):
+        pytest.fail("code grammar attempted a network lookup or connection")
+
+    monkeypatch.setattr(socket, "getaddrinfo", deny)
+    monkeypatch.setattr(socket.socket, "connect", deny)
+    examples = {
+        "py": "def answer():\n    return 42\n",
+        "java": "class Answer { int answer() { return 42; } }",
+        "cpp": "template<typename T> T answer() { return 42; }",
+        "c": "int answer(void) { return 42; }",
+    }
+    for extension, text in examples.items():
+        nodes = chunking.chunk_document(
+            _document(text, "code"),
+            metadata={
+                "file_name": f"answer.{extension}",
+                "source_kind": "user_upload",
+                "user_id": 1,
+            },
+        )
+        assert nodes, extension
+        assert "42" in "".join(node.text for node in nodes), extension
+        assert all(node.metadata["splitter_id"] == "code" for node in nodes), extension
+    with pytest.raises(ValueError, match="unsupported_local_code_grammar"):
+        chunking._code_splitter("unconfigured")
 
 
 def test_final_gate_obeys_embedding_and_reranker_budgets(small_policy):

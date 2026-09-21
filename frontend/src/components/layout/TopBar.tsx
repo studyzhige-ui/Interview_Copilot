@@ -5,7 +5,7 @@ import { workspaceFor } from './navigation';
 import { useAuthStore } from '@/store/authStore';
 import { Avatar } from '@/components/ui/Avatar';
 
-export function TopBar({ pageTitle }: { pageTitle?: string }) {
+export function TopBar({ pageTitle, onOpenCopilot }: { pageTitle?: string; onOpenCopilot?: () => void }) {
   const subjectId = useAuthStore((s) => s.subjectId);
   const me = useAuthStore((s) => s.me);
   const fetchMe = useAuthStore((s) => s.fetchMe);
@@ -37,7 +37,9 @@ export function TopBar({ pageTitle }: { pageTitle?: string }) {
       {!!area?.tabs.length && <nav className="workspace-tabs" aria-label={`${area.label}导航`}>
         {area.tabs.map((tab) => <NavLink key={tab.to} to={tab.to}>{tab.label}</NavLink>)}
       </nav>}
-      {pathname !== '/general-chat' && <Link to="/general-chat" className="workspace-copilot-shortcut">打开 Copilot</Link>}
+      {pathname !== '/general-chat' && (onOpenCopilot
+        ? <button type="button" onClick={onOpenCopilot} className="workspace-copilot-shortcut">打开 Copilot</button>
+        : <Link to="/general-chat" className="workspace-copilot-shortcut">打开 Copilot</Link>)}
       <div className="ml-auto relative" ref={ref}>
         <button
           aria-expanded={open}

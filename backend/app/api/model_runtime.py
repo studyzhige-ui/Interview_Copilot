@@ -35,7 +35,8 @@ from app.schemas.model_runtime import (
     ProviderSettingsUpdateRequest,
     RuntimeSelectionUpdateRequest,
 )
-from app.services.model_sources.pipeline import load_catalog, refresh_catalog
+from app.providers.catalog.pipeline import load_catalog
+from app.providers.catalog.pipeline import refresh_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 def _schedule_provider_catalog_refresh(provider: str, username: str) -> None:
     """Kick a live /v1/models fetch for one provider with the (fresh) key,
     without blocking the request. Failures are logged, never raised."""
-    from app.services.model_sources.pipeline import refresh_catalog_for
+    from app.providers.catalog.pipeline import refresh_catalog_for
 
     async def _run() -> None:
         try:
@@ -209,22 +210,43 @@ async def _ping_one(profile_id: str, user_id: str | None = None) -> dict:
     try:
         if profile.provider == "anthropic":
             client = get_async_anthropic_client(profile, user_id=user_id)
-            call = client.messages.create(
-                model=profile.model,
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=1,
-                temperature=0,
-            )
+
+            def call():
+                return client.messages.create(
+                    model=profile.model,
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=1,
+                    temperature=0,
+                )
         else:
             client = get_async_openai_client(profile, user_id=user_id)
-            call = client.chat.completions.create(
-                model=profile.model,
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=1,
-                temperature=0,
-            )
+
+            def call():
+                return client.chat.completions.create(
+                    model=profile.model,
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=1,
+                    temperature=0,
+                )
+
         # 1-token completion — cheapest reachable signal.
-        await asyncio.wait_for(call, timeout=10.0)
+        from app.usage import runtime as accounting
+
+        units, bound = accounting.llm_allowance("ping", 1)
+        with accounting.for_username(user_id):
+            await asyncio.wait_for(
+                accounting.invoke_async(
+                    call,
+                    meter="model_ping",
+                    provider=profile.provider,
+                    model=profile.model,
+                    content={"ping": True, "destination": str(client.base_url)},
+                    units=units,
+                    token_allowance=bound,
+                    observed=accounting.completion_usage,
+                ),
+                timeout=10.0,
+            )
         return {
             "profile_id": profile_id,
             "ok": True,
@@ -265,7 +287,7 @@ def list_my_api_keys(
     Never includes plaintext. Frontend uses this to render
     "✓ 已配置 (sk-***abcd)" badges per vendor card.
     """
-    from app.services.auth.user_api_key_service import list_user_api_keys
+    from app.identity.application.user_api_key_service import list_user_api_keys
 
     return {"keys": list_user_api_keys(current_user.username, db=db)}
 
@@ -283,7 +305,7 @@ async def upsert_my_api_key(
     masked form. To replace, just PUT again — it overwrites.
     """
     from app.core.cache import invalidate
-    from app.services.auth.user_api_key_service import set_user_api_key
+    from app.identity.application.user_api_key_service import set_user_api_key
 
     try:
         result = set_user_api_key(
@@ -324,7 +346,7 @@ async def delete_my_api_key(
     db: Session = Depends(get_db),
 ):
     from app.core.cache import invalidate
-    from app.services.auth.user_api_key_service import delete_user_api_key
+    from app.identity.application.user_api_key_service import delete_user_api_key
 
     deleted = delete_user_api_key(current_user.username, provider, db=db)
     from app.core.llm_client_factory import clear_llm_cache_for_provider
@@ -395,7 +417,7 @@ def api_list_providers(
     response includes ALL providers in ``PROVIDERS`` — the frontend
     decides whether to show or hide each based on ``enabled``.
     """
-    from app.services.auth.user_provider_settings_service import (
+    from app.identity.application.user_provider_settings_service import (
         resolve_all_provider_settings,
     )
 
@@ -413,7 +435,7 @@ def api_get_provider_settings(
 ):
     """Effective settings for one provider — same shape as one entry
     from the /models/providers list endpoint."""
-    from app.services.auth.user_provider_settings_service import (
+    from app.identity.application.user_provider_settings_service import (
         resolve_provider_settings,
     )
 
@@ -445,10 +467,8 @@ async def api_update_provider_settings(
     rebuilds with the new api_base / headers.
     """
     from app.core.cache import invalidate
-    from app.services.auth.user_provider_settings_service import (
-        SettingsPatch,
-        upsert_settings,
-    )
+    from app.identity.application.user_provider_settings_service import SettingsPatch
+    from app.identity.application.user_provider_settings_service import upsert_settings
 
     raw_patch = body.model_dump(exclude_unset=True)
     from app.core.edition import current_edition_policy
@@ -492,7 +512,7 @@ async def api_delete_provider_settings(
     use ``DELETE /models/api-keys/{provider}`` for that.
     """
     from app.core.cache import invalidate
-    from app.services.auth.user_provider_settings_service import delete_settings
+    from app.identity.application.user_provider_settings_service import delete_settings
 
     deleted = delete_settings(current_user.username, provider)
 

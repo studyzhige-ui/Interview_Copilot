@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from app.models.interview_record import InterviewRecord
-from app.services.interview import record_admin
+from app.interviews.application import record_admin
 
 
 @pytest.fixture(autouse=True)
@@ -48,18 +48,18 @@ def test_reanalyze_resets_and_dispatches(db_session, monkeypatch):
     monkeypatch.setattr(
         record_admin,
         "dispatch_interview_analysis",
-        lambda rid: SimpleNamespace(id="task-9"),
+        lambda rid, **kw: SimpleNamespace(id=kw["task_id"]),
     )
 
     task = record_admin.reanalyze_record(db_session, rec)
 
     db_session.refresh(rec)
-    assert task.id == "task-9"
+    assert len(task.id) == 36
     assert rec.status == "pending"
     assert rec.analysis_json is None
     assert rec.error_message is None
     assert rec.analyzed_qa_count == 0
-    assert rec.celery_task_id == "task-9"
+    assert rec.celery_task_id == task.id
 
 
 def test_reanalyze_rejects_mock_and_inflight(db_session):
@@ -75,7 +75,7 @@ def test_reanalyze_rejects_mock_and_inflight(db_session):
 def test_reanalyze_dispatch_failure_rolls_back_to_failed(db_session, monkeypatch):
     rec = _mk_record(db_session, "ir_re4", status="completed")
 
-    def _raise(rid):
+    def _raise(rid, **kw):
         raise ConnectionError("broker down")
 
     monkeypatch.setattr(
@@ -121,7 +121,7 @@ def test_retranscribe_detaches_old_evidence_and_forces_qa_rebuild(
     monkeypatch.setattr(
         record_admin,
         "dispatch_interview_analysis",
-        lambda rid: SimpleNamespace(id="task-retranscribe"),
+        lambda rid, **kw: SimpleNamespace(id=kw["task_id"]),
     )
 
     record_admin.reanalyze_record(db_session, rec, retranscribe=True)
@@ -143,10 +143,10 @@ def test_load_existing_qa_shells_roundtrip(db_session, monkeypatch):
     # name, so ``import ... as orch`` binds the INSTANCE — go via sys.modules.
     import sys
 
-    import app.services.interview.analysis_orchestrator  # noqa: F401
+    import app.interviews.application.analysis_orchestrator  # noqa: F401
     from app.models.interview_qa import InterviewQA
 
-    orch = sys.modules["app.services.interview.analysis_orchestrator"]
+    orch = sys.modules["app.interviews.application.analysis_orchestrator"]
 
     rec = _mk_record(db_session, "ir_gate1", status="analyzing")
     db_session.add_all(
@@ -199,9 +199,9 @@ def test_load_existing_qa_shells_empty_for_fresh_record(db_session, monkeypatch)
     # name, so ``import ... as orch`` binds the INSTANCE — go via sys.modules.
     import sys
 
-    import app.services.interview.analysis_orchestrator  # noqa: F401
+    import app.interviews.application.analysis_orchestrator  # noqa: F401
 
-    orch = sys.modules["app.services.interview.analysis_orchestrator"]
+    orch = sys.modules["app.interviews.application.analysis_orchestrator"]
 
     rec = _mk_record(db_session, "ir_gate2", status="pending")
 

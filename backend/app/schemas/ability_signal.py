@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, model_validator
+from app.core.scoring import Score, SCORE_SCALE_VERSION
 
 
 AbilitySignalStatus = Literal["active", "disputed", "invalidated", "superseded"]
@@ -53,13 +54,13 @@ class AbilitySignalCreateInput(BaseModel):
     topic: str = Field(min_length=1, max_length=200)
     signal_type: str = Field(min_length=1, max_length=64)
     level: str | None = Field(default=None, max_length=64)
-    score: float | None = None
+    score: Score | None = None
     summary: str = Field(min_length=1, max_length=4_000)
-    confidence: float = Field(ge=0, le=1)
+    confidence: float | None = Field(strict=True, ge=0, le=1)
     limitations: str | None = Field(default=None, max_length=4_000)
     scope: AbilityScopeInput = Field(default_factory=AbilityScopeInput)
     formed_at: datetime
-    rubric_version: str | None = Field(default=None, max_length=64)
+    rubric_version: str | None = Field(default=SCORE_SCALE_VERSION, max_length=64)
     sources: list[AbilitySourceRefInput] = Field(min_length=1, max_length=100)
 
 
@@ -79,7 +80,8 @@ class AbilitySignalView(BaseModel):
     topic: str
     signal_type: str
     level: str | None
-    score: float | None
+    score: Score | None
+    score_scale_version: str = SCORE_SCALE_VERSION
     summary: str
     confidence: float | None
     limitations: str | None

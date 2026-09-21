@@ -1,0 +1,195 @@
+{
+  "components": {
+    "schemas": {
+      "MediaAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "client_session_id": {
+            "title": "Client Session Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "sdp": {
+            "title": "Sdp",
+            "type": "string"
+          },
+          "type": {
+            "const": "answer",
+            "default": "answer",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "connection_id",
+          "client_session_id",
+          "sdp"
+        ],
+        "title": "MediaAnswer",
+        "type": "object"
+      },
+      "MediaControl": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "ping",
+              "interrupt",
+              "finish",
+              "commit",
+              "discard",
+              "ack",
+              "play_question"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "connection_id": {
+            "maxLength": 36,
+            "minLength": 36,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "playback_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "minLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Playback Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 36,
+                "minLength": 36,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Id"
+          },
+          "samples": {
+            "anyOf": [
+              {
+                "maximum": 14400000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Samples"
+          }
+        },
+        "required": [
+          "connection_id",
+          "action"
+        ],
+        "title": "MediaControl",
+        "type": "object"
+      },
+      "MediaOffer": {
+        "additionalProperties": false,
+        "properties": {
+          "client_session_id": {
+            "format": "uuid",
+            "title": "Client Session Id",
+            "type": "string"
+          },
+          "sdp": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "title": "Sdp",
+            "type": "string"
+          },
+          "type": {
+            "const": "offer",
+            "default": "offer",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_session_id",
+          "sdp"
+        ],
+        "title": "MediaOffer",
+        "type": "object"
+      },
+      "MediaPlaybackReport": {
+        "additionalProperties": false,
+        "properties": {
+          "client_reported_samples": {
+            "minimum": 0,
+            "title": "Client Reported Samples",
+            "type": "integer"
+          },
+          "delivered_samples": {
+            "minimum": 0,
+            "title": "Delivered Samples",
+            "type": "integer"
+          },
+          "generated_samples": {
+            "minimum": 0,
+            "title": "Generated Samples",
+            "type": "integer"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "integer"
+          },
+          "playback_id": {
+            "title": "Playback Id",
+            "type": "string"
+          },
+          "sample_rate": {
+            "exclusiveMinimum": 0,
+            "title": "Sample Rate",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "interrupted",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "playback_id",
+          "message_id",
+          "generated_samples",
+          "delivered_samples",
+          "client_reported_samples",
+          "sample_rate",
+          "status"
+        ],
+        "title": "MediaPlaybackReport",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Live media contracts",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {}
+}

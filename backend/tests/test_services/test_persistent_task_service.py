@@ -11,7 +11,7 @@ from app.models.conversation_turn import ConversationTurn
 from app.models.pending_submission import PendingSubmission
 from app.models.persistent_task import PersistentTask, PersistentTaskTrigger
 from app.models.user import User
-from app.services.capabilities import skill_service
+from app.capabilities.application import skill_service
 from app.schemas.persistent_task import (
     PersistentTaskCreate,
     PersistentTaskDelete,
@@ -19,35 +19,33 @@ from app.schemas.persistent_task import (
     PersistentTaskTriggerInput,
     PersistentTaskUpdate,
 )
-from app.services.chat import turn_executor
-from app.services.persistent_task_service import (
-    PersistentTaskDeleteConflictError,
-    PersistentTaskIdempotencyConflictError,
-    PersistentTaskNotFoundError,
-    PersistentTaskPausedError,
-    PersistentTaskToolScopeError,
-    PersistentTaskTriggerConflictError,
-    PersistentTaskVersionConflictError,
-    PersistentTaskUnsupportedTriggerError,
-    admit_pending_persistent_task_triggers,
-    change_persistent_task_state,
-    create_persistent_task,
-    create_user_confirmed_manual_trigger,
-    dispatch_automation_run,
-    due_persistent_task_ids,
-    delete_persistent_task,
-    intake_persistent_task_trigger,
-    latest_persistent_task_cursor,
-    list_persistent_task_triggers,
-    list_persistent_tasks,
-    preview_persistent_task_deletion,
-    record_user_stopped_automation_run,
-    repairable_automation_turn_ids,
-    resolve_automation_run_request,
-    schedule_due_persistent_task,
-    settle_automation_turn_and_admit_next,
-    update_persistent_task,
-)
+from app.conversation.application import turn_executor
+from app.automation.application.tasks import PersistentTaskDeleteConflictError
+from app.automation.application.tasks import PersistentTaskIdempotencyConflictError
+from app.automation.application.tasks import PersistentTaskNotFoundError
+from app.automation.application.tasks import PersistentTaskPausedError
+from app.automation.application.tasks import PersistentTaskToolScopeError
+from app.automation.application.tasks import PersistentTaskTriggerConflictError
+from app.automation.application.tasks import PersistentTaskVersionConflictError
+from app.automation.application.tasks import PersistentTaskUnsupportedTriggerError
+from app.automation.application.tasks import admit_pending_persistent_task_triggers
+from app.automation.application.tasks import change_persistent_task_state
+from app.automation.application.tasks import create_persistent_task
+from app.automation.application.tasks import create_user_confirmed_manual_trigger
+from app.automation.application.tasks import dispatch_automation_run
+from app.automation.application.tasks import due_persistent_task_ids
+from app.automation.application.tasks import delete_persistent_task
+from app.automation.application.tasks import intake_persistent_task_trigger
+from app.automation.application.tasks import latest_persistent_task_cursor
+from app.automation.application.tasks import list_persistent_task_triggers
+from app.automation.application.tasks import list_persistent_tasks
+from app.automation.application.tasks import preview_persistent_task_deletion
+from app.automation.application.tasks import record_user_stopped_automation_run
+from app.automation.application.tasks import repairable_automation_turn_ids
+from app.automation.application.tasks import resolve_automation_run_request
+from app.automation.application.tasks import schedule_due_persistent_task
+from app.automation.application.tasks import settle_automation_turn_and_admit_next
+from app.automation.application.tasks import update_persistent_task
 
 
 NOW = datetime(2026, 8, 13, 9, 0, tzinfo=UTC)

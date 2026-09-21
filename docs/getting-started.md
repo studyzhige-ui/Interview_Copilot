@@ -72,7 +72,7 @@ docker compose --profile full up -d --wait
 ```
 
 Open `http://localhost`. The full profile starts the frontend, API, four Worker
-classes, scheduler, PostgreSQL, Redis, MinIO, and Milvus. Its one-shot migrate
+classes, scheduler, PostgreSQL/pgvector, Redis, and MinIO. Its one-shot migrate
 service applies the database schema before runtime services start.
 
 Inspect or stop it with:

@@ -33,7 +33,9 @@ ContextAuthority = Literal[
 
 
 class ContextObjectReference(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: str = Field(min_length=1, max_length=80)
     id: str = Field(min_length=1, max_length=256)
@@ -41,7 +43,9 @@ class ContextObjectReference(BaseModel):
 
 
 class ContextSourceReference(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: str = Field(min_length=1, max_length=80)
     identity: str = Field(min_length=1, max_length=512)
@@ -50,7 +54,9 @@ class ContextSourceReference(BaseModel):
 
 
 class ContextBudget(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     max_sections: int = Field(default=8, ge=1, le=32)
     max_source_references: int = Field(default=30, ge=1, le=100)
@@ -58,7 +64,9 @@ class ContextBudget(BaseModel):
 
 
 class ContextPolicyScope(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     actor_kind: Literal["user", "agent", "automation"]
     allowed_operations: list[str] = Field(max_length=20)
@@ -68,7 +76,9 @@ class ContextPolicyScope(BaseModel):
 
 
 class ContextSourceManifestItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     source: ContextSourceReference
     object_owner: str
@@ -82,7 +92,9 @@ class ContextSourceManifestItem(BaseModel):
 
 
 class ContextPackageSection(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     role: ContextRole
     authority: ContextAuthority
@@ -99,7 +111,9 @@ class ContextPackageSection(BaseModel):
 class ContextPackage(BaseModel):
     """Execution snapshot; never the owner of canonical product facts."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     package_id: str = Field(min_length=1, max_length=80)
     schema_version: Literal[1] = 1

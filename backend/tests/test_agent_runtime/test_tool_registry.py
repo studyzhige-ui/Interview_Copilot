@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 
 def test_tool_registry_has_expected_tools():
-    from app.agent_runtime.tool_registry import registry
+    from app.agent_runtime.builtin_tools import registry
 
     expected = {
         "web_search",
@@ -29,6 +29,7 @@ def test_tool_registry_has_expected_tools():
         "save_artifact",
         "start_mock_interview",
         "prepare_resume_profile_candidates",
+        "prepare_interview_evidence",
         "resolve_resume_profile_candidates",
         "read_gmail_observations",
         "review_gmail_observation",
@@ -51,7 +52,7 @@ def test_tool_registry_has_expected_tools():
 
 
 def test_openai_schemas_generated():
-    from app.agent_runtime.tool_registry import registry
+    from app.agent_runtime.builtin_tools import registry
 
     schemas = registry.get_openai_schemas()
     assert len(schemas) == len(registry.tool_names)
@@ -62,7 +63,8 @@ def test_openai_schemas_generated():
 
 
 def test_dispatch_unknown_tool():
-    from app.agent_runtime.tool_registry import AgentToolContext, registry
+    from app.agent_runtime.tool_registry import AgentToolContext
+    from app.agent_runtime.builtin_tools import registry
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
     result = asyncio.run(registry.dispatch("nonexistent_tool", {}, ctx))
@@ -84,14 +86,14 @@ def test_parse_tool_arguments_invalid():
 
 
 def test_registry_schemas_are_deterministically_sorted():
-    from app.agent_runtime.tool_registry import registry
+    from app.agent_runtime.builtin_tools import registry
 
     names = [schema["function"]["name"] for schema in registry.get_openai_schemas()]
     assert names == sorted(names)
 
 
 def test_registry_does_not_duplicate_schema_in_prompt_guidance():
-    from app.agent_runtime.tool_registry import registry
+    from app.agent_runtime.builtin_tools import registry
 
     guidance = registry.format_guidance()
     assert '"parameters"' not in guidance
@@ -100,7 +102,7 @@ def test_registry_does_not_duplicate_schema_in_prompt_guidance():
 
 def test_every_builtin_has_an_explicit_effect():
     from app.agent_runtime.tool_policy import ToolEffect
-    from app.agent_runtime.tool_registry import registry
+    from app.agent_runtime.builtin_tools import registry
 
     assert all(
         registry.get(name).effect is not ToolEffect.UNKNOWN

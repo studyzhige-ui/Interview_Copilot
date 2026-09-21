@@ -223,8 +223,7 @@ def test_fixture_ingress_deduplicates_and_stops_at_fact_confirmation(
         for item in activity
     )
     assert not any(
-        item["event_kind"] == "interview_invitation_confirmed"
-        for item in activity
+        item["event_kind"] == "interview_invitation_confirmed" for item in activity
     )
 
     replay = client.post(

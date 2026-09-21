@@ -18,14 +18,12 @@ from app.schemas.agent_task import (
     CreateAgentTaskRequest,
     ReviseAgentTaskRequest,
 )
-from app.services.chat.agent_task_service import (
-    AgentTaskConflictError,
-    AgentTaskFrozenError,
-    AgentTaskNotFoundError,
-    AgentTaskOwnershipError,
-    create_agent_task,
-    revise_agent_task,
-)
+from app.conversation.application.agent_task_service import AgentTaskConflictError
+from app.conversation.application.agent_task_service import AgentTaskFrozenError
+from app.conversation.application.agent_task_service import AgentTaskNotFoundError
+from app.conversation.application.agent_task_service import AgentTaskOwnershipError
+from app.conversation.application.agent_task_service import create_agent_task
+from app.conversation.application.agent_task_service import revise_agent_task
 
 
 def _require_runtime_scope(ctx: AgentToolContext) -> tuple[str, int]:

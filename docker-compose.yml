@@ -7,7 +7,6 @@ x-backend-build: &backend-build
 x-backend-environment: &backend-environment
   DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-interview_copilot}
   REDIS_URL: redis://redis:6379/0
-  MILVUS_URI: http://milvus-standalone:19530
   AWS_ENDPOINT_URL: http://minio:9000
   S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
 
@@ -42,7 +41,10 @@ services:
   # This is not the production Cloud topology.
 
   db:
-    image: postgres:15.18-alpine
+    image: interview-copilot-postgres:15-pgvector-0.8.6
+    build:
+      context: .
+      dockerfile: infra/postgres/Dockerfile
     container_name: interview_copilot_db
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -115,76 +117,7 @@ services:
     networks:
       - copilot_net
 
-  # Milvus vector database
-  milvus-etcd:
-    image: quay.io/coreos/etcd:v3.5.25
-    container_name: interview_copilot_etcd
-    environment:
-      - ETCD_AUTO_COMPACTION_MODE=revision
-      - ETCD_AUTO_COMPACTION_RETENTION=1000
-      - ETCD_QUOTA_BACKEND_BYTES=4294967296
-      - ETCD_SNAPSHOT_COUNT=50000
-    volumes:
-      - milvus_etcd:/etcd
-    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
-    healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    networks:
-      - copilot_net
-
-  milvus-minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    container_name: interview_copilot_milvus_minio
-    environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-    ports:
-      - "127.0.0.1:9010:9000"
-      - "127.0.0.1:9011:9001"
-    volumes:
-      - milvus_minio:/minio_data
-    command: minio server /minio_data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    networks:
-      - copilot_net
-
-  milvus-standalone:
-    image: milvusdb/milvus:v2.6.22
-    container_name: interview_copilot_milvus
-    command: ["milvus", "run", "standalone"]
-    security_opt:
-      - seccomp:unconfined
-    environment:
-      ETCD_ENDPOINTS: milvus-etcd:2379
-      MINIO_ADDRESS: milvus-minio:9000
-    volumes:
-      - milvus_data:/var/lib/milvus
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
-      interval: 30s
-      start_period: 90s
-      timeout: 20s
-      retries: 3
-    ports:
-      - "127.0.0.1:19530:19530"
-      - "127.0.0.1:9091:9091"
-    depends_on:
-      milvus-etcd:
-        condition: service_healthy
-      milvus-minio:
-        condition: service_healthy
-    networks:
-      - copilot_net
-
-  # ── Optional: full-stack containerized API + Worker + Frontend ──────
-  # Activate with: docker compose --profile full up -d
+  # Canonical schema and pgvector extension migration
   migrate:
     <<: *backend-service
     profiles: [full]
@@ -233,8 +166,6 @@ services:
       retries: 3
     depends_on:
       <<: *runtime-dependencies
-      milvus-standalone:
-        condition: service_healthy
     # Alias the container DNS as `backend` so frontend nginx upstream resolves.
     hostname: backend
 
@@ -278,8 +209,6 @@ services:
       - --hostname=turns@%h
     depends_on:
       <<: *runtime-dependencies
-      milvus-standalone:
-        condition: service_healthy
 
   worker-transcription:
     <<: *backend-service
@@ -320,8 +249,6 @@ services:
       - --hostname=pipeline@%h
     depends_on:
       <<: *runtime-dependencies
-      milvus-standalone:
-        condition: service_healthy
 
   worker-jobs:
     <<: *backend-service
@@ -366,9 +293,6 @@ volumes:
   minio_data:
   pgdata:
   redis_data:
-  milvus_etcd:
-  milvus_minio:
-  milvus_data:
 
 networks:
   copilot_net:

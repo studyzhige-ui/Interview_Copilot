@@ -10,8 +10,8 @@ Security model:
   registration deliberately returns an explicit duplicate-account conflict.
 
 Thin router: token/code protocol flow + HTTP status mapping. The
-``users``-table work lives in ``services.auth.user_account_service``; the
-avatar storage logic in ``services.auth.avatar_service``.
+``users``-table work lives in ``identity.application.user_account_service``; the
+avatar storage logic in ``identity.application.avatar_service``.
 """
 
 from __future__ import annotations
@@ -39,15 +39,16 @@ from app.core.security import (
 from app.core.token_blacklist import is_revoked, revoke
 from app.db.database import get_db
 from app.models.user import User
-from app.services.auth import avatar_service, user_account_service
-from app.services.auth.verification_code_service import (
-    CodeError,
-    assert_ip_not_locked,
+from app.identity.application import avatar_service
+from app.identity.application import user_account_service
+from app.identity.application.verification_code_service import CodeError
+from app.identity.application.verification_code_service import assert_ip_not_locked
+from app.identity.application.verification_code_service import (
     record_verify_failure_for_ip,
-    request_code,
-    reset_ip_failures,
-    verify_code,
 )
+from app.identity.application.verification_code_service import request_code
+from app.identity.application.verification_code_service import reset_ip_failures
+from app.identity.application.verification_code_service import verify_code
 
 logger = logging.getLogger(__name__)
 
@@ -459,10 +460,8 @@ async def set_avatar(
     ``users.avatar_url`` at the asset and mark it consumed. ``avatar_url`` stores
     the ``s3://`` URI; the serializer turns it into a presigned GET on /auth/me.
     """
-    from app.services.uploads.file_asset_service import (
-        READABLE_UPLOAD_STATUSES,
-        get_owned_file_asset,
-    )
+    from app.files.application.file_asset_service import READABLE_UPLOAD_STATUSES
+    from app.files.application.file_asset_service import get_owned_file_asset
 
     asset = get_owned_file_asset(
         db,

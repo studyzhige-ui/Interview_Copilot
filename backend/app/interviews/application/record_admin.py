@@ -1,0 +1,491 @@
+"""Owned-record access + maintenance operations for interview records.
+
+The API routers call these instead of writing ORM queries inline: ownership
+lookups, field updates, analysis cancellation, the full cascade delete, and
+the SSE poll snapshot. All functions are synchronous; the SSE caller wraps
+them in ``asyncio.to_thread``.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from sqlalchemy.orm import Session
+
+from app.core.user_identity import resolve_user_pk
+from app.db.database import SessionLocal
+from app.models.interview_qa import InterviewQA
+from app.models.interview_record import InterviewRecord
+from app.interviews.application.interview_record_service import STATUS_COMPLETED
+from app.interviews.application.interview_record_service import STATUS_FAILED
+from app.interviews.application.interview_record_service import interview_record_service
+from app.task_queue.dispatch import dispatch_interview_analysis, revoke_task
+
+logger = logging.getLogger(__name__)
+
+
+def get_owned_record(
+    db: Session, record_id: str, username: str
+) -> InterviewRecord | None:
+    """The record iff it exists and belongs to *username* (else None)."""
+    return (
+        db.query(InterviewRecord)
+        .filter(
+            InterviewRecord.id == record_id,
+            InterviewRecord.user_id == resolve_user_pk(db, username),
+        )
+        .first()
+    )
+
+
+def get_owned_qa(
+    db: Session, *, user_pk, record_id: str, qa_id: str, for_update: bool = False
+) -> InterviewQA | None:
+    """A QA row iff it belongs to *record_id* and that record to *user_pk*."""
+    query = (
+        db.query(InterviewQA)
+        .join(InterviewRecord, InterviewQA.record_id == InterviewRecord.id)
+        .filter(
+            InterviewQA.id == qa_id,
+            InterviewQA.record_id == record_id,
+            InterviewRecord.user_id == user_pk,
+        )
+    )
+
+    if for_update:
+        query = query.with_for_update(of=InterviewQA).populate_existing()
+    return query.first()
+
+
+def cancel_analysis(db: Session, record: InterviewRecord) -> bool:
+    """Revoke the record's running Celery task and mark it cancelled.
+
+    Returns True iff a task revoke was actually issued.
+    """
+    from app.interviews.application.review_fence import lock_record
+
+    current = lock_record(db, record.id)
+    if current is None:
+        return False
+    record = current
+    record.review_generation += 1
+    old_task_id = record.celery_task_id
+    record.status = "review_failed" if record.source == "mock" else STATUS_FAILED
+    record.error_message = "cancelled"
+    db.add(record)
+    db.commit()
+    if not old_task_id:
+        return False
+    try:
+        revoke_task(old_task_id, terminate=True, signal="SIGTERM")
+        return True
+    except Exception as exc:
+        logger.warning("Failed to revoke celery task %s: %s", old_task_id, exc)
+        return False
+
+
+def update_record_fields(
+    db: Session,
+    record: InterviewRecord,
+    *,
+    title: str | None,
+    tag: str | None,
+    job_opportunity_id: str | None = None,
+    update_job_opportunity: bool = False,
+) -> bool:
+    """Apply the PATCHable fields. Returns False when nothing was given."""
+    changed = False
+    if title is not None:
+        record.title = title.strip()
+        changed = True
+    if tag is not None:
+        record.tag = tag.strip() or None
+        changed = True
+    if update_job_opportunity:
+        record.job_opportunity_id = (
+            interview_record_service.require_owned_job_opportunity(
+                db,
+                user_pk=record.user_id,
+                job_opportunity_id=job_opportunity_id,
+            )
+        )
+        changed = True
+    if not changed:
+        return False
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return True
+
+
+def _enqueue_record_asset_deletes(db: Session, record: InterviewRecord) -> None:
+    """Queue blob deletes + drop the file_asset rows a record exclusively
+    owns: its audio recording and the ad-hoc JD / resume files uploaded just
+    for this analysis. Personal resumes (``resume_id``) are a separate
+    entity and are never touched."""
+    from app.models.file_asset import FileAsset
+    from app.files.application.file_asset_service import enqueue_asset_blob_delete
+
+    asset_ids = {
+        aid
+        for aid in (
+            record.audio_file_asset_id,
+            record.jd_file_asset_id,
+            record.resume_file_asset_id,
+        )
+        if aid
+    }
+    if not asset_ids:
+        return
+    # "Exclusively owns" must be verified, not assumed: the same asset id can
+    # also be referenced by a retired Resume audit row (its file_asset_id is a
+    # real FK — deleting the row would fail the cascade on Postgres), a
+    # canonical ArtifactVersion, or a knowledge document. This is reference
+    # protection only; no legacy resume content enters a runtime read path.
+    from app.models.knowledge import KnowledgeDocument
+    from app.models.resume import Resume
+    from app.models.artifact import ArtifactVersion
+
+    referenced = (
+        {
+            row[0]
+            for row in db.query(Resume.file_asset_id)
+            .filter(Resume.file_asset_id.in_(asset_ids))
+            .all()
+        }
+        | {
+            row[0]
+            for row in db.query(ArtifactVersion.file_asset_id)
+            .filter(ArtifactVersion.file_asset_id.in_(asset_ids))
+            .all()
+        }
+        | {
+            row[0]
+            for row in db.query(KnowledgeDocument.file_asset_id)
+            .filter(KnowledgeDocument.file_asset_id.in_(asset_ids))
+            .all()
+        }
+    )
+    asset_ids -= referenced
+    if not asset_ids:
+        return
+    assets = (
+        db.query(FileAsset)
+        .filter(FileAsset.id.in_(asset_ids), FileAsset.user_id == record.user_id)
+        .all()
+    )
+    for asset in assets:
+        enqueue_asset_blob_delete(db, asset)
+        db.delete(asset)
+
+
+class ReanalyzeNotAllowed(ValueError):
+    """Record is not in a state (or of a source) that can be re-analyzed."""
+
+
+# Shared by the rolled-back error_message and the API's 503 detail so the
+# two can't drift.
+REANALYZE_DISPATCH_FAILED_MSG = "重新分析派发失败（任务队列暂不可用），请稍后重试。"
+
+
+def reanalyze_record(
+    db: Session,
+    record: InterviewRecord,
+    *,
+    drop_qa: bool = False,
+    retranscribe: bool = False,
+):
+    """ANA-7: re-run the analysis pipeline for a terminal upload record.
+
+    Covers both recovery (``failed`` — the audio is still in storage, yet
+    the only pre-fix option was delete + re-upload) and re-scoring
+    (``completed`` — e.g. the user switched to a better model).
+
+    Resets the analysis artifacts but KEEPS the transcript and QA shells:
+    the orchestrator's stage gates then resume from what exists — a
+    completed record re-grades without paying ASR + extraction again; a
+    record that failed mid-transcription starts from where it broke.
+    ``drop_qa=True`` additionally deletes the QA shells so the rerun
+    re-extracts from the transcript — the escape hatch when the FIRST
+    run's pairing itself was garbage (wrong speaker attribution etc.),
+    which a shell-reusing rerun could never fix.
+    Returns the dispatched Celery task. Dispatch failure rolls the record
+    back to ``failed`` (never a zombie ``pending``) and re-raises.
+    """
+    from app.interviews.application.review_fence import lock_record
+
+    record = lock_record(db, record.id)
+    if record is None:
+        raise ReanalyzeNotAllowed("记录已删除")
+    if record.source != "upload":
+        raise ReanalyzeNotAllowed(
+            "仅上传录音的记录支持重新分析（模拟面试请用重试复盘）"
+        )
+    if record.status not in (STATUS_COMPLETED, STATUS_FAILED):
+        raise ReanalyzeNotAllowed("记录当前状态不支持重新分析")
+
+    # Stale writers are fenced transactionally below. Broker control comes
+    # after that commit and must not hold business row locks over the network.
+    old_task_id = record.celery_task_id
+
+    if retranscribe:
+        # Detach the current transcript rather than deleting it. The worker
+        # will create a new current transcript while the old ASR evidence stays
+        # available as an audit/recovery row under the same record owner.
+        record.transcript_id = None
+        drop_qa = True
+    if drop_qa:
+        db.query(InterviewQA).filter(InterviewQA.record_id == record.id).delete(
+            synchronize_session=False,
+        )
+    from app.career.application.signals import (
+        invalidate_ability_signals_for_interview_reanalysis,
+    )
+
+    invalidate_ability_signals_for_interview_reanalysis(
+        db,
+        user_pk=record.user_id,
+        interview_record_id=record.id,
+    )
+    record.review_generation += 1
+    record.analysis_json = None
+    record.error_message = None
+    record.analyzed_qa_count = 0
+    db.add(record)
+    db.commit()
+    if old_task_id:
+        try:
+            revoke_task(old_task_id)
+        except Exception as exc:
+            logger.warning("reanalyze: stale-task revoke failed: %s", exc)
+    from app.interviews.application.review_dispatch import dispatch_review_command
+
+    return dispatch_review_command(
+        db,
+        record.id,
+        sender=dispatch_interview_analysis,
+        rollback_status=STATUS_FAILED,
+        error_message=REANALYZE_DISPATCH_FAILED_MSG,
+    )
+
+
+def delete_record_cascade(
+    db: Session,
+    record: InterviewRecord,
+    *,
+    cascade_knowledge: bool = False,
+) -> dict:
+    """Hard-delete an interview record AND every trace tied to it.
+
+    Removes, in order:
+
+      1. **conversation_messages** for every session linked to this interview
+         (the FK has no ON DELETE CASCADE, so we have to be explicit).
+      2. **conversations** bound to this interview (``subject_id == X``).
+      3. **mock_interview_runtime** (explicit — SQLite doesn't enforce the FK
+         cascade) and **interview_qa** (auto via ON DELETE CASCADE on
+         ``interview_records``).
+      4. The **interview_record** row itself.
+
+    Designed for "I want this interview gone — no leftover chat history."
+
+    Legacy mixed-memory rows are migration-only and are not mutated here.
+    Stage 2 classification must reject or invalidate any migrated item whose
+    only source was this deleted record; runtime Context/Recall never reads the
+    legacy tables in the meantime.
+
+    With ``cascade_knowledge`` the improved_qa knowledge documents this
+    interview's QAs published are removed too (RFC §10.3 — user opt-in).
+
+    Returns ``{"deleted_sessions": N, "deleted_knowledge_docs": N}``.
+    Raises on failure after rolling back.
+    """
+    from app.models.chat import Conversation, ConversationMessage
+    from app.models.mock_interview_runtime import MockInterviewRuntime
+
+    record_id = record.id
+
+    removed_docs = 0
+    if cascade_knowledge:
+        from app.rag.application.library.qa_publish_service import (
+            delete_saved_qa_docs_for_record,
+        )
+
+        removed_docs = delete_saved_qa_docs_for_record(
+            db,
+            user_pk=record.user_id,
+            record_id=record_id,
+        )
+
+    try:
+        # ── (1) Find every conversation linked to this interview ──────────
+        session_ids = [
+            row[0]
+            for row in db.query(Conversation.id)
+            .filter(Conversation.subject_id == record_id)
+            .all()
+        ]
+
+        # ── (1b) Storage blobs (UP-2) — queue object deletes BEFORE the
+        # referencing rows disappear. Mock voice clips hang off the
+        # conversations' messages; the audio / ad-hoc JD / ad-hoc resume
+        # uploads hang off the record row. Blob deletion rides the outbox so
+        # a MinIO blip can't fail the user-facing delete.
+        from app.interviews.application.mock_flow import delete_mock_audio_assets
+
+        for sid in session_ids:
+            delete_mock_audio_assets(db, sid, record.user_id)
+        _enqueue_record_asset_deletes(db, record)
+
+        from app.conversation.application.attachment_source_service import (
+            cleanup_conversation_attachment_scope,
+        )
+        from app.conversation.application.attachment_source_service import (
+            cleanup_interview_source_scope,
+        )
+
+        attachment_task_ids: list[str] = []
+        for session_id in session_ids:
+            cleanup = cleanup_conversation_attachment_scope(
+                db,
+                user_pk=record.user_id,
+                conversation_id=session_id,
+            )
+            attachment_task_ids.extend(cleanup.ingestion_task_ids)
+        interview_source_cleanup = cleanup_interview_source_scope(
+            db,
+            user_pk=record.user_id,
+            interview_record_id=record_id,
+        )
+        attachment_task_ids.extend(interview_source_cleanup.ingestion_task_ids)
+
+        # AbilitySignal is inferred product state rather than an FK projection.
+        # Preserve its direct source identities for provenance, while ensuring
+        # this delete cannot leave a live judgement with no scope/sources.
+        from app.career.application.signals import (
+            invalidate_ability_signals_for_interview_delete,
+        )
+
+        invalidate_ability_signals_for_interview_delete(
+            db,
+            user_pk=record.user_id,
+            interview_record_id=record_id,
+            conversation_ids=tuple(session_ids),
+        )
+        from app.memory.lifecycle import invalidate_sources_for_conversation
+
+        for session_id in session_ids:
+            invalidate_sources_for_conversation(
+                db,
+                user_pk=record.user_id,
+                conversation_id=session_id,
+            )
+
+        # ── (2) DB deletes in safe order ─────────────────────────────────
+        if session_ids:
+            db.query(ConversationMessage).filter(
+                ConversationMessage.conversation_id.in_(session_ids)
+            ).delete(synchronize_session=False)
+            db.query(Conversation).filter(Conversation.id.in_(session_ids)).delete(
+                synchronize_session=False
+            )
+        # mock_interview_runtime has ON DELETE CASCADE on interview_records, but
+        # SQLite (tests) doesn't enforce FK cascades — delete it explicitly so
+        # behavior is uniform across Postgres and SQLite (no orphan runtime).
+        db.query(MockInterviewRuntime).filter(
+            MockInterviewRuntime.interview_record_id == record_id
+        ).delete(synchronize_session=False)
+        # interview_qa auto-cleaned by ON DELETE CASCADE on interview_records.
+        from app.models.interview_qa_revision import InterviewQARevision
+
+        db.query(InterviewQARevision).filter(
+            InterviewQARevision.record_id == record.id
+        ).delete(synchronize_session=False)
+        from app.models.transcript_correction import TranscriptCorrection
+
+        db.query(TranscriptCorrection).filter_by(record_id=record.id).delete(
+            synchronize_session=False
+        )
+        db.delete(record)
+        db.commit()
+        from app.task_queue.dispatch import revoke_task
+
+        for task_id in dict.fromkeys(attachment_task_ids):
+            try:
+                revoke_task(task_id)
+            except Exception:  # noqa: BLE001 - cleanup is already durable
+                logger.warning(
+                    "Could not revoke deleted interview attachment task %s",
+                    task_id,
+                    exc_info=True,
+                )
+
+        logger.info(
+            "Deleted interview_record=%s with %d session(s)",
+            record_id,
+            len(session_ids),
+        )
+        return {
+            "deleted_sessions": len(session_ids),
+            "deleted_knowledge_docs": removed_docs,
+        }
+    except Exception:
+        db.rollback()
+        raise
+
+
+def poll_record_snapshot(record_id: str) -> dict | None:
+    """One-shot DB read for the SSE poll loop.
+
+    Each call opens its own short-lived ``SessionLocal()`` and closes
+    it immediately. Returns a plain dict — the ORM row is NOT
+    returned outside the session scope (that would trigger
+    DetachedInstanceError on any lazy-loaded attribute). Returns
+    ``None`` if the row disappeared between polls.
+
+    Designed to run inside ``asyncio.to_thread`` so the sync DB
+    round-trip doesn't block the event loop. Without this, 20
+    concurrent SSE viewers each holding a request-scoped session
+    for up to 8 minutes (320 ticks × 1.5s) would exhaust the
+    DB_POOL_SIZE=20 pool and the loop would stall on every query.
+    """
+    with SessionLocal() as db:
+        row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+        if row is None:
+            return None
+        # Denominator for the analyzing-stage progress interpolation: the
+        # QA shells are persisted before the analyzing status flips, so by
+        # the time the FE needs a percent this is stable.
+        qa_total = (
+            db.query(InterviewQA).filter(InterviewQA.record_id == record_id).count()
+        )
+        return {
+            "id": row.id,
+            "status": (row.status or "").lower(),
+            "analyzed_qa_count": row.analyzed_qa_count or 0,
+            "qa_total": qa_total,
+            "analysis_json": row.analysis_json,
+            "error_message": row.error_message,
+        }
+
+
+def record_exists_for_user(record_id: str, username: str) -> bool:
+    """Short owner check with its own session (for long-lived SSE requests)."""
+    with SessionLocal() as db:
+        return (
+            db.query(InterviewRecord.id)
+            .filter(
+                InterviewRecord.id == record_id,
+                InterviewRecord.user_id == resolve_user_pk(db, username),
+            )
+            .first()
+            is not None
+        )
+
+
+def edit_owned_qa(db, *, record_id, qa_id, payload, current_user):
+    from app.interviews.application.corrections import edit_qa
+
+    return edit_qa(
+        db, record_id=record_id, qa_id=qa_id, payload=payload, current_user=current_user
+    )

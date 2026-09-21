@@ -111,7 +111,7 @@ fi
 if [ "$SKIP_BACKEND" = "0" ]; then
     log Docker "$MAGENTA" "starting long-running infrastructure ..."
     ( cd "$PROJECT_ROOT" && docker compose up -d --wait --wait-timeout 180 \
-        db redis minio milvus-etcd milvus-minio milvus-standalone 2>&1 ) | record_command_output Docker "$DARK_GRAY"
+        db redis minio 2>&1 ) | record_command_output Docker "$DARK_GRAY"
     ( cd "$PROJECT_ROOT" && docker compose run --rm --no-deps minio-create-bucket 2>&1 ) | record_command_output Docker "$DARK_GRAY"
     log Docker "$GREEN" "infrastructure healthy"
 fi

@@ -261,10 +261,9 @@ def test_reducer_preserves_tool_results_below_pressure_threshold():
     result, at_blocking = asyncio.run(pipeline.compress(messages))
 
     from app.conversation.context_window import wire
+
     assert wire(result) == messages
     assert at_blocking is False
-
-
 
 
 def test_request_measurement_counts_tools_once_and_uses_provider_delta():
@@ -327,8 +326,6 @@ def test_token_warning_default_1m_window():
 # ── Reactive reduction ───────────────────────────────────────────────────
 
 
-
-
 def test_should_compact_absolute_threshold():
     """Compaction starts before the blocking threshold at every window size."""
     from app.agent_runtime.context_compactor import ActiveTurnContextReducer
@@ -365,7 +362,7 @@ def test_resolve_threshold():
     cap is enforced via a durable reference, not destructive truncation;
     unknown tools fall back
     to the global threshold."""
-    from app.agent_runtime.tool_registry import registry
+    from app.agent_runtime.builtin_tools import registry
     from app.agent_runtime.tool_result_storage import resolve_threshold
     from app.core.config import settings
 

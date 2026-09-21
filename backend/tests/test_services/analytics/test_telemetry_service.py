@@ -11,8 +11,8 @@ async def test_log_interaction_writes_jsonl(tmp_path):
     """log_interaction_metrics 应向 JSONL 文件追加一行合法 JSON。"""
     log_file = tmp_path / "metrics.jsonl"
 
-    with patch("app.services.analytics.telemetry_service.LOG_FILE", log_file):
-        from app.services.analytics.telemetry_service import log_interaction_metrics
+    with patch("app.observability.telemetry_service.LOG_FILE", log_file):
+        from app.observability.telemetry_service import log_interaction_metrics
 
         await log_interaction_metrics(
             session_id="s1",
@@ -49,8 +49,8 @@ async def test_log_interaction_writes_jsonl(tmp_path):
 async def test_log_interaction_rag_fields_default_false(tmp_path):
     """A non-RAG turn omits the degradation kwargs → defaults, not missing keys."""
     log_file = tmp_path / "metrics.jsonl"
-    with patch("app.services.analytics.telemetry_service.LOG_FILE", log_file):
-        from app.services.analytics.telemetry_service import log_interaction_metrics
+    with patch("app.observability.telemetry_service.LOG_FILE", log_file):
+        from app.observability.telemetry_service import log_interaction_metrics
 
         await log_interaction_metrics(
             session_id="s3",
@@ -71,10 +71,10 @@ async def test_log_interaction_rag_fields_default_false(tmp_path):
 async def test_log_interaction_does_not_raise_on_write_error():
     """写入失败时，telemetry 不应抛出异常（旁路容错）。"""
     with patch(
-        "app.services.analytics.telemetry_service._write_log_sync",
+        "app.observability.telemetry_service._write_log_sync",
         side_effect=PermissionError("denied"),
     ):
-        from app.services.analytics.telemetry_service import log_interaction_metrics
+        from app.observability.telemetry_service import log_interaction_metrics
 
         # 应静默失败，不抛异常
         await log_interaction_metrics(

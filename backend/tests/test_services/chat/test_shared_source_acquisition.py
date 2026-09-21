@@ -10,17 +10,17 @@ from app.models.chat import Conversation, ConversationMessage
 from app.models.user import User
 from app.rag.grounding.builder import grounding_builder
 from app.rag.domain.models import SearchIntent
-from app.services.chat import shared_source_acquisition as acquisition
-from app.services.chat.context_assembly_pipeline import AssembledContext
-from app.services.chat.source_requests import (
-    ArtifactSourceRequest,
-    CareerDomainSourceRequest,
-    HistorySourceRequest,
-    ObservationSourceRequest,
+from app.conversation.application import shared_source_acquisition as acquisition
+from app.conversation.application.context_assembly_pipeline import AssembledContext
+from app.conversation.application.source_requests import ArtifactSourceRequest
+from app.conversation.application.source_requests import CareerDomainSourceRequest
+from app.conversation.application.source_requests import HistorySourceRequest
+from app.conversation.application.source_requests import ObservationSourceRequest
+from app.conversation.application.source_requests import (
     explicit_source_requests_from_object_references,
-    extract_explicit_urls,
-    fallback_source_requests,
 )
+from app.conversation.application.source_requests import extract_explicit_urls
+from app.conversation.application.source_requests import fallback_source_requests
 from tests.conftest import NoCloseSession
 
 

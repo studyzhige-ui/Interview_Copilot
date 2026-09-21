@@ -6,7 +6,7 @@ the L2 agent loop (``agent_runtime.context_compactor``). (The voice/analysis
 subsystem still rolls its own; that consolidation is tracked separately.)
 
 Lives in ``core`` and is intentionally dependency-light — it imports only
-``tiktoken`` and the standard library — so any layer (L1 ``services.chat``
+``tiktoken`` and the standard library — so any layer (L1 ``conversation.application``
 or L2 ``agent_runtime``) can import it without creating an import cycle.
 
 Message assembly is NOT here: both L1 and L2 build their prompt through the

@@ -1,5 +1,5 @@
 from app.models.user import User
-from app.services.capabilities import mcp_server_service
+from app.capabilities.application import mcp_server_service
 
 
 def _user(db_session):

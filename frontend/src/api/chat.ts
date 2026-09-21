@@ -459,12 +459,15 @@ function dispatchHarnessEvent(
       const interaction = data.interaction;
       if (interaction && typeof interaction === 'object') {
         const typed = interaction as AgentInteraction;
+        // Tool observations may first emit only an identity hint. The canonical
+        // waiting projection follows; do not render an incomplete decision card.
+        if (!typed.request || typeof typed.request !== 'object' || !typed.turn_id) break;
         handlers.onInteraction?.(typed);
         const request = typed.request as Record<string, unknown>;
         if (
           typed.kind === 'client_readiness'
           && typed.tool_call_id
-          && request.protocol === 'mock_handoff.v1'
+          && (request.protocol === 'mock_handoff.v1' || request.protocol === 'client_action.v1')
           && typeof request.action_id === 'string'
           && typeof request.action === 'string'
         ) {
@@ -676,6 +679,7 @@ export async function resolveAgentInteraction(
   turnId: string,
   interactionId: string,
   payload: {
+    resolution_identity?: string;
     expected_version: number;
     status: 'resolved' | 'rejected' | 'cancelled';
     resolution: Record<string, unknown>;

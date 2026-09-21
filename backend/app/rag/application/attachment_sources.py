@@ -575,8 +575,10 @@ def load_debrief_source_text(
                 normalized_ref_id,
                 reason="identity_or_scope",
             )
-        from app.services.chat.attachment_source_service import (
+        from app.conversation.application.attachment_source_service import (
             AttachmentSourceCommandError,
+        )
+        from app.conversation.application.attachment_source_service import (
             load_debrief_source_text as load_source,
         )
 

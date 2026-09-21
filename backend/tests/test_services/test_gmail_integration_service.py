@@ -14,18 +14,16 @@ from app.schemas.gmail_integration import (
     GmailIntegrationAccountView,
     GmailMessageSummary,
 )
-from app.services.gmail_integration_service import (
-    GMAIL_READONLY_SCOPE,
-    GmailAccountNotFoundError,
-    GmailConnectionRequiredError,
-    GmailCredentialHandleError,
-    GmailGrantInspection,
-    GmailProviderAdapterError,
-    bind_verified_grant,
-    revoke_account,
-    search_messages,
-    test_account as verify_account,
-)
+from app.integrations.gmail.contract import GMAIL_READONLY_SCOPE
+from app.integrations.gmail.contract import GmailAccountNotFoundError
+from app.integrations.gmail.contract import GmailConnectionRequiredError
+from app.integrations.gmail.contract import GmailCredentialHandleError
+from app.integrations.gmail.contract import GmailGrantInspection
+from app.integrations.gmail.contract import GmailProviderAdapterError
+from app.integrations.gmail.contract import bind_verified_grant
+from app.integrations.gmail.contract import revoke_account
+from app.integrations.gmail.contract import search_messages
+from app.integrations.gmail.contract import test_account as verify_account
 
 
 NOW = datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc)

@@ -22,11 +22,9 @@ from app.schemas.career_insights import (
     ReminderDismiss,
 )
 from app.schemas.job_opportunity import NextActionView
-from app.services import (
-    funnel_analysis_service,
-    offer_analysis_service,
-    reminder_service,
-)
+from app.career.application import funnel as funnel_analysis_service
+from app.career.application import offer_analysis as offer_analysis_service
+from app.career.application import reminders as reminder_service
 
 router = APIRouter(prefix="/career-insights", tags=["career-insights"])
 

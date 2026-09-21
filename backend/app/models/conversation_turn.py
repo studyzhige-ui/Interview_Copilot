@@ -64,6 +64,9 @@ class ConversationTurn(Base):
     # are fenced to this generation so a late worker cannot overwrite a newer
     # execution pass.
     dispatch_generation = Column(Integer, nullable=False, default=1)
+    # Lease recovery uses the latest dispatch, never the original user-input age.
+    dispatch_requested_at = Column(DateTime, nullable=True, default=utc_now)
+    recovery_attempts = Column(Integer, nullable=False, default=0, server_default="0")
     error = Column(Text, nullable=True)
     owner_id = Column(String(128), nullable=True, index=True)
     heartbeat_at = Column(DateTime, nullable=True, index=True)

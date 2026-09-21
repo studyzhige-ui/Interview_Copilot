@@ -9,6 +9,7 @@ import {
 } from './MockSetup';
 import { MockLive } from './MockLive';
 import { toast } from '@/store/uiStore';
+import { extractErr } from '@/api/client';
 import type { MockLiveMessage } from '@/types/api';
 import {
   abandonMockInterview,
@@ -23,11 +24,13 @@ import type {
 
 type Stage =
   | { kind: 'setup' }
+  | { kind: 'handoff' }
   | {
       kind: 'live';
       recordId: string;
       initialMessages?: MockLiveMessage[];
       ttsVoice: TtsVoice;
+      inputMode?: 'text' | 'voice';
     };
 
 interface InProgressBanner {
@@ -48,11 +51,22 @@ export function MockPage() {
       return {
         kind: 'live',
         recordId: routeAction.payload.record_id,
+        inputMode: routeAction.payload.input_mode ?? 'voice',
         ttsVoice: loadPreferredVoice(),
       };
     }
     return { kind: 'setup' };
   });
+  // React may reuse this page when prefill and enter-live target the same URL.
+  // Derive the next local stage once per new server action, before committing UI.
+  const [appliedActionId, setAppliedActionId] = useState(routeAction?.action_id);
+  if (routeAction?.action === 'mock_interview.enter_live'
+    && routeAction.payload.kind === 'mock_enter_live'
+    && appliedActionId !== routeAction.action_id) {
+    setAppliedActionId(routeAction.action_id);
+    setStage({ kind: 'live', recordId: routeAction.payload.record_id,
+      inputMode: routeAction.payload.input_mode ?? 'voice', ttsVoice: loadPreferredVoice() });
+  }
   const [starting, setStarting] = useState(false);
   const [inProgress, setInProgress] = useState<InProgressBanner | null>(null);
   const reportedActionIds = useRef(new Set<string>());
@@ -63,6 +77,11 @@ export function MockPage() {
     reportMockClientActionUiResult(routeAction.action_id, result);
     navigate('/mock', { replace: true, state: null });
   }, [navigate, routeAction]);
+
+  const reportPrefillResult = useCallback((result: MockClientUiResult) => {
+    if (result.outcome === 'acknowledged') setStage({ kind: 'handoff' });
+    reportClientResult(result);
+  }, [reportClientResult]);
 
   useEffect(() => {
     if (
@@ -106,18 +125,30 @@ export function MockPage() {
   };
 
   const discardInProgress = async () => {
-    if (!inProgress) return;
+    if (!inProgress || starting) return;
+    setStarting(true);
     try {
       await abandonMockInterview(inProgress.recordId);
+      setInProgress(null);
     } catch {
-      /* non-fatal */
+      // A failed/unknown deletion is not proof that the active run vanished.
+      toast.error('尚未确认放弃成功，原面试仍保留在列表中，请核实后重试。');
+    } finally {
+      setStarting(false);
     }
-    setInProgress(null);
   };
 
   const handleReady = async (payload: {
-    resume_id: string;
-    jd_text: string;
+    resume_id?: string;
+    purpose: 'full' | 'project_deep_dive' | 'focused_practice';
+    focus?: string;
+    resume_version_id?: string | null;
+    resume_sha256?: string | null;
+    jd_sha256?: string | null;
+    jd_snapshot_id?: string | null;
+    jd_snapshot_version?: number | null;
+    jd_text?: string;
+    input_mode: 'text' | 'voice';
     interviewer_style: InterviewerStyle;
     tts_voice: TtsVoice;
     target_question_count: TargetQuestionCount;
@@ -127,7 +158,13 @@ export function MockPage() {
     try {
       const started = await startMockInterview({
         resume_id: payload.resume_id,
+        resume_version_id: payload.resume_version_id, resume_sha256: payload.resume_sha256,
+        jd_sha256: payload.jd_sha256, jd_snapshot_id: payload.jd_snapshot_id,
+        jd_snapshot_version: payload.jd_snapshot_version,
+        purpose: payload.purpose,
+        focus: payload.focus,
         jd_text: payload.jd_text,
+        input_mode: payload.input_mode,
         interviewer_style: payload.interviewer_style,
         target_question_count: payload.target_question_count,
         job_opportunity_id: payload.job_opportunity_id,
@@ -136,10 +173,11 @@ export function MockPage() {
         kind: 'live',
         recordId: started.record_id,
         initialMessages: [started.message],
+        inputMode: payload.input_mode,
         ttsVoice: payload.tts_voice,
       });
-    } catch {
-      toast.error('启动模拟面试失败');
+    } catch (error) {
+      toast.error(extractErr(error, '启动模拟面试失败'));
     } finally {
       setStarting(false);
     }
@@ -158,6 +196,11 @@ export function MockPage() {
     setStage({ kind: 'setup' });
     setInProgress(null);
   };
+
+  if (stage.kind === 'handoff') return <section className="mx-auto max-w-3xl space-y-3 p-6" aria-label="等待模拟面试启动">
+    <h2>设置已确认，等待启动结果</h2><p role="status">Copilot 正在继续本次请求。只有收到真实面试标识后才会进入问答。</p>
+    <p>没有重新创建第二次启动请求。可以在协作记录中查看进度或取消。</p>
+  </section>;
 
   if (stage.kind === 'setup') {
     return (
@@ -180,16 +223,18 @@ export function MockPage() {
               ? routeAction.payload
               : undefined
           }
-          onPrefillApplied={reportClientResult}
+          onPrefillApplied={reportPrefillResult}
         />
       </>
     );
   }
   return (
     <MockLive
+      key={stage.recordId}
       recordId={stage.recordId}
       initialMessages={stage.initialMessages}
       ttsVoice={stage.ttsVoice}
+      inputMode={stage.inputMode}
       onFinished={onFinished}
       onAbandoned={onAbandoned}
     />

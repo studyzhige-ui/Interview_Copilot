@@ -10,7 +10,7 @@ from app.core.model_catalog import ModelProfile
 from app.core.model_provider_adapter import ProviderStreamEvent, ProviderUsage
 from app.rag.domain.models import RetrievalResult, SearchIntent
 from app.rag.grounding.builder import grounding_builder
-from app.services.chat.context_assembly_pipeline import AssembledContext
+from app.conversation.application.context_assembly_pipeline import AssembledContext
 
 
 @pytest.mark.parametrize("uses_rag", [False, True])
@@ -127,9 +127,7 @@ def test_chat_native_provider_path_uses_canonical_partition_and_usage(monkeypatc
     assert "user guidance" not in request.system
     assert "turn data" not in request.system
     assert [message["role"] for message in request.messages] == ["user"] * 5
-    assert request.messages[-1]["content"].endswith(
-        "current direction"
-    )
+    assert request.messages[-1]["content"].endswith("current direction")
     assert result.final_answer == "native answer"
     assert result.prompt_tokens == 12
     assert result.completion_tokens == 3

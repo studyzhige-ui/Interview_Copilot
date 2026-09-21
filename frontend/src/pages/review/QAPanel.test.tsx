@@ -6,6 +6,8 @@ import { QAPanel } from './QAPanel';
 
 vi.mock('@/api/interview', () => ({
   editInterviewQA: vi.fn(),
+  getInterviewRecord: vi.fn(),
+  getQACorrections: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
   saveQAToKnowledge: vi.fn(),
   unsaveQAFromKnowledge: vi.fn(),
 }));
@@ -14,6 +16,16 @@ vi.mock('./DebriefGuidanceControl', () => ({
 }));
 vi.mock('./InterviewOpportunityControl', () => ({
   InterviewOpportunityControl: () => <div>岗位关联控件</div>,
+}));
+// The workbench's own query/receipt tests exercise its implementation. This
+// boundary verifies QAPanel consumes correction notifications without a model call.
+vi.mock('./TranscriptWorkbench', () => ({
+  TranscriptWorkbench: ({ onCorrected, onReanalyze }: {
+    onCorrected?: (required: boolean) => void; onReanalyze?: () => void;
+  }) => <div>
+    <button onClick={() => onCorrected?.(true)}>模拟转写纠正成功</button>
+    <button onClick={onReanalyze}>明确重新分析转写</button>
+  </div>,
 }));
 
 const detail: InterviewRecordDetail = {
@@ -38,6 +50,7 @@ const detail: InterviewRecordDetail = {
   qa: [
     {
       id: 'qa-1',
+      version: 1,
       order_idx: 0,
       phase: 'technical',
       question: '原问题',
@@ -50,6 +63,7 @@ const detail: InterviewRecordDetail = {
     },
     {
       id: 'qa-2',
+      version: 1,
       order_idx: 1,
       phase: 'project',
       question: '第二个问题',
@@ -65,7 +79,12 @@ const detail: InterviewRecordDetail = {
 
 describe('QAPanel editing', () => {
   beforeEach(() => {
-    vi.mocked(editInterviewQA).mockReset().mockResolvedValue(undefined);
+    vi.mocked(editInterviewQA).mockReset().mockImplementation(async (_record, _qa, patch) => ({
+      ...detail.qa[0], ...patch,
+      question: patch.question ?? detail.qa[0].question,
+      answer: patch.answer ?? detail.qa[0].answer,
+      version: patch.expected_version + 1,
+    }));
   });
 
   it('persists a value changed back to the original after an earlier save', async () => {
@@ -74,21 +93,23 @@ describe('QAPanel editing', () => {
 
     fireEvent.doubleClick(screen.getByText('原问题'));
     fireEvent.change(screen.getByDisplayValue('原问题'), { target: { value: '新问题' } });
-    fireEvent.blur(screen.getByDisplayValue('新问题'));
+    fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
 
     await waitFor(() => {
       expect(editInterviewQA).toHaveBeenCalledWith('record-1', 'qa-1', {
-        question: '新问题',
+        expected_version: 1,
+        question: '新问题', answer: '原答案',
       });
     });
 
     fireEvent.doubleClick(screen.getByText('新问题'));
     fireEvent.change(screen.getByDisplayValue('新问题'), { target: { value: '原问题' } });
-    fireEvent.blur(screen.getByDisplayValue('原问题'));
+    fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
 
     await waitFor(() => {
       expect(editInterviewQA).toHaveBeenNthCalledWith(2, 'record-1', 'qa-1', {
-        question: '原问题',
+        expected_version: 2,
+        question: '原问题', answer: '原答案',
       });
     });
   });
@@ -115,7 +136,7 @@ describe('QAPanel editing', () => {
       },
     };
     const { rerender } = render(<QAPanel detail={unassessed} loading={false} />);
-    expect(screen.getAllByText('未评分').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('未评估').length).toBeGreaterThan(0);
     expect(screen.getByText('未考察')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: '能力雷达图' })).toBeInTheDocument();
 
@@ -135,8 +156,7 @@ describe('QAPanel editing', () => {
       },
     };
     rerender(<QAPanel detail={zeroScore} loading={false} />);
-    expect(screen.getByText('0')).toBeInTheDocument();
-    expect(screen.getAllByText('0分')).toHaveLength(2);
+    expect(screen.getAllByText('0/10').length).toBeGreaterThan(0);
     expect(screen.queryByText('未考察')).not.toBeInTheDocument();
   });
 
@@ -214,4 +234,31 @@ describe('QAPanel editing', () => {
     expect(screen.getByText('面试官 · SPEAKER_01')).toBeInTheDocument();
     expect(screen.getByText('角色未确认 · UNKNOWN')).toBeInTheDocument();
   });
+  it('hides stale QA after source correction without automatically reanalyzing', () => {
+    const onReanalyze = vi.fn(), onCorrected = vi.fn();
+    render(<QAPanel detail={detail} loading={false} onReanalyze={onReanalyze} onCorrected={onCorrected} />);
+    fireEvent.click(screen.getByRole('button', { name: 'QA 对' }));
+    expect(screen.getByText('原答案')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '原始转录' }));
+    fireEvent.click(screen.getByText('模拟转写纠正成功'));
+    expect(onCorrected).toHaveBeenCalledOnce();
+    expect(onReanalyze).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'QA 对' }));
+    expect(screen.queryByText('原答案')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('旧评分和综合报告已失效');
+    fireEvent.click(screen.getByRole('button', { name: '原始转录' }));
+    fireEvent.click(screen.getByText('明确重新分析转写'));
+    expect(onReanalyze).toHaveBeenCalledWith('extract');
+  });
+
+  it('retains a page-owned transcript tab when refreshed detail is remounted', () => {
+    const onTabChange = vi.fn();
+    const { rerender } = render(<QAPanel key="old" detail={detail} loading={false} activeTab="transcript" onTabChange={onTabChange} />);
+    expect(screen.getByText('模拟转写纠正成功')).toBeInTheDocument();
+    rerender(<QAPanel key="new" detail={{ ...detail, status: 'failed', qa: [] }} loading={false} activeTab="transcript" onTabChange={onTabChange} />);
+    expect(screen.getByText('模拟转写纠正成功')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'QA 对' }));
+    expect(onTabChange).toHaveBeenCalledWith('qa');
+  });
+
 });

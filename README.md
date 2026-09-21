@@ -22,16 +22,30 @@ The repository ships one shared product core in two editions:
 · [Codebase architecture](docs/architecture/codebase.md) ·
 [Product and systems audit](docs/reports/full-product-and-systems-audit-2026-08-04.md)
 
+## Refactor branch status
+
+The `refactor/product-runtime-convergence` branch integrates the shared Copilot
+workspace, invitation confirmation/preparation, text-first mock handoff, and
+runtime/RAG correctness fixes. It is not a completed product release: the
+[existing implementation ledger](docs/implementation/career-agent-os-ledger.md)
+records implementation and fixed-commit evidence. The branch now also contains
+real Celery/PostgreSQL recovery and Chromium campaigns, mock-answer generation
+fences, explicit retry consent, bounded retrieval workers and fail-closed model
+configuration. Use the current PR's checks, not an earlier green commit, as the
+execution evidence. No historical user records are discarded to make migrations
+pass. Live model quality, full-platform monetary accounting and memory release
+remain separate gates.
+
 ## Core features
 
 - Mock interviews grounded in a resume and job description
 - Audio transcription, speaker-aware review, scoring, and skill radar
-- Hybrid RAG with Milvus, reranking, citations, and document lifecycle support
+- Hybrid RAG with PostgreSQL/pgvector, reranking, citations, and document lifecycle support
 - Per-user credentials and one answer-model preference shared by chat, Agent,
   and mock interview
 - Long-running agent turns with reconnectable event streams and cancellation
 - User-scoped Skills and MCP servers with concrete Tool discovery, execution records, and current policy controls
-- PostgreSQL, Redis/Celery, Milvus, and S3-compatible object storage
+- PostgreSQL/pgvector, Redis/Celery, and S3-compatible object storage
 
 ## Quick start
 
@@ -78,7 +92,7 @@ docker compose --profile full up -d --wait
 ```
 
 Open `http://localhost`. Runtime data and model caches are stored under
-`data/`; PostgreSQL, Redis, MinIO, and Milvus use Docker volumes.
+`data/`; PostgreSQL/pgvector, Redis, and MinIO use Docker volumes.
 
 See [Community deployment](docs/deployment/community.md) or
 [Cloud deployment](docs/deployment/cloud.md) for the complete contract.
