@@ -304,7 +304,14 @@ def test_real_browser_text_interview_refresh_requires_explicit_generation_retry(
         page.get_by_text("合成测试追问：请说明你如何验证缓存优化的效果？", exact=True)
     ).to_be_visible()
     assert len(answer_requests) == 2
-    assert answer_requests[1] == original
+    # Reconciliation reuses the old identity only for reads. A deliberately
+    # requested new generation must not reuse an unresolved intent (which the
+    # backend correctly refuses to dispatch again).
+    retry = answer_requests[1]
+    assert retry["request_id"] != original["request_id"]
+    assert {k: v for k, v in retry.items() if k != "request_id"} == {
+        k: v for k, v in original.items() if k != "request_id"
+    }
     assert page.evaluate("window.__microphoneRequests") == 0
     with factory() as db:
         record = db.query(InterviewRecord).filter_by(source="mock").one()
@@ -327,4 +334,23 @@ def test_real_browser_text_interview_refresh_requires_explicit_generation_retry(
         assert messages[1].content == answer
         assert runtime.current_stage_key == "resume_project_deep_dive"
         assert runtime.answer_claimed_at is None
+        from app.models.mock_answer_submission import MockAnswerSubmission
+
+        receipts = {
+            row.request_id: row
+            for row in db.query(MockAnswerSubmission).filter_by(record_id=record.id)
+        }
+        assert set(receipts) == {original["request_id"], retry["request_id"]}
+        previous, completed = (
+            receipts[original["request_id"]],
+            receipts[retry["request_id"]],
+        )
+        assert previous.status == "unknown" and previous.response_json is None
+        assert completed.status == "completed"
+        assert completed.response_json["message"]["id"] == messages[-1].id
+        assert (
+            previous.question_message_id
+            == completed.question_message_id
+            == original["question_message_id"]
+        )
     assert not errors
