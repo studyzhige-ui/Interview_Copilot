@@ -2,7 +2,7 @@
 
 Drives an InterviewRecord from `pending` to `completed`. Same orchestrator for
 both sources:
-  - source='upload': WhisperX ASR → LLM Q&A extraction → shared batch analysis → synthesis
+  - source='upload': canonical audio evidence → LLM Q&A projection → shared batch analysis → synthesis
   - source='mock'  : skip ASR/extraction (Q&A is already structured), reuse the
                      rest of the pipeline against the buffered Q&A so the user
                      ends up with the same review experience as upload.
@@ -226,14 +226,17 @@ class InterviewAnalysisOrchestrator:
     ) -> tuple[str, TranscriptEvidence, str]:
         """Download audio and persist immutable word-level evidence.
 
-        ``language`` is forwarded to ``transcribe_media`` which passes it
-        to WhisperX. ``"auto"`` becomes ``None`` (let Whisper detect)
-        inside the transcription service.
+        Provider selection is frozen for the operation and persisted with the
+        result. The evidence application owns source capture and capabilities;
+        this orchestrator does not select an ASR/alignment implementation.
         """
         from app.files.identity import file_asset_version_token
         from app.media.application.audio_transcription_service import (
             transcribe_interview_evidence,
         )
+        from app.media.application.transcription_registry import resolve_transcription
+
+        transcription_config = resolve_transcription()
 
         interview_record_service.set_status(record_id, STATUS_TRANSCRIBING)
 
@@ -282,11 +285,12 @@ class InterviewAnalysisOrchestrator:
                 file_asset_id=file_asset_id,
                 file_asset_version=file_asset_version,
                 language=language,
+                config=transcription_config,
             )
             transcript_id = interview_record_service.set_transcript_evidence(
                 record_id,
                 evidence=evidence,
-                provider="local_whisperx",
+                provider=transcription_config.provider_id,
             )
             transcript = interview_record_service.get_transcript_text(record_id)
             return transcript_id, evidence, transcript

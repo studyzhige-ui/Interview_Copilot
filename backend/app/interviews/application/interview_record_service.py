@@ -27,6 +27,8 @@ from app.models.interview_qa import InterviewQA, _generate_qa_id
 from app.models.interview_record import InterviewRecord, _generate_record_id
 from app.models.interview_transcript import InterviewTranscript, _generate_transcript_id
 from app.models.job_opportunity import JobOpportunity
+from app.models.file_asset import FileAsset
+from app.files.identity import file_asset_version_token
 from app.interviews.application.analysis_context import build_analysis_context
 from app.media.application.transcript_evidence import TranscriptEvidence
 from app.media.application.transcript_evidence import render_raw_turns
@@ -309,6 +311,26 @@ class InterviewRecordService:
             row = lock_record(db, record_id)
             if row is None:
                 raise ValueError(f"InterviewRecord {record_id} does not exist")
+            asset = (
+                db.query(FileAsset)
+                .filter(FileAsset.id == row.audio_file_asset_id)
+                .with_for_update()
+                .populate_existing()
+                .first()
+            )
+            if (
+                asset is None
+                or asset.user_id != row.user_id
+                or asset.deleted_at is not None
+                or asset.upload_status not in {"uploaded", "consumed"}
+                or asset.id != evidence.audio.file_asset_id
+                or file_asset_version_token(asset) != evidence.audio.file_asset_version
+                or (
+                    asset.checksum_sha256
+                    and asset.checksum_sha256.strip().lower() != evidence.audio.sha256
+                )
+            ):
+                raise ValueError("transcript_evidence_source_superseded")
             transcript = InterviewTranscript(
                 id=_generate_transcript_id(),
                 record_id=record_id,

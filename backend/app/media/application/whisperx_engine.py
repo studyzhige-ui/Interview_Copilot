@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 # DIARIZATION_MODE allows it. Remote-mode workers leave both as ``None``.
 whisper_model = None
 diarize_model = None
+_whisper_model_id: str | None = None
+_diarization_model_id: str | None = None
 alignment_models: dict[str, tuple[Any, dict[str, Any], str]] = {}
 
 
@@ -116,7 +118,7 @@ def _should_load_diarization() -> bool:
 
 def _init_whisper_only():
     """Load WhisperX into ``whisper_model``. No-op if already loaded / not needed."""
-    global whisper_model
+    global whisper_model, _whisper_model_id
     if whisper_model is not None:
         return
     if not _is_local_asr_active():
@@ -155,6 +157,7 @@ def _init_whisper_only():
         download_root=str(hf_cache_dir),
         local_files_only=True,
     )
+    _whisper_model_id = whisper_id
     logger.info("WhisperX ready.")
 
 
@@ -164,7 +167,7 @@ def _init_diarize_only():
     Independent from WhisperX so hybrid mode (remote ASR + local diarization)
     can opt in just to Pyannote without forcing a WhisperX download.
     """
-    global diarize_model
+    global diarize_model, _diarization_model_id
     if diarize_model is not None:
         return
     if not _should_load_diarization():
@@ -194,6 +197,7 @@ def _init_diarize_only():
         model_name=diarization_model_path,
         device=device,
     )
+    _diarization_model_id = settings.DIARIZATION_MODEL_ID
     logger.info("Pyannote diarization ready (mode=%s).", settings.DIARIZATION_MODE)
 
 
@@ -405,36 +409,36 @@ def _run_diarization_tracks(
     return _annotation_intervals(regular), _annotation_intervals(exclusive)
 
 
-def run_interview_evidence_sync(
+def collect_interview_evidence_sync(
     file_path: str,
     *,
-    file_asset_id: str,
-    file_asset_version: str,
+    model: str,
     language: str | None = "zh",
 ):
-    """Create immutable v2 evidence for an uploaded interview recording.
+    """Legacy WhisperX adapter: collect observations, not canonical evidence.
 
-    Unlike the generic transcription API, this path fails closed unless it can
-    produce forced-aligned words and both diarization tracks.
+    The application captures the source and composes the evidence. This
+    migration/benchmark adapter still decodes the recording as a whole; it
+    must not be described as the bounded Qwen long-form implementation.
     """
+    from app.media.application.evidence_pipeline import (
+        AlignedTranscript,
+        EvidenceParts,
+        SpeakerEvidence,
+    )
 
     if not whisper_model or whisper_model == "mock_model":
         raise RuntimeError("local WhisperX is not loaded for interview evidence")
+    if _whisper_model_id != model or not _diarization_model_id:
+        raise RuntimeError("interview_evidence_model_identity_changed: reload worker")
     _ensure_ffmpeg_available()
     import whisperx
-
-    from app.media.application.transcript_evidence import build_transcript_evidence
-    from app.media.application.transcript_evidence import sha256_file
 
     audio = whisperx.load_audio(file_path)
     effective_lang = (
         None if (language or "").strip().lower() in {"", "auto"} else language
     )
-    asr_result = whisper_model.transcribe(
-        audio,
-        batch_size=16,
-        language=effective_lang,
-    )
+    asr_result = whisper_model.transcribe(audio, batch_size=16, language=effective_lang)
     detected_language = str(asr_result.get("language") or effective_lang or "zh")
     align_model, align_metadata, alignment_id = _get_alignment_model(detected_language)
     aligned = whisperx.align(
@@ -445,22 +449,20 @@ def run_interview_evidence_sync(
         _local_device(),
         return_char_alignments=False,
     )
-    raw_words = list(aligned.get("word_segments") or [])
     regular, exclusive = _run_diarization_tracks(audio)
-    evidence = build_transcript_evidence(
-        file_asset_id=file_asset_id,
-        file_asset_version=file_asset_version,
-        audio_sha256=sha256_file(file_path),
-        duration_seconds=float(len(audio)) / 16_000.0,
-        language=detected_language,
-        asr_model=settings.TRANSCRIPTION_MODEL,
-        alignment_model=alignment_id,
-        diarization_model=settings.DIARIZATION_MODEL_ID,
-        raw_words=raw_words,
-        regular_intervals=regular,
-        exclusive_intervals=exclusive,
+    return EvidenceParts(
+        transcript=AlignedTranscript(
+            words=list(aligned.get("word_segments") or []),
+            duration_seconds=float(len(audio)) / 16_000.0,
+            language=detected_language,
+            asr_model=_whisper_model_id,
+            alignment_model=alignment_id,
+        ),
+        speakers=SpeakerEvidence(
+            regular=regular, exclusive=exclusive, model=_diarization_model_id
+        ),
+        complete=True,
     )
-    return evidence
 
 
 # ── Hybrid path: align remote-ASR words with local Pyannote speakers ──
@@ -566,7 +568,7 @@ __all__ = [
     "init_whisper_model",
     "_run_whisperx_sync",
     "align_remote_words_with_local_diarization",
-    "run_interview_evidence_sync",
+    "collect_interview_evidence_sync",
     "whisper_model",
     "diarize_model",
 ]

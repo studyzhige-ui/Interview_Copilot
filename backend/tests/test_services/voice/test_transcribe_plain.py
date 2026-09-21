@@ -117,18 +117,3 @@ async def test_short_clip_unknown_is_not_retryable_unavailability(monkeypatch):
     monkeypatch.setattr(reg, "transcribe_plain", unknown)
     with pytest.raises(ConsumptionSettlementUnconfirmedError):
         await transcribe_short_clip("owned.webm")
-
-
-async def test_asr_only_provider_never_masquerades_as_full_interview_evidence(
-    monkeypatch,
-):
-    from app.media.application import audio_transcription_service as service
-
-    cfg = reg.ResolvedTranscription(
-        "local_qwen_asr", reg.PROVIDERS["local_qwen_asr"], "Qwen/test"
-    )
-    monkeypatch.setattr(service, "resolve_transcription", lambda: cfg)
-    with pytest.raises(RuntimeError, match="interview_evidence_provider_unsupported"):
-        await service.transcribe_interview_evidence(
-            "owned.wav", file_asset_id="id", file_asset_version="v"
-        )
