@@ -13,18 +13,7 @@ import type {
   MockStartResp,
 } from '@/types/api';
 
-export async function startMockInterview(payload: {
-  resume_id?: string | null;
-  purpose?: 'full' | 'project_deep_dive' | 'focused_practice';
-  focus?: string;
-  jd_text?: string;
-  jd_snapshot_id?: string;
-  jd_snapshot_version?: number;
-  input_mode?: 'text' | 'voice';
-  interviewer_style: 'friendly' | 'professional' | 'rigorous' | 'pressure';
-  target_question_count: 15 | 20 | 30;
-  job_opportunity_id?: string;
-}): Promise<MockStartResp> {
+export async function startMockInterview(payload: components['schemas']['MockPreparationRequestRequestContract']): Promise<MockStartResp> {
   const res = await apiClient.post('/mock-interviews/start', payload);
   return res.data;
 }

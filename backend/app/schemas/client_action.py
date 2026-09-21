@@ -46,6 +46,9 @@ class MockPrefillPayload(BaseModel):
     purpose: InterviewPurpose = "full"
     focus: str | None = Field(default=None, min_length=2, max_length=1000)
     resume_id: str | None = Field(default=None, min_length=1, max_length=128)
+    resume_version_id: str | None = Field(default=None, min_length=1, max_length=128)
+    resume_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    jd_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     jd_text: str = Field(default="", max_length=50_000)
     interviewer_style: Literal["friendly", "professional", "rigorous", "pressure"]
     target_question_count: Literal[15, 20, 30]

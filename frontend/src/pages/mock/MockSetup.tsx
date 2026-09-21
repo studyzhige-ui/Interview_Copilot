@@ -12,6 +12,7 @@ import {
 import { parseJdForMock } from '@/api/mock';
 import type { MockClientUiResult, MockPrefillPayload } from '@/types/clientAction';
 import { JobOpportunitySelect } from '@/pages/career/JobOpportunitySelect';
+import { PreparationPanel } from './PreparationPanel';
 
 export type InterviewPurpose = 'full' | 'project_deep_dive' | 'focused_practice';
 export type InterviewerStyle = 'friendly' | 'professional' | 'rigorous' | 'pressure';
@@ -30,6 +31,11 @@ interface Props {
     purpose: InterviewPurpose;
     focus?: string;
     resume_id?: string;
+    resume_version_id?: string | null;
+    resume_sha256?: string | null;
+    jd_sha256?: string | null;
+    jd_snapshot_id?: string | null;
+    jd_snapshot_version?: number | null;
     jd_text?: string;
     input_mode: 'text' | 'voice';
     interviewer_style: InterviewerStyle;
@@ -279,6 +285,20 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
           />
         </div>
 
+        {resume.id && jdText.trim().length >= 20 && <PreparationPanel
+          resumeId={resume.id} jdText={jdText} jobOpportunityId={jobOpportunityId || undefined}
+          disabled={starting || resume.loading || jdDocument.parsing}
+          onPractice={(command) => onReady({
+            purpose: 'focused_practice', focus: command.focus ?? undefined,
+            resume_id: command.resume_id ?? undefined,
+            resume_version_id: command.resume_version_id, resume_sha256: command.resume_sha256,
+            jd_sha256: command.jd_sha256, jd_text: command.jd_text ?? undefined,
+            jd_snapshot_id: command.jd_snapshot_id, jd_snapshot_version: command.jd_snapshot_version,
+            job_opportunity_id: command.job_opportunity_id ?? undefined,
+            input_mode: inputMode, interviewer_style: style, tts_voice: ttsVoice,
+            target_question_count: targetQuestionCount,
+          })}
+        />}
         <div className="w-full mt-8 space-y-4">
           <PrefGroup
             label="面试官风格"

@@ -10,6 +10,9 @@ class MockPreparationRequest(BaseModel):
     purpose: InterviewPurpose = "full"
     focus: str | None = Field(default=None, min_length=2, max_length=1000)
     resume_id: str | None = Field(default=None, min_length=1, max_length=128)
+    resume_version_id: str | None = Field(default=None, min_length=1, max_length=128)
+    resume_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    jd_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     jd_text: str | None = Field(
         default=None,
         min_length=20,
@@ -34,6 +37,16 @@ class MockPreparationRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_source(self):
+        if (self.resume_version_id is None) != (self.resume_sha256 is None):
+            raise ValueError("Resume version and checksum must be supplied together")
+        if self.resume_version_id is not None and self.resume_id is None:
+            raise ValueError("Pinned resume requires a resume identity")
+        if (
+            self.jd_sha256 is not None
+            and self.jd_text is None
+            and self.jd_snapshot_id is None
+        ):
+            raise ValueError("Pinned JD requires a JD source")
         if (self.jd_snapshot_id is None) != (self.jd_snapshot_version is None):
             raise ValueError("JD snapshot id and version must be supplied together")
         spec = InterviewSpecification(purpose=self.purpose, focus=self.focus)

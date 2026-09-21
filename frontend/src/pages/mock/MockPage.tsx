@@ -9,6 +9,7 @@ import {
 } from './MockSetup';
 import { MockLive } from './MockLive';
 import { toast } from '@/store/uiStore';
+import { extractErr } from '@/api/client';
 import type { MockLiveMessage } from '@/types/api';
 import {
   abandonMockInterview,
@@ -141,6 +142,11 @@ export function MockPage() {
     resume_id?: string;
     purpose: 'full' | 'project_deep_dive' | 'focused_practice';
     focus?: string;
+    resume_version_id?: string | null;
+    resume_sha256?: string | null;
+    jd_sha256?: string | null;
+    jd_snapshot_id?: string | null;
+    jd_snapshot_version?: number | null;
     jd_text?: string;
     input_mode: 'text' | 'voice';
     interviewer_style: InterviewerStyle;
@@ -152,6 +158,9 @@ export function MockPage() {
     try {
       const started = await startMockInterview({
         resume_id: payload.resume_id,
+        resume_version_id: payload.resume_version_id, resume_sha256: payload.resume_sha256,
+        jd_sha256: payload.jd_sha256, jd_snapshot_id: payload.jd_snapshot_id,
+        jd_snapshot_version: payload.jd_snapshot_version,
         purpose: payload.purpose,
         focus: payload.focus,
         jd_text: payload.jd_text,
@@ -167,8 +176,8 @@ export function MockPage() {
         inputMode: payload.input_mode,
         ttsVoice: payload.tts_voice,
       });
-    } catch {
-      toast.error('启动模拟面试失败');
+    } catch (error) {
+      toast.error(extractErr(error, '启动模拟面试失败'));
     } finally {
       setStarting(false);
     }

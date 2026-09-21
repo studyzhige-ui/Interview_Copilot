@@ -1328,6 +1328,37 @@
         "title": "CreateOpportunity",
         "type": "object"
       },
+      "Excerpt": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "exclusiveMinimum": 0,
+            "title": "End",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "start": {
+            "minimum": 0,
+            "title": "Start",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "start",
+          "end",
+          "text"
+        ],
+        "title": "Excerpt",
+        "type": "object"
+      },
       "ExplicitUserAssertionBasis-Input": {
         "additionalProperties": false,
         "properties": {
@@ -2962,6 +2993,19 @@
             "title": "Interviewer Style",
             "type": "string"
           },
+          "jd_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jd Sha256"
+          },
           "jd_snapshot_id": {
             "anyOf": [
               {
@@ -3039,6 +3083,33 @@
             "default": null,
             "title": "Resume Id"
           },
+          "resume_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Sha256"
+          },
+          "resume_version_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Version Id"
+          },
           "target_question_count": {
             "enum": [
               15,
@@ -3057,6 +3128,9 @@
           "purpose",
           "focus",
           "resume_id",
+          "resume_version_id",
+          "resume_sha256",
+          "jd_sha256",
           "jd_text",
           "interviewer_style",
           "target_question_count",
@@ -3101,6 +3175,19 @@
             ],
             "title": "Interviewer Style",
             "type": "string"
+          },
+          "jd_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Jd Sha256"
           },
           "jd_snapshot_id": {
             "anyOf": [
@@ -3181,6 +3268,33 @@
             ],
             "default": null,
             "title": "Resume Id"
+          },
+          "resume_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Sha256"
+          },
+          "resume_version_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resume Version Id"
           },
           "target_question_count": {
             "default": 20,
@@ -3452,6 +3566,129 @@
       },
       "PendingInteractionProjectionResponseContract": {
         "$ref": "#/components/schemas/PendingInteractionProjection"
+      },
+      "PreparationBrief": {
+        "additionalProperties": false,
+        "properties": {
+          "disclaimer": {
+            "title": "Disclaimer",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PreparationItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "jd_sha256": {
+            "title": "Jd Sha256",
+            "type": "string"
+          },
+          "markdown": {
+            "title": "Markdown",
+            "type": "string"
+          },
+          "method": {
+            "const": "source-excerpts-v1",
+            "default": "source-excerpts-v1",
+            "title": "Method",
+            "type": "string"
+          },
+          "omitted_resume_excerpt_count": {
+            "minimum": 0,
+            "title": "Omitted Resume Excerpt Count",
+            "type": "integer"
+          },
+          "resume_excerpts": {
+            "items": {
+              "$ref": "#/components/schemas/Excerpt"
+            },
+            "title": "Resume Excerpts",
+            "type": "array"
+          },
+          "resume_sha256": {
+            "title": "Resume Sha256",
+            "type": "string"
+          },
+          "resume_version_id": {
+            "title": "Resume Version Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "start_request": {
+            "$ref": "#/components/schemas/MockPreparationRequest"
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "resume_version_id",
+          "resume_sha256",
+          "jd_sha256",
+          "items",
+          "resume_excerpts",
+          "omitted_resume_excerpt_count",
+          "start_request",
+          "markdown",
+          "disclaimer"
+        ],
+        "title": "PreparationBrief",
+        "type": "object"
+      },
+      "PreparationBriefResponseContract": {
+        "$ref": "#/components/schemas/PreparationBrief"
+      },
+      "PreparationItem": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/Excerpt"
+            },
+            "title": "Evidence Candidates",
+            "type": "array"
+          },
+          "practice_focus": {
+            "title": "Practice Focus",
+            "type": "string"
+          },
+          "requirement": {
+            "$ref": "#/components/schemas/Excerpt"
+          },
+          "shared_terms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Shared Terms",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "review_evidence",
+              "evidence_not_located"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requirement",
+          "evidence_candidates",
+          "shared_terms",
+          "status",
+          "practice_focus"
+        ],
+        "title": "PreparationItem",
+        "type": "object"
       },
       "QACorrectionPage": {
         "properties": {

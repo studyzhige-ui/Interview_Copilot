@@ -29,6 +29,7 @@ def test_tool_registry_has_expected_tools():
         "save_artifact",
         "start_mock_interview",
         "prepare_resume_profile_candidates",
+        "prepare_interview_evidence",
         "resolve_resume_profile_candidates",
         "read_gmail_observations",
         "review_gmail_observation",

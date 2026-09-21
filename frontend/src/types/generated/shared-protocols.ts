@@ -511,6 +511,17 @@ export interface components {
              */
             team: string | null;
         };
+        /** Excerpt */
+        Excerpt: {
+            /** End */
+            end: number;
+            /** Id */
+            id: string;
+            /** Start */
+            start: number;
+            /** Text */
+            text: string;
+        };
         /** ExplicitUserAssertionBasis */
         "ExplicitUserAssertionBasis-Input": {
             /**
@@ -1119,6 +1130,11 @@ export interface components {
              */
             interviewer_style: "friendly" | "professional" | "rigorous" | "pressure";
             /**
+             * Jd Sha256
+             * @default null
+             */
+            jd_sha256: string | null;
+            /**
              * Jd Snapshot Id
              * @default null
              */
@@ -1155,6 +1171,16 @@ export interface components {
              */
             resume_id: string | null;
             /**
+             * Resume Sha256
+             * @default null
+             */
+            resume_sha256: string | null;
+            /**
+             * Resume Version Id
+             * @default null
+             */
+            resume_version_id: string | null;
+            /**
              * Target Question Count
              * @enum {integer}
              */
@@ -1179,6 +1205,11 @@ export interface components {
              * @enum {string}
              */
             interviewer_style?: "friendly" | "professional" | "rigorous" | "pressure";
+            /**
+             * Jd Sha256
+             * @default null
+             */
+            jd_sha256?: string | null;
             /**
              * Jd Snapshot Id
              * @default null
@@ -1211,6 +1242,16 @@ export interface components {
              * @default null
              */
             resume_id?: string | null;
+            /**
+             * Resume Sha256
+             * @default null
+             */
+            resume_sha256?: string | null;
+            /**
+             * Resume Version Id
+             * @default null
+             */
+            resume_version_id?: string | null;
             /**
              * Target Question Count
              * @default 20
@@ -1317,6 +1358,56 @@ export interface components {
             turn_status: string;
         };
         PendingInteractionProjectionResponseContract: components["schemas"]["PendingInteractionProjection"];
+        /** PreparationBrief */
+        PreparationBrief: {
+            /** Disclaimer */
+            disclaimer: string;
+            /** Items */
+            items: components["schemas"]["PreparationItem"][];
+            /** Jd Sha256 */
+            jd_sha256: string;
+            /** Markdown */
+            markdown: string;
+            /**
+             * Method
+             * @default source-excerpts-v1
+             * @constant
+             */
+            method?: "source-excerpts-v1";
+            /** Omitted Resume Excerpt Count */
+            omitted_resume_excerpt_count: number;
+            /** Resume Excerpts */
+            resume_excerpts: components["schemas"]["Excerpt"][];
+            /** Resume Sha256 */
+            resume_sha256: string;
+            /** Resume Version Id */
+            resume_version_id: string;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+            /** Snapshot Id */
+            snapshot_id: string;
+            start_request: components["schemas"]["MockPreparationRequest"];
+        };
+        PreparationBriefResponseContract: components["schemas"]["PreparationBrief"];
+        /** PreparationItem */
+        PreparationItem: {
+            /** Evidence Candidates */
+            evidence_candidates: components["schemas"]["Excerpt"][];
+            /** Practice Focus */
+            practice_focus: string;
+            requirement: components["schemas"]["Excerpt"];
+            /** Shared Terms */
+            shared_terms: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "review_evidence" | "evidence_not_located";
+        };
         /** QACorrectionPage */
         QACorrectionPage: {
             /** Items */
