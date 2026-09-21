@@ -9,6 +9,7 @@
   },
   "scripts": {
     "generate": "openapi-typescript ../../frontend/contracts/shared-protocols.openapi.json -o ../../frontend/src/types/generated/shared-protocols.ts --array-length --default-non-nullable false",
-    "check": "npm run generate -- --check"
+    "check": "npm run generate -- --check && npm run generate:realtime -- --check",
+    "generate:realtime": "openapi-typescript ../../frontend/contracts/realtime.openapi.json -o ../../frontend/src/types/generated/realtime.ts --array-length --default-non-nullable false"
   }
 }

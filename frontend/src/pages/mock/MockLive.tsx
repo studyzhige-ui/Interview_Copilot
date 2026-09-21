@@ -6,6 +6,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { toast } from '@/store/uiStore';
 import { MAX_RECORDING_BYTES, MAX_RECORDING_MS, useMediaRecorder } from '@/hooks/useMediaRecorder';
 import { useTts } from '@/hooks/useTts';
+import { RealtimeVoiceControl } from './RealtimeVoiceControl';
 import {
   abandonMockInterview,
   finishMockInterview,
@@ -105,7 +106,8 @@ export function MockLive({
   const rec = useMediaRecorder();
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  const ttsActive = !ttsMuted;
+  const [realtimeActive, setRealtimeActive] = useState(false);
+  const ttsActive = !ttsMuted && !realtimeActive;
   const tts = useTts({ enabled: ttsActive, voice: ttsVoice });
 
   useEffect(() => {
@@ -336,10 +338,10 @@ export function MockLive({
     : rec.state === 'requesting'
     ? 'requesting'
     : 'idle';
-  const inputBusy = micPhase !== 'idle';
+  const inputBusy = micPhase !== 'idle' || realtimeActive;
   const operationBusy = operation !== 'idle';
   const canSubmit = !operationBusy && !inputBusy && !hasPendingAnswer;
-  const micDisabled = operationBusy || hasPendingAnswer || micPhase === 'preparing' || micPhase === 'requesting';
+  const micDisabled = realtimeActive || operationBusy || hasPendingAnswer || micPhase === 'preparing' || micPhase === 'requesting';
   const modalBusy = operation === 'finishing' || operation === 'abandoning';
   const micLabel =
     micPhase === 'recording'
@@ -486,6 +488,24 @@ export function MockLive({
         </Btn>
       </div>
 
+      <RealtimeVoiceControl
+        recordId={recordId}
+        disabled={operationBusy || micPhase !== 'idle' || hasPendingAnswer || Boolean(typing.trim())}
+        onActive={setRealtimeActive}
+        onState={(canonical) => { setMessages(canonical); spokenMessageIdRef.current = findLatestInterviewer(canonical)?.id ?? null; }}
+        onCommit={(draft) => {
+          const pending = { requestId: draft.request_id, text: draft.text, questionMessageId: draft.question_message_id, optimisticMessageId: -Date.now() };
+          setPendingAnswer(pending); setOperation('submitting');
+          setMessages((current) => [...current, { id: pending.optimisticMessageId, speaker: 'candidate', text: pending.text }]);
+        }}
+        onResult={(message, suggested) => {
+          spokenMessageIdRef.current = message.id;
+          acceptInterviewerMessage(message, suggested); setOperation('idle');
+          void syncMessages().catch(() => { if (isMounted.current) setRecoveryNotice('回答已完成，但现场刷新失败，请重新连接同步。'); });
+        }}
+        onUnconfirmed={() => { const pending = pendingAnswerRef.current; if (pending) void recoverPendingAnswer(pending); }}
+      />
+
       {endSuggested && (
         // Advisory only (MOCK-5): the LLM thinks the interview covered
         // enough. The candidate stays in control — keep answering or finish.
@@ -535,7 +555,7 @@ export function MockLive({
           <button
             type="button"
             onClick={onGenerateDebrief}
-            disabled={modalBusy || answeredCount === 0}
+            disabled={modalBusy || inputBusy || answeredCount === 0}
             className="text-left px-4 py-3 rounded-xl border border-primary-200 bg-primary-50 hover:bg-primary-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <div className="text-[14px] font-semibold text-primary-800 flex items-center gap-2">
