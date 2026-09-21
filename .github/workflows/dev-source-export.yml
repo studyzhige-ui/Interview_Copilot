@@ -1,0 +1,28 @@
+name: Temporary P6 source export
+on:
+  push:
+    branches: [dev/source-export-p6-20260921]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 69c2393685142378fa3f4776b677e002f2ceec63
+          persist-credentials: false
+      - run: |
+          git rev-parse HEAD > /tmp/commit.txt
+          git archive --format=tar.gz -o /tmp/source.tar.gz HEAD
+          sha256sum /tmp/source.tar.gz > /tmp/source.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: current-p6-source
+          path: |
+            /tmp/source.tar.gz
+            /tmp/source.sha256
+            /tmp/commit.txt
+          retention-days: 1
+          if-no-files-found: error
