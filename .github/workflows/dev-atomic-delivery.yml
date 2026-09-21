@@ -32,12 +32,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/copilot-delivery"
           cp .delivery/* "$RUNNER_TEMP/copilot-delivery/"
           python "$RUNNER_TEMP/copilot-delivery/stage.py" prepare
-      - name: Install portable validation dependencies, never model weights
+      - name: Install validation dependencies, never model weights
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ffmpeg
-          command -v ffmpeg
           python -m pip install -e '.[dev]' 'aiortc==1.15.0'
           npm --prefix frontend ci
           npm --prefix scripts/contract_codegen ci
@@ -53,10 +52,10 @@ jobs:
           npm --prefix frontend run typecheck
           npm --prefix frontend run lint
           npm --prefix frontend run build
-      - name: Backend and native transport regression campaign
+      - name: Combined backend, document and native transport campaign
         run: |
           set -euo pipefail
-          pytest backend/tests/test_services/interview backend/tests/test_services/resume backend/tests/test_architecture backend/tests/test_agent_runtime backend/tests/test_local_inference backend/tests/test_realtime backend/tests/test_core/test_model_assets.py backend/tests/test_services/test_mutation_refresh.py backend/tests/test_services/test_personalization_service.py backend/tests/test_services/test_agent_memory_service.py backend/tests/test_services/test_memory_pipeline.py backend/tests/test_services/test_artifact_service.py backend/tests/test_services/test_offer_service.py backend/tests/test_services/test_career_process_service.py backend/tests/test_services/test_career_profile_service.py backend/tests/test_services/test_persistent_task_service.py -q --disable-warnings --junitxml="$RUNNER_TEMP/copilot-delivery/backend.xml" > "$RUNNER_TEMP/copilot-delivery/backend.log" 2>&1 || { tail -100 "$RUNNER_TEMP/copilot-delivery/backend.log"; exit 1; }
+          pytest backend/tests/test_services/interview backend/tests/test_services/resume backend/tests/test_rag backend/tests/test_architecture backend/tests/test_agent_runtime backend/tests/test_local_inference backend/tests/test_realtime backend/tests/test_core/test_model_assets.py backend/tests/test_services/test_mutation_refresh.py backend/tests/test_services/test_personalization_service.py backend/tests/test_services/test_agent_memory_service.py backend/tests/test_services/test_memory_pipeline.py backend/tests/test_services/test_artifact_service.py backend/tests/test_services/test_offer_service.py backend/tests/test_services/test_career_process_service.py backend/tests/test_services/test_career_profile_service.py backend/tests/test_services/test_persistent_task_service.py -q --disable-warnings --junitxml="$RUNNER_TEMP/copilot-delivery/backend.xml" > "$RUNNER_TEMP/copilot-delivery/backend.log" 2>&1 || { tail -100 "$RUNNER_TEMP/copilot-delivery/backend.log"; exit 1; }
           tail -8 "$RUNNER_TEMP/copilot-delivery/backend.log"
       - name: Full frontend regression campaign
         run: |
