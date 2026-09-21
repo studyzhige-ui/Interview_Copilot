@@ -1,0 +1,29 @@
+name: Temporary current source export
+on:
+  push:
+    branches: [dev/source-export-20260921]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Archive tracked source
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > /tmp/commit.txt
+          git archive --format=tar.gz -o /tmp/source.tar.gz HEAD
+          sha256sum /tmp/source.tar.gz > /tmp/source.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: current-source-export
+          path: |
+            /tmp/source.tar.gz
+            /tmp/source.sha256
+            /tmp/commit.txt
+          retention-days: 1
+          if-no-files-found: error
