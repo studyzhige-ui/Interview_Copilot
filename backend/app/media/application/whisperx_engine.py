@@ -421,7 +421,7 @@ def collect_interview_evidence_sync(
     migration/benchmark adapter still decodes the recording as a whole; it
     must not be described as the bounded Qwen long-form implementation.
     """
-    from app.media.application.evidence_pipeline import (
+    from app.media.application.evidence_contracts import (
         AlignedTranscript,
         EvidenceParts,
         SpeakerEvidence,

@@ -7,10 +7,10 @@ No provider may publish text-only or partial results as interview evidence.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
-from typing import Any, Callable
+from typing import Any
 
+from app.media.application.evidence_contracts import EvidenceCollector, EvidenceParts
 from app.media.application.evidence_source import EvidenceSource
 from app.media.application.transcript_evidence import (
     DiarizationInterval,
@@ -22,32 +22,6 @@ from app.media.application.transcript_evidence import (
 MAX_EVIDENCE_WORDS = 200_000
 MAX_EVIDENCE_TEXT_BYTES = 1_000_000
 MAX_DIARIZATION_INTERVALS = 200_000
-
-
-@dataclass(frozen=True)
-class AlignedTranscript:
-    words: list[dict[str, Any]]
-    duration_seconds: float
-    language: str | None
-    asr_model: str
-    alignment_model: str
-
-
-@dataclass(frozen=True)
-class SpeakerEvidence:
-    regular: list[dict[str, Any]]
-    exclusive: list[dict[str, Any]]
-    model: str
-
-
-@dataclass(frozen=True)
-class EvidenceParts:
-    transcript: AlignedTranscript
-    speakers: SpeakerEvidence
-    complete: bool
-
-
-EvidenceCollector = Callable[..., EvidenceParts]
 
 
 class EvidenceProviderUnsupported(RuntimeError):

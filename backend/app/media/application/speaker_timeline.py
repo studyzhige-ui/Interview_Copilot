@@ -10,10 +10,20 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import Protocol
 
-if TYPE_CHECKING:
-    from app.media.application.transcript_evidence import DiarizationInterval
+
+class SpeakerInterval(Protocol):
+    """Read-only observations needed by the index, independent of wire schemas."""
+
+    @property
+    def start(self) -> float: ...
+
+    @property
+    def end(self) -> float: ...
+
+    @property
+    def speaker_id(self) -> str: ...
 
 
 class SpeakerTimeline:
@@ -27,8 +37,8 @@ class SpeakerTimeline:
 
     def __init__(
         self,
-        regular: Sequence[DiarizationInterval],
-        exclusive: Sequence[DiarizationInterval],
+        regular: Sequence[SpeakerInterval],
+        exclusive: Sequence[SpeakerInterval],
     ) -> None:
         self._exclusive = sorted(exclusive, key=lambda row: row.start)
         self._starts = [row.start for row in self._exclusive]

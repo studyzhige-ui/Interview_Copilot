@@ -6,11 +6,13 @@ from types import SimpleNamespace
 import pytest
 
 from app.media.application import evidence_pipeline as pipeline
-from app.media.application.evidence_pipeline import (
+from app.media.application.evidence_contracts import (
     AlignedTranscript,
     EvidenceParts,
-    EvidenceProviderUnsupported,
     SpeakerEvidence,
+)
+from app.media.application.evidence_pipeline import (
+    EvidenceProviderUnsupported,
     compose_transcript_evidence,
     resolve_evidence_collector,
 )
