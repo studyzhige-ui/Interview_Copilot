@@ -1,0 +1,122 @@
+name: Validate fixed realtime integration
+on:
+  push:
+    branches: [dev/realtime-validation-20260921]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg15-bookworm
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: interview_copilot
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:8.10.0-alpine
+        ports: ['6379:6379']
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/interview_copilot
+      TEST_PG_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      REQUIRE_TEST_POSTGRES: '1'
+      REQUIRE_REALTIME: '1'
+      TEST_REDIS_URL: redis://localhost:6379/0
+      PYTHONPATH: backend
+      SECRET_KEY: ci-realtime-not-production-secret
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Apply fixed integration patch
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 51d86db6b6cd2854111d5b2c38484c0d5e21ff05
+          echo '5a6b36b048818ec6abd446341a0b286f5f8c9dc092f11ec160cb30d1a5428ed8  .dev-realtime.patch' | sha256sum -c -
+          git apply --check .dev-realtime.patch
+          git apply .dev-realtime.patch
+          rm .dev-realtime.patch .github/workflows/dev-integrate-realtime.yml
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install pinned validation dependencies
+        run: |
+          python -m pip install -e '.[dev,realtime]'
+          npm --prefix frontend ci --no-audit --no-fund
+          npm --prefix scripts/contract_codegen ci --no-audit --no-fund
+          command -v ffmpeg
+      - name: Generate and check exact target tree
+        run: |
+          set -euo pipefail
+          python scripts/export_shared_contracts.py
+          npm --prefix scripts/contract_codegen run generate
+          git add -A
+          test "$(git write-tree)" = 529a10298206dfad78aa9083b315aee3ae5986a2
+          git diff --cached --check
+          ruff format --check backend/app backend/tests evaluation scripts
+          ruff check backend/app backend/tests evaluation scripts
+          python -m compileall -q backend/app
+          python scripts/export_shared_contracts.py --check
+          npm --prefix scripts/contract_codegen run check
+      - name: Verify PostgreSQL migration and media application regressions
+        run: |
+          set -euo pipefail
+          alembic upgrade head
+          alembic check
+          python -m pytest backend/tests/test_architecture backend/tests/test_realtime backend/tests/test_services/interview backend/tests/test_services/voice backend/tests/test_local_inference backend/tests/test_api/test_local_tts.py backend/tests/test_core/test_local_model_policy.py -q --junitxml=/tmp/realtime-results.xml
+      - name: Verify complete frontend
+        run: |
+          npm --prefix frontend run typecheck
+          npm --prefix frontend run lint
+          npm --prefix frontend run build
+          npm --prefix frontend run test:run
+      - name: Publish immutable validated commit object only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, subprocess, urllib.request
+          repo = 'studyzhige-ui/Interview_Copilot'
+          base = '51d86db6b6cd2854111d5b2c38484c0d5e21ff05'
+          expected = '529a10298206dfad78aa9083b315aee3ae5986a2'
+          def api(path, value=None):
+              req = urllib.request.Request('https://api.github.com/repos/' + repo + '/' + path,
+                  data=json.dumps(value).encode() if value is not None else None,
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json', 'Content-Type':'application/json'})
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return json.load(response)
+          assert api('git/ref/heads/refactor/product-runtime-convergence')['object']['sha'] == base
+          assert subprocess.check_output(['git','write-tree']).decode().strip() == expected
+          names = subprocess.check_output(['git','diff','--cached','--name-only',base]).decode().splitlines()
+          entries = []
+          for name in names:
+              path = pathlib.Path(name)
+              assert path.is_file() and path.stat().st_size < 1000000
+              entries.append({'path':name,'mode':'100644','type':'blob','content':path.read_text()})
+          tree = api('git/trees', {'base_tree':'75acf9e2c481a4fd0904703e769e14838c42c244','tree':entries})
+          assert tree['sha'] == expected
+          commit = api('git/commits', {'tree':expected,'parents':[base],
+              'message':'feat(media): integrate local WebRTC interview drafts, canonical turns and playback receipts\n\nGeneration-fenced authenticated media leases, bounded acoustic endpointing,\nrolling ASR drafts, explicit final submission through existing answer receipts,\nincremental finite TTS delivery and interruption, browser-reported playback.\nValidated exact tree with real PostgreSQL migration/concurrency, real aiortc\nDTLS/RTP/datachannel loopback, backend and complete frontend gates.\nNative model streaming, semantic endpointing and device quality remain separate.'})
+          pathlib.Path('/tmp/realtime-commit.json').write_text(json.dumps({'commit':commit['sha'],'tree':expected,'parent':base,'files':names},indent=2))
+          print('Validated immutable commit:', commit['sha'])
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: realtime-integration-result
+          path: |
+            /tmp/realtime-commit.json
+            /tmp/realtime-results.xml
+          retention-days: 2
+          if-no-files-found: warn

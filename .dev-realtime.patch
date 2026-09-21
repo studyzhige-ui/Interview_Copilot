@@ -1,0 +1,203 @@
+diff --git a/.env.local-first.example b/.env.local-first.example
+index 58e00cf..8ba4949 100644
+--- a/.env.local-first.example
++++ b/.env.local-first.example
+@@ -47,3 +47,11 @@ TTS_PROVIDER=local_qwen3_tts
+ TTS_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
+ TTS_DEFAULT_VOICE=Vivian
+ TTS_LANGUAGE=Auto
++
++# Optional local-network WebRTC. Install .[realtime] in the API interpreter.
++# Requires configured local Qwen ASR + TTS broker. No STUN/TURN or cloud fallback.
++# Add only the numeric client network actually used by your WSL/LAN deployment.
++REALTIME_ENABLED=false
++REALTIME_ALLOWED_CIDRS=127.0.0.0/8,::1/128
++REALTIME_VAD_THRESHOLD=0.015
++REALTIME_SILENCE_MS=900
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index f23fc06..ebf78c7 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -269,7 +269,7 @@ jobs:
+           cache: npm
+           cache-dependency-path: frontend/package-lock.json
+       - name: Install test dependencies
+-        run: pip install -e ".[dev]" playwright==1.57.0
++        run: pip install -e ".[dev,realtime]" playwright==1.57.0
+       - name: Install isolated Chromium and OS dependencies
+         run: python -m playwright install --with-deps chromium
+       - name: Build the actual production frontend
+@@ -279,6 +279,8 @@ jobs:
+           VITE_API_BASE: /api/v1
+       - name: Real browser response-loss and product interaction campaign
+         run: python -m pytest backend/tests/browser -v --tb=short --junitxml=test-results/browser.xml
++      - name: Required real WebRTC and media contracts
++        run: REQUIRE_REALTIME=1 python -m pytest backend/tests/test_realtime -v --tb=short --junitxml=test-results/realtime.xml
+       - name: VS-01 full deterministic contract gate
+         run: python -m evaluation.career_agent_os_eval --report test-results/vs01.json
+       - name: Preserve real browser campaign results
+@@ -288,6 +290,7 @@ jobs:
+           name: browser-results
+           path: |
+             test-results/browser.xml
++            test-results/realtime.xml
+             test-results/vs01.json
+           if-no-files-found: warn
+           retention-days: 7
+diff --git a/backend/app/api/interviews/__init__.py b/backend/app/api/interviews/__init__.py
+index de8d155..f32bfe0 100644
+--- a/backend/app/api/interviews/__init__.py
++++ b/backend/app/api/interviews/__init__.py
+@@ -2,11 +2,12 @@
+ 
+ from fastapi import APIRouter
+ 
+-from app.api.interviews import mock, records, transcripts
++from app.api.interviews import mock, records, transcripts, realtime
+ 
+ router = APIRouter()
+ router.include_router(records.router)
+ router.include_router(mock.router)
+ router.include_router(transcripts.router)
++router.include_router(realtime.router)
+ 
+ __all__ = ["router"]
+diff --git a/backend/app/core/config.py b/backend/app/core/config.py
+index da80ffa..b954d6c 100644
+--- a/backend/app/core/config.py
++++ b/backend/app/core/config.py
+@@ -115,6 +115,12 @@ class Settings(BaseSettings):
+     RAG_RERANK_INPUT_TOKENS: int = 512
+     RAG_QUERY_TOKEN_RESERVE: int = 96
+ 
++    # Optional local-network WebRTC; no automatic public STUN/TURN or model fetch.
++    REALTIME_ENABLED: bool = False
++    REALTIME_ALLOWED_CIDRS: str = "127.0.0.0/8,::1/128"
++    REALTIME_VAD_THRESHOLD: float = Field(0.015, gt=0, lt=1)
++    REALTIME_SILENCE_MS: int = Field(900, ge=300, le=3000)
++
+     # ASR (audio transcription)
+     TRANSCRIPTION_PROVIDER: str = "local_whisperx"
+     TRANSCRIPTION_MODEL: str = "deepdml/faster-whisper-large-v3-turbo-ct2"
+diff --git a/backend/app/main.py b/backend/app/main.py
+index 65cc73b..7e1411f 100644
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -152,6 +152,9 @@ async def lifespan(app: FastAPI):
+         yield
+     finally:
+         logger.info("Draining background tasks before shutdown...")
++        from app.media.realtime.transport import close_all as close_media_peers
++
++        await close_media_peers()
+         audio_workers.close_pools()
+         close_pools()
+         try:
+diff --git a/backend/app/models/__init__.py b/backend/app/models/__init__.py
+index f03cd99..1d66e20 100644
+--- a/backend/app/models/__init__.py
++++ b/backend/app/models/__init__.py
+@@ -188,3 +188,5 @@ from .retrieval_index import RetrievalEntry, RetrievalGeneration  # noqa: F401
+ from .transcript_correction import TranscriptCorrection  # noqa: F401
+ 
+ from .mock_answer_submission import MockAnswerSubmission  # noqa: F401
++
++from .mock_media_session import MockMediaSession, MockMediaPlayback  # noqa: F401
+diff --git a/frontend/src/pages/mock/MockLive.tsx b/frontend/src/pages/mock/MockLive.tsx
+index 5e4cb75..0bf874f 100644
+--- a/frontend/src/pages/mock/MockLive.tsx
++++ b/frontend/src/pages/mock/MockLive.tsx
+@@ -6,6 +6,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+ import { toast } from '@/store/uiStore';
+ import { MAX_RECORDING_BYTES, MAX_RECORDING_MS, useMediaRecorder } from '@/hooks/useMediaRecorder';
+ import { useTts } from '@/hooks/useTts';
++import { RealtimeVoiceControl } from './RealtimeVoiceControl';
+ import {
+   abandonMockInterview,
+   finishMockInterview,
+@@ -105,7 +106,8 @@ export function MockLive({
+   const rec = useMediaRecorder();
+   const listRef = useRef<HTMLDivElement | null>(null);
+ 
+-  const ttsActive = !ttsMuted;
++  const [realtimeActive, setRealtimeActive] = useState(false);
++  const ttsActive = !ttsMuted && !realtimeActive;
+   const tts = useTts({ enabled: ttsActive, voice: ttsVoice });
+ 
+   useEffect(() => {
+@@ -336,10 +338,10 @@ export function MockLive({
+     : rec.state === 'requesting'
+     ? 'requesting'
+     : 'idle';
+-  const inputBusy = micPhase !== 'idle';
++  const inputBusy = micPhase !== 'idle' || realtimeActive;
+   const operationBusy = operation !== 'idle';
+   const canSubmit = !operationBusy && !inputBusy && !hasPendingAnswer;
+-  const micDisabled = operationBusy || hasPendingAnswer || micPhase === 'preparing' || micPhase === 'requesting';
++  const micDisabled = realtimeActive || operationBusy || hasPendingAnswer || micPhase === 'preparing' || micPhase === 'requesting';
+   const modalBusy = operation === 'finishing' || operation === 'abandoning';
+   const micLabel =
+     micPhase === 'recording'
+@@ -486,6 +488,18 @@ export function MockLive({
+         </Btn>
+       </div>
+ 
++      {inputMode === 'voice' && <RealtimeVoiceControl
++        recordId={recordId} disabled={operationBusy || micPhase !== 'idle' || hasPendingAnswer}
++        onActive={setRealtimeActive}
++        onUseText={(text) => { setTyping(text); setVoiceDraft(null); }}
++        onSynchronize={() => { void syncMessages().then((canonical) => {
++          if (!isMounted.current) return;
++          const retained = pendingFromMessages(canonical, readAnswerIntent(recordId));
++          setPendingAnswer(retained); setCanRetryGeneration(Boolean(retained));
++          setRecoveryNotice(retained ? SAVED_ANSWER_NOTICE : null);
++        }).catch(() => { if (isMounted.current) setRecoveryNotice('无法同步实时回答，请重新连接核对现场。'); }); }}
++      />}
++
+       {endSuggested && (
+         // Advisory only (MOCK-5): the LLM thinks the interview covered
+         // enough. The candidate stays in control — keep answering or finish.
+diff --git a/pyproject.toml b/pyproject.toml
+index bee98a6..e465785 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -63,6 +63,7 @@ dependencies = [
+ ]
+ 
+ [project.optional-dependencies]
++realtime = ["aiortc==1.15.0", "av==17.1.0"]
+ local = [
+     # Local embeddings, reranking, parsing, OCR, speech, and diarization
+     # WhisperX 3.8 requires huggingface-hub<1, so Transformers 5.x is not a
+diff --git a/scripts/export_shared_contracts.py b/scripts/export_shared_contracts.py
+index 920f8e7..e701a58 100644
+--- a/scripts/export_shared_contracts.py
++++ b/scripts/export_shared_contracts.py
+@@ -60,7 +60,18 @@ from app.schemas.transcript_correction import (  # noqa: E402
+ 
+ from app.schemas.chat import MockAnswerRequest, MockAnswerResp, MockAnswerReceipt  # noqa: E402
+ 
++from app.schemas.realtime import (  # noqa: E402
++    MediaOffer,
++    MediaAnswer,
++    MediaCommand,
++    MediaGeneration,
++    MediaEvent,
++)
++
+ INPUT_MODELS = (
++    MediaOffer,
++    MediaCommand,
++    MediaGeneration,
+     MockAnswerRequest,
+     TranscriptCorrectionRequest,
+     TranscriptPlaybackRequest,
+@@ -74,6 +85,8 @@ INPUT_MODELS = (
+     SubmissionKey,
+ )
+ OUTPUT_MODELS = (
++    MediaAnswer,
++    MediaEvent,
+     MockAnswerResp,
+     MockAnswerReceipt,
+     TranscriptCorrectionReceipt,
