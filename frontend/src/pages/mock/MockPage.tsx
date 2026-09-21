@@ -221,6 +221,7 @@ export function MockPage() {
   }
   return (
     <MockLive
+      key={stage.recordId}
       recordId={stage.recordId}
       initialMessages={stage.initialMessages}
       ttsVoice={stage.ttsVoice}

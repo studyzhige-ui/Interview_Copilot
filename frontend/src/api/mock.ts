@@ -72,13 +72,17 @@ export async function retryMockReview(recordId: string): Promise<MockFinishResp>
 export async function prepareMockAnswerAudio(
   recordId: string,
   blob: Blob,
+  options?: { signal?: AbortSignal },
 ): Promise<MockAnswerAudioResp> {
   const fd = new FormData();
-  const extension = blob.type.includes('ogg') ? 'ogg' : 'webm';
+  const mime = blob.type.toLowerCase().split(';', 1)[0].trim();
+  const extension = ({ 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/wav': 'wav', 'audio/webm': 'webm' } as Record<string, string>)[mime];
+  if (!extension || !blob.size) throw new Error('录音格式不受支持或录音为空，请重新录制。');
   fd.append('file', blob, `answer.${extension}`);
   const res = await apiClient.post(
     `/mock-interviews/${encodeURIComponent(recordId)}/answer-audio`,
     fd,
+    { signal: options?.signal },
   );
   return res.data;
 }

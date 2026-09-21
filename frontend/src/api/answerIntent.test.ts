@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { readAnswerIntent, rememberAnswerIntent, clearAnswerIntent } from './answerIntent';
-import { getMockAnswerReceipt, submitMockAnswer } from './mock';
+import { getMockAnswerReceipt, prepareMockAnswerAudio, submitMockAnswer } from './mock';
 import { apiClient } from './client';
 
 vi.mock('./client', () => ({ apiClient: { post: vi.fn(), get: vi.fn() } }));
@@ -32,5 +32,21 @@ it('keeps the request ID after response loss without persisting answer contents'
 it('receipt mismatch fails and never retries the model call', async () => {
   vi.mocked(apiClient.get).mockResolvedValueOnce({ data: { request_id: other } });
   await expect(getMockAnswerReceipt('r', id)).rejects.toThrow('编号不匹配');
+  expect(apiClient.post).not.toHaveBeenCalled();
+});
+
+it.each([['audio/webm;codecs=opus', 'webm'], ['audio/ogg;codecs=opus', 'ogg'], ['audio/mp4', 'm4a'], ['audio/wav', 'wav']])('voice upload preserves %s container identity', async (mime, extension) => {
+  vi.mocked(apiClient.post).mockResolvedValueOnce({ data: { text: 'text', audio_file_asset_id: 'audio' } });
+  const controller = new AbortController();
+  await prepareMockAnswerAudio('r', new Blob(['audio'], { type: mime }), { signal: controller.signal });
+  const [, form, options] = vi.mocked(apiClient.post).mock.calls[0];
+  const file = (form as FormData).get('file') as File;
+  expect(file.name).toBe(`answer.${extension}`);
+  expect(file.type).toBe(mime);
+  expect(options?.signal).toBe(controller.signal);
+});
+it('invalid voice blob fails before dispatch', async () => {
+  await expect(prepareMockAnswerAudio('r', new Blob(['x'], { type: 'application/octet-stream' }))).rejects.toThrow('格式');
+  await expect(prepareMockAnswerAudio('r', new Blob([], { type: 'audio/webm' }))).rejects.toThrow('为空');
   expect(apiClient.post).not.toHaveBeenCalled();
 });

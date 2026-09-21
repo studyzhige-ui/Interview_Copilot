@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -37,6 +37,8 @@ vi.mock('@/api/mock', () => ({
 vi.mock('@/hooks/useMediaRecorder', async () => {
   const React = await import('react');
   return {
+    MAX_RECORDING_MS: 600_000,
+    MAX_RECORDING_BYTES: 25 * 1024 * 1024,
     useMediaRecorder: () => {
       const [state, setState] = React.useState<'idle' | 'recording'>('idle');
       return {
@@ -213,8 +215,8 @@ describe('MockLive', () => {
     expect(await screen.findByRole('textbox')).toHaveValue('重试后恢复的转写');
     expect(recorder.stop).toHaveBeenCalledTimes(1);
     expect(prepareMockAnswerAudio).toHaveBeenCalledTimes(2);
-    expect(prepareMockAnswerAudio).toHaveBeenNthCalledWith(1, 'record-1', recorder.blob);
-    expect(prepareMockAnswerAudio).toHaveBeenNthCalledWith(2, 'record-1', recorder.blob);
+    expect(prepareMockAnswerAudio).toHaveBeenNthCalledWith(1, 'record-1', recorder.blob, { signal: expect.any(AbortSignal) });
+    expect(prepareMockAnswerAudio).toHaveBeenNthCalledWith(2, 'record-1', recorder.blob, { signal: expect.any(AbortSignal) });
   });
 
   it('lets the candidate confirm a model-suggested ending', async () => {
@@ -279,6 +281,25 @@ describe('MockLive', () => {
     await screen.findByText('回答请求已登记，正在生成下一题；重新连接只核对收据。');
     expect(submitMockAnswer).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: '重试生成下一题' })).toBeNull();
+  });
+
+  it('aborts voice preparation on unmount and ignores its late result', async () => {
+    let resolve!: (value: { text: string; audio_file_asset_id: string }) => void;
+    const pending = new Promise<{ text: string; audio_file_asset_id: string }>((done) => { resolve = done; });
+    vi.mocked(prepareMockAnswerAudio).mockReturnValue(pending);
+    const props = { recordId: 'record-1', initialMessages: [opening], ttsVoice: 'zh-CN-YunxiNeural' as const, onFinished: vi.fn(), onAbandoned: vi.fn() };
+    const first = render(<MockLive {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: '开始录音' }));
+    fireEvent.click(await screen.findByRole('button', { name: '结束录音' }));
+    await waitFor(() => expect(prepareMockAnswerAudio).toHaveBeenCalledTimes(1));
+    const signal = vi.mocked(prepareMockAnswerAudio).mock.calls[0][2]?.signal;
+    expect(signal?.aborted).toBe(false);
+    first.unmount();
+    expect(signal?.aborted).toBe(true);
+    render(<MockLive {...props} recordId="record-2" />);
+    await act(async () => { resolve({ text: 'old transcript', audio_file_asset_id: 'old-audio' }); await pending; });
+    expect(screen.getByRole('textbox')).toHaveValue('');
+    expect(submitMockAnswer).not.toHaveBeenCalled();
   });
 
 });

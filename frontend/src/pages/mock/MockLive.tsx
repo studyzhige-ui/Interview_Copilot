@@ -4,7 +4,7 @@ import { Btn } from '@/components/ui/Btn';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { toast } from '@/store/uiStore';
-import { useMediaRecorder } from '@/hooks/useMediaRecorder';
+import { MAX_RECORDING_BYTES, MAX_RECORDING_MS, useMediaRecorder } from '@/hooks/useMediaRecorder';
 import { useTts } from '@/hooks/useTts';
 import {
   abandonMockInterview,
@@ -278,22 +278,37 @@ export function MockLive({
   };
 
   const [inputPhase, setInputPhase] = useState<'idle' | 'preparing'>('idle');
+  const preparationRef = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    const previous = preparationRef.current;
+    preparationRef.current = null;
+    previous?.abort();
+  }, [recordId]);
 
   const prepareRecording = async (blob: Blob) => {
+    if (!isMounted.current || preparationRef.current) return;
+    const controller = new AbortController();
+    preparationRef.current = controller;
+    const current = () => isMounted.current && preparationRef.current === controller && !controller.signal.aborted;
     setRetryRecording(blob);
     setVoiceError(null);
     setInputPhase('preparing');
     try {
-      const prepared = await prepareMockAnswerAudio(recordId, blob);
+      const prepared = await prepareMockAnswerAudio(recordId, blob, { signal: controller.signal });
+      if (!current()) return;
       setTyping(prepared.text);
       setVoiceDraft({ audioAssetId: prepared.audio_file_asset_id });
       setRetryRecording(null);
     } catch (error) {
+      if (!current()) return;
       setVoiceError(
         extractErr(error, '转写失败，录音仍保留在当前页面，请重试或改用文字回答'),
       );
     } finally {
-      if (isMounted.current) setInputPhase('idle');
+      if (preparationRef.current === controller) {
+        preparationRef.current = null;
+        if (isMounted.current) setInputPhase('idle');
+      }
     }
   };
 
@@ -301,6 +316,7 @@ export function MockLive({
     if (operation !== 'idle' || inputPhase === 'preparing') return;
     if (rec.state === 'recording') {
       const blob = await rec.stop();
+      if (!isMounted.current) return;
       if (!blob) {
         setVoiceError('没有录到有效声音，请重新录制或改用文字回答。');
         return;
@@ -630,7 +646,7 @@ export function MockLive({
             <div className="text-[10px] mt-1">{micLabel}</div>
           </button>
           <div className="text-[10px] text-stone-400">
-            录音结束后生成可编辑文字，确认无误再提交
+            录音结束后生成可编辑文字，确认无误再提交（最长 {MAX_RECORDING_MS / 60_000} 分钟，{MAX_RECORDING_BYTES / 1024 / 1024} MiB）
           </div>
           {(voiceError || rec.errorMessage) && (
             <div className="w-full flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
