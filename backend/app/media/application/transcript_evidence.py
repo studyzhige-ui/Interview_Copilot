@@ -14,6 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.media.application.speaker_timeline import SpeakerTimeline
+
 
 EVIDENCE_SCHEMA_VERSION = 2
 _TURN_PAUSE_SECONDS = 1.2
@@ -176,39 +178,6 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
-def _overlap(start: float, end: float, interval: DiarizationInterval) -> float:
-    return max(0.0, min(end, interval.end) - max(start, interval.start))
-
-
-def _assign_speaker(
-    *,
-    start: float,
-    end: float,
-    exclusive: list[DiarizationInterval],
-    regular: list[DiarizationInterval],
-) -> tuple[str | None, float | None, bool]:
-    duration = max(end - start, 1e-6)
-    exclusive_scores: dict[str, float] = {}
-    for interval in exclusive:
-        amount = _overlap(start, end, interval)
-        if amount:
-            exclusive_scores[interval.speaker_id] = (
-                exclusive_scores.get(interval.speaker_id, 0.0) + amount
-            )
-    if exclusive_scores:
-        speaker, amount = max(exclusive_scores.items(), key=lambda item: item[1])
-        confidence: float | None = min(1.0, amount / duration)
-    else:
-        speaker, confidence = None, None
-
-    regular_speakers = {
-        interval.speaker_id
-        for interval in regular
-        if _overlap(start, end, interval) > 0
-    }
-    return speaker, confidence, len(regular_speakers) > 1
-
-
 def build_transcript_evidence(
     *,
     file_asset_id: str,
@@ -229,6 +198,7 @@ def build_transcript_evidence(
     exclusive = [
         DiarizationInterval.model_validate(item) for item in exclusive_intervals
     ]
+    speakers = SpeakerTimeline(regular, exclusive)
     words: list[EvidenceWord] = []
     for raw in raw_words:
         text = str(raw.get("word") or raw.get("text") or "")
@@ -239,12 +209,7 @@ def build_transcript_evidence(
         start = float(raw_start) if raw_start is not None else None
         end = float(raw_end) if raw_end is not None else None
         if start is not None and end is not None:
-            speaker, speaker_confidence, overlap = _assign_speaker(
-                start=start,
-                end=end,
-                exclusive=exclusive,
-                regular=regular,
-            )
+            speaker, speaker_confidence, overlap = speakers.assign(start, end)
         else:
             speaker, speaker_confidence, overlap = None, None, False
         raw_score = raw.get("score", raw.get("probability"))
