@@ -11,6 +11,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+    env:
+      REQUIRE_WEBRTC: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -32,6 +34,10 @@ jobs:
           python "$RUNNER_TEMP/copilot-delivery/stage.py" prepare
       - name: Install portable validation dependencies, never model weights
         run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          command -v ffmpeg
           python -m pip install -e '.[dev]' 'aiortc==1.15.0'
           npm --prefix frontend ci
           npm --prefix scripts/contract_codegen ci
