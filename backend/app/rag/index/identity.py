@@ -17,9 +17,9 @@ from app.core.config import settings
 from app.rag.index.lexical import ANALYZER_VERSION
 
 INDEX_SCHEMA_VERSION = "knowledge-pgvector-v3"
-PARSER_CONTRACT_VERSION = "canonical-document-v2"
+PARSER_CONTRACT_VERSION = "canonical-document-v3-isolated-cpu"
 CLEANING_CONTRACT_VERSION = "canonical-cleaning-v1"
-CHUNKER_CONTRACT_VERSION = "structure-aware-v2"
+CHUNKER_CONTRACT_VERSION = "structure-aware-v3-local-grammars"
 RETRIEVAL_TEXT_VERSION = "structural-prefix-v1"
 
 

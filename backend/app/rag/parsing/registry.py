@@ -23,6 +23,8 @@ from app.rag.cleaning import EmptyContentError, canonicalize_document
 from app.rag.documents import CanonicalDocument
 from app.rag.parsing.quality import ACCEPT_SCORE, MINIMUM_SCORE, assess_parse_quality
 
+from .local_document import DocumentSourceChanged
+
 from .base import (
     LEGACY_OFFICE_EXTS,
     LEGACY_OFFICE_TARGET,
@@ -40,8 +42,6 @@ from .parsers import (
 )
 
 logger = logging.getLogger(__name__)
-
-_docling_available_cache: bool | None = None
 
 # Controlled local fallback after the configured first-class parser.
 _LIGHTWEIGHT: dict[str, type] = {
@@ -75,20 +75,12 @@ def _has_llama_cloud() -> bool:
 
 
 def _docling_available() -> bool:
-    """Whether the Docling package is importable (cached). The registry skips
-    Docling when it isn't, so a deployment without it degrades gracefully."""
-    global _docling_available_cache
-    if _docling_available_cache is None:
-        try:
-            from app.core.hf_runtime import prepare_hf_runtime
+    """Presence check only: model packages are never imported by selection."""
+    if settings.PARSER_LOCAL_PYTHON:
+        return True  # The owned runner validates the explicitly chosen interpreter.
+    from importlib.util import find_spec
 
-            prepare_hf_runtime()
-            import docling.document_converter  # noqa: F401
-
-            _docling_available_cache = True
-        except Exception:  # noqa: BLE001 — any import/init issue -> treat as unavailable
-            _docling_available_cache = False
-    return _docling_available_cache
+    return find_spec("docling") is not None
 
 
 def _candidates(ext: str) -> list:
@@ -153,6 +145,7 @@ def _run_candidates(
             ModelBudgetExceededError,
             ModelOutcomeUnknownError,
             LocalModelPolicyError,
+            DocumentSourceChanged,
         ):
             raise
         except Exception as exc:  # noqa: BLE001 — record + try the next candidate

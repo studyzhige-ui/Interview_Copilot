@@ -167,6 +167,7 @@ def canonicalize_document(
     parser_profile = {
         **parser_profile,
         "page_count": len(parsed.pages),
+        **({"runtime": parsed.runtime_profile} if parsed.runtime_profile else {}),
         "char_count": len(output),
     }
     return CanonicalDocument(

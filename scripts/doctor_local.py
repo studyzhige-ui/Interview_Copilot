@@ -238,6 +238,16 @@ def build_report(
             or settings.AUXILIARY_MODEL_POLICY != "local_only",
             "note": "Finite local synthesis and its codec require explicit broker preparation; generation is not playback or model-quality acceptance.",
         },
+        "document_runtime": {
+            "selected": settings.PARSER_PROVIDER == "docling",
+            "device": "cpu",
+            "isolated": True,
+            "separate_interpreter_configured": bool(settings.PARSER_LOCAL_PYTHON),
+            "timeout_seconds": settings.PARSER_TIMEOUT_SECONDS,
+            "max_pages": settings.PARSER_MAX_PAGES,
+            "loader_verified": False,
+            "note": "Docling runs in an owned CPU interpreter with offline guards. RAG_DEVICE does not grant it GPU memory; actual OCR/model loading is not exercised here.",
+        },
         "realtime": realtime,
         "runtime": {
             "broker_connection": "not_exercised",

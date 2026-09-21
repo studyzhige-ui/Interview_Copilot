@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import csv
 import os
-from threading import Lock
 
-from app.core.config import settings
 from app.rag.documents import ParsedDocument, ParsedPage
 
 from .base import (
@@ -78,99 +76,12 @@ class LlamaParseParser:
         return parse(file_path)
 
 
-_docling_converter = None
-_docling_converter_key: tuple[str, bool] | None = None
-# Docling reuses one pipeline per converter and its convert() is not thread-safe.
-# The pipeline worker is solo today, but the lock keeps this module correct when
-# called from tests, an API process, or a future threaded deployment.
-_docling_lock = Lock()
-
-_ocr_available_cache: bool | None = None
-
-
-def _ocr_available() -> bool:
-    """Whether the current RapidOCR engine is importable (cached).
-
-    Docling OCR is gated on this so a deploy WITHOUT the engine still parses
-    text PDFs (do_ocr=False) instead of failing on a missing engine — the same
-    graceful-degradation contract the registry gives Docling itself."""
-    global _ocr_available_cache
-    if _ocr_available_cache is None:
-        from importlib.util import find_spec
-
-        _ocr_available_cache = find_spec("rapidocr") is not None
-    return _ocr_available_cache
-
-
-def _ocr_enabled() -> bool:
-    """OCR runs only when configured on (RAG_OCR_ENABLED) AND the engine is
-    installed. On-demand within Docling: only scanned PDF pages (no text layer)
-    and image documents actually OCR (plan §4.1.4: OCR 按需触发)."""
-    return bool(settings.RAG_OCR_ENABLED) and _ocr_available()
-
-
-def _get_docling_converter():
-    """Build/return the cached Docling converter (model weights load on first
-    convert). The caller holds ``_docling_lock`` — the converter is shared and
-    docling's convert() isn't safe to run concurrently on it.
-
-    OCR (RapidOCR) is wired for PDF + image inputs only when ``_ocr_enabled()``;
-    otherwise the converter is built with ``do_ocr=False`` so text PDFs still
-    parse without the OCR engine present. Construction is lazy (RapidOcrOptions
-    is a plain options object — the engine imports at convert time, not here)."""
-    global _docling_converter, _docling_converter_key
-    key = (settings.RAG_DEVICE, _ocr_enabled())
-    if _docling_converter is None or _docling_converter_key != key:
-        # Set all model-cache environment variables before importing Docling;
-        # otherwise its first import can lock in ~/.cache defaults.
-        from app.core.hf_runtime import DOCLING_MODELS_DIR, prepare_hf_runtime
-
-        prepare_hf_runtime()
-        from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.accelerator_options import AcceleratorOptions
-        from docling.datamodel.pipeline_options import (
-            PdfPipelineOptions,
-            RapidOcrOptions,
-        )
-        from docling.document_converter import (
-            DocumentConverter,
-            ImageFormatOption,
-            PdfFormatOption,
-        )
-
-        pdf_opts = PdfPipelineOptions(
-            do_ocr=_ocr_enabled(),
-            ocr_options=RapidOcrOptions(),  # onnxruntime-based, deployment-light
-            accelerator_options=AcceleratorOptions(device=settings.RAG_DEVICE),
-        )
-        # Pre-downloaded Docling artifacts share data/cache/models with the
-        # embedding, reranker and speech models.
-        pdf_opts.artifacts_path = DOCLING_MODELS_DIR
-        _docling_converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts),
-                InputFormat.IMAGE: ImageFormatOption(pipeline_options=pdf_opts),
-            }
-        )
-        _docling_converter_key = key
-    return _docling_converter
-
-
 class DoclingParser:
-    """First-class LOCAL parser → Markdown (peer to LlamaParse). Available only
-    when the ``docling`` package is installed (the registry gates on that and
-    degrades to LlamaParse / lightweight when it isn't).
+    """First-class local Markdown parser, delegated to an owned CPU process.
 
-    Handles scanned PDFs and image documents via on-demand RapidOCR when
-    ``RAG_OCR_ENABLED`` and the engine is installed (plan §4.1.3); without the
-    engine, text PDFs still parse (do_ocr=False) and an image yields empty text
-    → the registry's friendly EmptyContentError (images have no lightweight
-    fallback, per the §4.1.3 matrix).
-
-    xlsx is intentionally NOT claimed: Docling would emit a Markdown table, but
-    the chunk stage routes ``.xlsx`` to the table splitter by filename (before
-    the markdown branch), so xlsx stays on the lightweight path. pdf/docx/pptx/
-    html and OCR'd images route to MarkdownNodeParser."""
+    The selected interpreter may be separate from the portable API environment.
+    Input snapshots, page/output bounds and process-tree cleanup are mandatory.
+    """
 
     id = "docling"
     tier = TIER_FIRST_CLASS
@@ -180,52 +91,9 @@ class DoclingParser:
         return ext in self._EXTS
 
     def parse(self, file_path: str) -> ParsedDocument:
-        ext = os.path.splitext(file_path)[1].lower()
-        with _docling_lock:  # serialize: Docling convert() isn't thread-safe
-            converter = _get_docling_converter()
-            result = converter.convert(file_path)
-            from docling.datamodel.base_models import ConversionStatus
+        from .local_document import parse_local_document
 
-            if result.status is not ConversionStatus.SUCCESS:
-                messages = "; ".join(
-                    str(getattr(error, "error_message", None) or error)
-                    for error in result.errors[:3]
-                )
-                raise RuntimeError(
-                    f"Docling conversion was {result.status.value}"
-                    + (f": {messages}" if messages else "")
-                )
-            document = result.document
-            page_numbers = sorted(int(number) for number in document.pages)
-            if page_numbers:
-                from docling_core.types.doc import ContentLayer
-
-                pages = [
-                    ParsedPage(
-                        text=document.export_to_markdown(
-                            page_no=page_number,
-                            included_content_layers={ContentLayer.BODY},
-                        ),
-                        number=page_number,
-                    )
-                    for page_number in page_numbers
-                ]
-            else:
-                pages = [ParsedPage(text=document.export_to_markdown())]
-        # ocr_used is best-effort: an image document IS OCR (its only text
-        # source), so it's True when OCR is active; for text formats we don't
-        # claim OCR even though Docling may OCR scanned PDF pages — there's no
-        # precise per-document signal, so we never over-report (plan §4.1.4 r.10).
-        ocr_used = ext in IMAGE_EXTS and _ocr_enabled()
-        # page_map is empty: Docling's exported Markdown exposes no per-page char
-        # spans, so page_count reads 0 here (unlike PyMuPDF, which maps per page).
-        # Accurate Docling page provenance is deferred to the page_start/end round.
-        return ParsedDocument(
-            pages=pages,
-            parser_id=self.id,
-            content_kind="markdown",
-            ocr_used=ocr_used,
-        )
+        return parse_local_document(file_path)
 
 
 class PyMuPDFParser:
