@@ -1,0 +1,48 @@
+name: Apply validated P6 realtime batch
+
+on:
+  push:
+    branches: [dev/source-export-20260921]
+    paths:
+      - .github/workflows/apply-p6.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout helper branch
+        uses: actions/checkout@v7
+        with:
+          ref: dev/source-export-20260921
+          path: helper
+          persist-credentials: false
+      - name: Checkout target branch
+        uses: actions/checkout@v7
+        with:
+          ref: refactor/product-runtime-convergence
+          path: work
+          fetch-depth: 0
+      - name: Apply exact validated batch and push one product commit
+        env:
+          EXPECTED_PARENT: 51d86db6b6cd2854111d5b2c38484c0d5e21ff05
+        run: |
+          set -euo pipefail
+          test "$(git -C work rev-parse HEAD)" = "$EXPECTED_PARENT"
+          cat helper/.github/dev-patches/p6.part{0,1,2,3,4,5,6} | base64 -d | xz -d > /tmp/p6.patch
+          cd work
+          git apply --check /tmp/p6.patch
+          git apply /tmp/p6.patch
+          git diff --check
+          test ! -e .github/workflows/dev-source-export.yml
+          test ! -e .github/workflows/apply-p6.yml
+          test ! -e .github/dev-patches
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo "no product changes"; exit 1; }
+          git commit -m "feat(voice): complete realtime interview media session" -m "Add host-only WebRTC media transport, bounded VAD and turn-end detection, provisional/final local ASR, durable answer replay, streamed interviewer deltas, chunked local TTS, barge-in, reconnect semantics, and generated-vs-heard playback receipts. Reuse the canonical mock answer transaction and local inference broker; keep model/hardware acceptance separate."
+          git push origin HEAD:refactor/product-runtime-convergence
