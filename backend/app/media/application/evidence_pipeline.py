@@ -34,11 +34,17 @@ def _whisperx_collector(path: str, *, model: str, language: str | None):
     return collect_interview_evidence_sync(path, model=model, language=language)
 
 
-# Capabilities, not an ASR-provider allowlist in the application entrypoint.
-# Qwen finite-clip ASR is deliberately absent until its full evidence collector
-# includes alignment, global diarization, bounded stitching and completion.
+def _qwen_collector(path: str, *, model: str, language: str | None):
+    from app.media.application.qwen_evidence import collect_qwen_evidence_sync
+
+    return collect_qwen_evidence_sync(path, model=model, language=language)
+
+
+# Explicit complete capabilities. Qwen uses the same source/publication fences;
+# WhisperX remains selectable for migration and quality comparison, not fallback.
 _EVIDENCE_COLLECTORS: dict[str, EvidenceCollector] = {
     "local_whisperx": _whisperx_collector,
+    "local_qwen_asr": _qwen_collector,
 }
 
 
