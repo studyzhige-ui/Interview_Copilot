@@ -1,0 +1,45 @@
+name: Temporary offline validation bundle
+
+on:
+  push:
+    branches: [refactor/product-runtime-convergence]
+    paths: [.github/workflows/dev-validation-bundle.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Package tracked sources and bounded validation dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/copilot-validation/wheels
+          git rev-parse HEAD > /tmp/copilot-validation/commit.txt
+          git archive --format=tar.gz HEAD > /tmp/copilot-validation/source.tar.gz
+          python -m pip download --only-binary=:all: --dest /tmp/copilot-validation/wheels \
+            ruff==0.16.2 redis==8.1.0 celery==5.6.3 edge-tts==7.2.8 \
+            llama-index-core==0.14.23 llama-index-llms-openai-like==0.7.2 \
+            llama-index-embeddings-openai-like==0.3.1
+          npm ci --prefix frontend
+          tar -czf /tmp/copilot-validation/frontend-dependencies.tar.gz -C frontend node_modules
+          test "$(du -sm /tmp/copilot-validation | cut -f1)" -lt 600
+      - uses: actions/upload-artifact@v7
+        with:
+          name: offline-validation-bundle
+          path: /tmp/copilot-validation
+          retention-days: 1
+          if-no-files-found: error
