@@ -15,7 +15,9 @@ pytestmark = pytest.mark.skipif(
 
 
 def command(code):
-    return [sys.executable, "-I", "-B", "-c", code]
+    # Synthetic children only need stdlib. Site hooks are unrelated to the
+    # lifecycle contract and can consume the entire short deadline on CI.
+    return [sys.executable, "-I", "-S", "-B", "-c", code]
 
 
 async def execute(tmp_path, code, **kwargs):
@@ -106,7 +108,7 @@ async def test_flooding_writer_is_reaped(tmp_path):
 async def test_descendant_holding_pipe_cannot_outlive_job(tmp_path):
     path = tmp_path / "descendant"
     nested = f"import os,time; from pathlib import Path; Path({str(path)!r}).write_text(str(os.getpid())); time.sleep(60)"
-    code = f"import subprocess,sys; subprocess.Popen([sys.executable,'-c',{nested!r}])"
+    code = f"import subprocess,sys; subprocess.Popen([sys.executable,'-I','-S','-B','-c',{nested!r}])"
     with pytest.raises(IsolatedProcessError, match="deadline"):
         await execute(tmp_path, code, timeout_seconds=0.5, kill_grace_seconds=0.05)
     # SIGKILL delivery to an orphaned descendant is asynchronous; the direct

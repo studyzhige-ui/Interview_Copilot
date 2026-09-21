@@ -104,7 +104,7 @@ print(json.dumps({"offline": os.environ.get("HF_HUB_OFFLINE"),
     env = {
         **os.environ,
         "LOCAL_MODELS_OFFLINE": "true",
-        "PYTHONPATH": str(Path(__file__).resolve().parents[3]),
+        "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
     }
     result = subprocess.run(
         [sys.executable, "-c", code],
