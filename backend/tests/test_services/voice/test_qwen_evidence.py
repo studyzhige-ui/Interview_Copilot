@@ -9,7 +9,10 @@ import pytest
 
 from app.local_inference.audio import MAX_PCM_BYTES, SAMPLE_RATE, _lexical
 from app.media.application import qwen_evidence as pipeline
-from app.media.application.evidence_stitching import restore_word_layout, stitch_boundary
+from app.media.application.evidence_stitching import (
+    restore_word_layout,
+    stitch_boundary,
+)
 from app.media.application.evidence_windows import evidence_windows
 from app.media.application.qwen_evidence import StageModels, collect_qwen_parts
 from app.media.application.speaker_identity import SpeakerIdentity
@@ -38,12 +41,16 @@ class Stages:
     models = StageModels("test-asr@1", "test-align@2", "test-diarization@3")
 
     def __init__(self, words=None):
-        self.words = words if words is not None else [
-            ("你好，", 1.0, 1.4, "A"),
-            ("Hello", 25.5, 25.9, "A"),
-            ("world!", 26.1, 26.5, "B"),
-            ("再见。", 50.0, 50.8, "A"),
-        ]
+        self.words = (
+            words
+            if words is not None
+            else [
+                ("你好，", 1.0, 1.4, "A"),
+                ("Hello", 25.5, 25.9, "A"),
+                ("world!", 26.1, 26.5, "B"),
+                ("再见。", 50.0, 50.8, "A"),
+            ]
+        )
         self.calls = []
         self.completed_calls = 0
 
@@ -52,24 +59,46 @@ class Stages:
         duration = len(pcm) / (SAMPLE_RATE * 2)
         self.calls.append((role, start, len(pcm)))
         self.completed_calls += 1
-        rows = [row for row in self.words if start <= row[1] and row[2] <= start + duration]
+        rows = [
+            row for row in self.words if start <= row[1] and row[2] <= start + duration
+        ]
         if role == "transcription":
-            return {"text": " ".join(row[0] for row in rows), "language": "Chinese", "words": []}
+            return {
+                "text": " ".join(row[0] for row in rows),
+                "language": "Chinese",
+                "words": [],
+            }
         if role == "alignment":
             return {
-                "text": text, "language": language,
-                "words": [word(_lexical(row[0]), row[1] - start, row[2] - start) for row in rows],
+                "text": text,
+                "language": language,
+                "words": [
+                    word(_lexical(row[0]), row[1] - start, row[2] - start)
+                    for row in rows
+                ],
             }
         assert role == "diarization"
-        labels = {"A": "local_0", "B": "local_1"} if not start else {"A": "local_1", "B": "local_0"}
+        labels = (
+            {"A": "local_0", "B": "local_1"}
+            if not start
+            else {"A": "local_1", "B": "local_0"}
+        )
         tracks = [
-            {"start": row[1] - start, "end": row[2] - start, "speaker_id": labels[row[3]]}
+            {
+                "start": row[1] - start,
+                "end": row[2] - start,
+                "speaker_id": labels[row[3]],
+            }
             for row in rows
         ]
         present = dict.fromkeys(row[3] for row in rows)
         return {
-            "regular": tracks, "exclusive": [dict(row) for row in tracks],
-            "speakers": [voice(labels[speaker], [1.0, 0.0] if speaker == "A" else [0.0, 1.0]) for speaker in present],
+            "regular": tracks,
+            "exclusive": [dict(row) for row in tracks],
+            "speakers": [
+                voice(labels[speaker], [1.0, 0.0] if speaker == "A" else [0.0, 1.0])
+                for speaker in present
+            ],
         }
 
 
@@ -77,13 +106,21 @@ class Stages:
 async def test_core_partition_is_sample_exact_and_context_is_bounded():
     # One finite-domain test; all boundary values remain explicitly exercised.
     for seconds in (1, 25, 26, 27, 28, 30, 52, 53, 59, 60, 78, 91):
-        result = [item async for item in evidence_windows(blocks_for(seconds), max_samples=seconds * SAMPLE_RATE)]
+        result = [
+            item
+            async for item in evidence_windows(
+                blocks_for(seconds), max_samples=seconds * SAMPLE_RATE
+            )
+        ]
         cursor = 0
         for item in result:
             assert item.core_start == cursor
             assert item.start <= item.core_start < item.core_end <= item.end
             assert len(item.pcm) <= MAX_PCM_BYTES
-            assert int.from_bytes(item.pcm[:2], "little", signed=True) == item.start // SAMPLE_RATE + 1
+            assert (
+                int.from_bytes(item.pcm[:2], "little", signed=True)
+                == item.start // SAMPLE_RATE + 1
+            )
             cursor = item.core_end
         assert cursor == seconds * SAMPLE_RATE
 
@@ -114,7 +151,12 @@ async def test_input_block_and_recording_limits_fail_not_truncate():
         with pytest.raises(ValueError, match="pcm_block"):
             [item async for item in evidence_windows(one(value), max_samples=1_000_000)]
     with pytest.raises(ValueError, match="duration_exceeds_limit"):
-        [item async for item in evidence_windows(blocks_for(30), max_samples=29 * SAMPLE_RATE)]
+        [
+            item
+            async for item in evidence_windows(
+                blocks_for(30), max_samples=29 * SAMPLE_RATE
+            )
+        ]
     for limit in (0, -1, True, 1.5):
         with pytest.raises(ValueError, match="sample_limit"):
             [item async for item in evidence_windows(one(b"xx"), max_samples=limit)]
@@ -140,18 +182,34 @@ def test_original_spacing_punctuation_and_fullwidth_text_are_preserved():
 
 def test_overlap_anchor_does_not_delete_real_repeated_words():
     left = [word("go ", 25, 25.2), word("go!", 26, 26.2)]
-    right = [word("go ", 25.02, 25.22), word("go! ", 26.02, 26.22), word("now", 27, 27.2)]
-    done, pending = stitch_boundary(left, right, boundary=26, overlap_start=24, overlap_end=28)
+    right = [
+        word("go ", 25.02, 25.22),
+        word("go! ", 26.02, 26.22),
+        word("now", 27, 27.2),
+    ]
+    done, pending = stitch_boundary(
+        left, right, boundary=26, overlap_start=24, overlap_end=28
+    )
     assert [_lexical(item["text"]) for item in done + pending] == ["go", "go", "now"]
 
 
 def test_silence_seam_and_ambiguous_boundary_are_distinct():
     left, right = [word("before", 20, 21)], [word("after", 30, 31)]
-    assert stitch_boundary(left, right, boundary=26, overlap_start=24, overlap_end=28) == (left, right)
+    assert stitch_boundary(
+        left, right, boundary=26, overlap_start=24, overlap_end=28
+    ) == (left, right)
     with pytest.raises(ValueError, match="boundary_ambiguous"):
-        stitch_boundary([word("old", 25, 26)], [word("new", 25, 26)], boundary=26, overlap_start=24, overlap_end=28)
+        stitch_boundary(
+            [word("old", 25, 26)],
+            [word("new", 25, 26)],
+            boundary=26,
+            overlap_start=24,
+            overlap_end=28,
+        )
     with pytest.raises(ValueError, match="boundary_capacity"):
-        stitch_boundary([word("a", 25, 26)] * 129, [], boundary=26, overlap_start=24, overlap_end=28)
+        stitch_boundary(
+            [word("a", 25, 26)] * 129, [], boundary=26, overlap_start=24, overlap_end=28
+        )
 
 
 def test_speaker_labels_can_swap_but_recording_identity_cannot():
@@ -190,12 +248,24 @@ def test_speaker_anchor_does_not_drift_and_capacity_is_enforced():
 @pytest.mark.asyncio
 async def test_long_form_has_exact_duration_one_copy_per_word_and_global_speakers():
     stages = Stages()
-    parts = await collect_qwen_parts(blocks_for(60), stages, max_samples=60 * SAMPLE_RATE)
+    parts = await collect_qwen_parts(
+        blocks_for(60), stages, max_samples=60 * SAMPLE_RATE
+    )
     assert parts.complete is True
     assert parts.transcript.duration_seconds == 60
-    assert [_lexical(item["text"]) for item in parts.transcript.words] == ["你好", "Hello", "world", "再见"]
+    assert [_lexical(item["text"]) for item in parts.transcript.words] == [
+        "你好",
+        "Hello",
+        "world",
+        "再见",
+    ]
     assert [item["start"] for item in parts.transcript.words] == [1, 25.5, 26.1, 50]
-    assert [row["speaker_id"] for row in parts.speakers.exclusive] == ["speaker_001", "speaker_001", "speaker_002", "speaker_001"]
+    assert [row["speaker_id"] for row in parts.speakers.exclusive] == [
+        "speaker_001",
+        "speaker_001",
+        "speaker_002",
+        "speaker_001",
+    ]
     assert all(size <= MAX_PCM_BYTES for _, _, size in stages.calls)
     assert {offset for _, offset, _ in stages.calls} == {0, 24, 50}
     assert parts.transcript.asr_model == "test-asr@1"
@@ -234,7 +304,9 @@ async def test_missing_alignment_and_speaker_output_cannot_publish(monkeypatch):
 
         monkeypatch.setattr(stages, "call", broken)
         with pytest.raises(ValueError, match="alignment_missing|without_speaker"):
-            await collect_qwen_parts(blocks_for(28), stages, max_samples=28 * SAMPLE_RATE)
+            await collect_qwen_parts(
+                blocks_for(28), stages, max_samples=28 * SAMPLE_RATE
+            )
 
 
 @pytest.mark.asyncio
@@ -246,7 +318,9 @@ async def test_empty_recording_is_not_fabricated_single_speaker_success():
 
 
 @pytest.mark.asyncio
-async def test_output_budget_and_model_identity_cannot_change_mid_recording(monkeypatch):
+async def test_output_budget_and_model_identity_cannot_change_mid_recording(
+    monkeypatch,
+):
     monkeypatch.setattr(pipeline, "MAX_WORDS", 1)
     with pytest.raises(ValueError, match="evidence_capacity"):
         await collect_qwen_parts(blocks_for(60), Stages(), max_samples=60 * SAMPLE_RATE)
@@ -266,8 +340,12 @@ async def test_output_budget_and_model_identity_cannot_change_mid_recording(monk
 
 def test_boundary_keeps_separator_from_the_continuing_asr_observation():
     left = restore_word_layout("Hello", [word("Hello", 25, 25.5)], 0)
-    right = restore_word_layout("Hello world!", [word("Hello", 1, 1.5), word("world", 3, 3.5)], 24)
-    done, pending = stitch_boundary(left, right, boundary=26, overlap_start=24, overlap_end=28)
+    right = restore_word_layout(
+        "Hello world!", [word("Hello", 1, 1.5), word("world", 3, 3.5)], 24
+    )
+    done, pending = stitch_boundary(
+        left, right, boundary=26, overlap_start=24, overlap_end=28
+    )
     assert "".join(row["text"] for row in done + pending) == "Hello world!"
 
 
@@ -285,7 +363,9 @@ async def test_reblocking_does_not_require_decoder_block_boundaries_to_align():
 
 
 @pytest.mark.asyncio
-async def test_recording_language_does_not_claim_one_language_when_chunks_differ(monkeypatch):
+async def test_recording_language_does_not_claim_one_language_when_chunks_differ(
+    monkeypatch,
+):
     stages = Stages()
     original = stages.call
 
@@ -296,7 +376,9 @@ async def test_recording_language_does_not_claim_one_language_when_chunks_differ
         return value
 
     monkeypatch.setattr(stages, "call", multilingual)
-    result = await collect_qwen_parts(blocks_for(60), stages, max_samples=60 * SAMPLE_RATE)
+    result = await collect_qwen_parts(
+        blocks_for(60), stages, max_samples=60 * SAMPLE_RATE
+    )
     assert result.transcript.language is None
 
 
@@ -354,7 +436,13 @@ async def test_recording_rejects_empty_language_and_track_capacity(monkeypatch):
 
 
 def test_speaker_policy_and_vectors_fail_without_numeric_coercion():
-    for kwargs in ({"match_threshold": True}, {"margin": 0}, {"max_speakers": True}, {"new_threshold": 0.9}, {"match_threshold": float("nan")}):
+    for kwargs in (
+        {"match_threshold": True},
+        {"margin": 0},
+        {"max_speakers": True},
+        {"new_threshold": 0.9},
+        {"match_threshold": float("nan")},
+    ):
         with pytest.raises(ValueError, match="identity_policy"):
             SpeakerIdentity(**kwargs)
     for vector in ([True], ["1"], [float("inf")], [float("nan")], [10**500], [0], []):
@@ -379,14 +467,26 @@ async def test_real_overlapping_speech_tracks_survive_core_clipping(monkeypatch)
         return result
 
     monkeypatch.setattr(stages, "call", overlap)
-    result = await collect_qwen_parts(blocks_for(60), stages, max_samples=60 * SAMPLE_RATE)
+    result = await collect_qwen_parts(
+        blocks_for(60), stages, max_samples=60 * SAMPLE_RATE
+    )
     intervals = result.speakers.regular
-    assert any(a["speaker_id"] != b["speaker_id"] and max(a["start"], b["start"]) < min(a["end"], b["end"]) for a in intervals for b in intervals)
-    assert all(a["end"] <= b["start"] for a, b in zip(result.speakers.exclusive, result.speakers.exclusive[1:]))
+    assert any(
+        a["speaker_id"] != b["speaker_id"]
+        and max(a["start"], b["start"]) < min(a["end"], b["end"])
+        for a in intervals
+        for b in intervals
+    )
+    assert all(
+        a["end"] <= b["start"]
+        for a, b in zip(result.speakers.exclusive, result.speakers.exclusive[1:])
+    )
 
 
 @pytest.mark.asyncio
-async def test_real_ffmpeg_recording_decode_to_complete_parts_and_child_cleanup(tmp_path):
+async def test_real_ffmpeg_recording_decode_to_complete_parts_and_child_cleanup(
+    tmp_path,
+):
     import wave
     from app.media.application.pcm_stream import PCMStream
 
@@ -397,8 +497,12 @@ async def test_real_ffmpeg_recording_decode_to_complete_parts_and_child_cleanup(
         audio.setframerate(SAMPLE_RATE)
         async for block in blocks_for(60):
             audio.writeframes(block)
-    async with PCMStream(str(path), max_bytes=path.stat().st_size, max_ms=60_000) as source:
-        result = await collect_qwen_parts(source, Stages(), max_samples=60 * SAMPLE_RATE)
+    async with PCMStream(
+        str(path), max_bytes=path.stat().st_size, max_ms=60_000
+    ) as source:
+        result = await collect_qwen_parts(
+            source, Stages(), max_samples=60 * SAMPLE_RATE
+        )
         assert source.complete
     assert result.complete and result.transcript.duration_seconds == 60
     assert source.fd is None and source.process.returncode is not None

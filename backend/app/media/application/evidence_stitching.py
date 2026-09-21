@@ -92,9 +92,7 @@ def stitch_boundary(
     for i, j in pairs:
         left_counts[i] = left_counts.get(i, 0) + 1
         right_counts[j] = right_counts.get(j, 0) + 1
-    unique = sorted(
-        (i, j) for i, j in pairs if left_counts[i] == right_counts[j] == 1
-    )
+    unique = sorted((i, j) for i, j in pairs if left_counts[i] == right_counts[j] == 1)
     if not unique or any(
         second[1] <= first[1] for first, second in zip(unique, unique[1:])
     ):

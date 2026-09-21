@@ -118,8 +118,10 @@ async def collect_qwen_parts(
             languages.add(asr["language"])
             aligned = validate_audio_result(
                 {
-                    **task, "role": "alignment",
-                    "text": asr["text"], "language": asr["language"],
+                    **task,
+                    "role": "alignment",
+                    "text": asr["text"],
+                    "language": asr["language"],
                 },
                 await stages.call(
                     "alignment", window.pcm, text=asr["text"], language=asr["language"]
@@ -128,7 +130,8 @@ async def collect_qwen_parts(
             words = restore_word_layout(asr["text"], aligned["words"], offset)
         else:
             if any(
-                max(core_start, offset + row["start"]) < min(core_end, offset + row["end"])
+                max(core_start, offset + row["start"])
+                < min(core_end, offset + row["end"])
                 for row in diarization["regular"]
             ):
                 raise ValueError("longform_speech_without_text")
@@ -146,8 +149,7 @@ async def collect_qwen_parts(
             pending = words
         if (
             len(output) + len(pending) > MAX_WORDS
-            or text_bytes
-            + sum(len(word["text"].encode("utf-8")) for word in pending)
+            or text_bytes + sum(len(word["text"].encode("utf-8")) for word in pending)
             > MAX_TEXT_BYTES
         ):
             raise ValueError("longform_evidence_capacity")
@@ -169,7 +171,7 @@ async def collect_qwen_parts(
         speakers=SpeakerEvidence(
             regular=tracks["regular"],
             exclusive=tracks["exclusive"],
-            model=models.diarization
+            model=models.diarization,
         ),
         complete=True,
     )
@@ -210,9 +212,13 @@ class _BrokerStages:
         from app.local_inference.client import make_audio_request
 
         task = make_audio_request(
-            role, self.bindings[role], pcm, text=text,
+            role,
+            self.bindings[role],
+            pcm,
+            text=text,
             language=None if language in ("auto", "") else language,
-            priority="background", timeout=self.client.timeout,
+            priority="background",
+            timeout=self.client.timeout,
         )
         result = await self.client.acall(task, dimension=1)
         self.completed_calls += 1
@@ -226,8 +232,10 @@ async def _collect_file(path: str, stages, *, max_bytes: int, max_ms: int, langu
     try:
         async with PCMStream(path, max_bytes=max_bytes, max_ms=max_ms) as source:
             return await collect_qwen_parts(
-                source, stages,
-                max_samples=max_ms * SAMPLE_RATE // 1000, language=language
+                source,
+                stages,
+                max_samples=max_ms * SAMPLE_RATE // 1000,
+                language=language,
             )
     except LocalInferenceUnknown:
         raise
@@ -248,7 +256,10 @@ def collect_qwen_evidence_sync(path: str, *, model: str, language: str | None):
     stages = _BrokerStages(model)
     return asyncio.run(
         _collect_file(
-            path, stages, max_bytes=settings.USAGE_AUDIO_MAX_BYTES,
-            max_ms=settings.USAGE_AUDIO_MAX_MS, language=language,
+            path,
+            stages,
+            max_bytes=settings.USAGE_AUDIO_MAX_BYTES,
+            max_ms=settings.USAGE_AUDIO_MAX_MS,
+            language=language,
         )
     )

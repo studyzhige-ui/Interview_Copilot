@@ -79,9 +79,12 @@ def test_qwen_complete_capability_delegates_without_whisperx_fallback(monkeypatc
         return "qwen-complete-parts"
 
     monkeypatch.setattr(qwen_evidence, "collect_qwen_evidence_sync", collect)
-    assert resolve_evidence_collector("local_qwen_asr")(
-        "snapshot.audio", model="frozen-asr", language="zh"
-    ) == "qwen-complete-parts"
+    assert (
+        resolve_evidence_collector("local_qwen_asr")(
+            "snapshot.audio", model="frozen-asr", language="zh"
+        )
+        == "qwen-complete-parts"
+    )
     assert calls == [("snapshot.audio", {"model": "frozen-asr", "language": "zh"})]
 
 

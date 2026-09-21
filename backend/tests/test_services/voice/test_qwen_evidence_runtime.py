@@ -38,16 +38,30 @@ async def test_all_three_broker_bindings_are_frozen_before_inference(monkeypatch
     assert stages.models == pipeline.StageModels(
         "test-asr@revision-1", "test-align", "test-diarization"
     )
-    assert [task["role"] for task, _ in calls] == ["transcription", "alignment", "diarization"]
+    assert [task["role"] for task, _ in calls] == [
+        "transcription",
+        "alignment",
+        "diarization",
+    ]
     assert all(task["binding"] == bindings[task["role"]] for task, _ in calls)
-    assert all(task["priority"] == "background" and dimension == 1 for task, dimension in calls)
+    assert all(
+        task["priority"] == "background" and dimension == 1 for task, dimension in calls
+    )
     assert stages.completed_calls == 3
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("completed,failure", [(0, "not_started"), (1, "not_started"), (1, "decode"), (0, "unknown")])
-async def test_partial_inference_cannot_be_refunded_or_automatically_retried(monkeypatch, completed, failure):
-    from app.local_inference.client import LocalInferenceNotStarted, LocalInferenceUnknown
+@pytest.mark.parametrize(
+    "completed,failure",
+    [(0, "not_started"), (1, "not_started"), (1, "decode"), (0, "unknown")],
+)
+async def test_partial_inference_cannot_be_refunded_or_automatically_retried(
+    monkeypatch, completed, failure
+):
+    from app.local_inference.client import (
+        LocalInferenceNotStarted,
+        LocalInferenceUnknown,
+    )
     from app.media.application import pcm_stream
 
     closed = []
@@ -75,11 +89,18 @@ async def test_partial_inference_cannot_be_refunded_or_automatically_retried(mon
 
     monkeypatch.setattr(pcm_stream, "PCMStream", Source)
     monkeypatch.setattr(pipeline, "collect_qwen_parts", fail)
-    expected = LocalInferenceUnknown if completed or failure == "unknown" else LocalInferenceNotStarted
+    expected = (
+        LocalInferenceUnknown
+        if completed or failure == "unknown"
+        else LocalInferenceNotStarted
+    )
     with pytest.raises(expected):
         await pipeline._collect_file(
-            "snapshot.audio", SimpleNamespace(completed_calls=completed),
-            max_bytes=100, max_ms=1_000, language="zh",
+            "snapshot.audio",
+            SimpleNamespace(completed_calls=completed),
+            max_bytes=100,
+            max_ms=1_000,
+            language="zh",
         )
     assert len(calls) == 1 and closed == [True]
 
@@ -96,11 +117,20 @@ def test_sync_adapter_uses_the_existing_worker_entry_contract(monkeypatch):
         return "complete-parts"
 
     monkeypatch.setattr(pipeline, "_collect_file", collect)
-    assert pipeline.collect_qwen_evidence_sync(
-        "snapshot.audio", model="asr", language="zh"
-    ) == "complete-parts"
-    assert calls == [("snapshot.audio", stages, {
-        "max_bytes": settings.USAGE_AUDIO_MAX_BYTES,
-        "max_ms": settings.USAGE_AUDIO_MAX_MS,
-        "language": "zh",
-    })]
+    assert (
+        pipeline.collect_qwen_evidence_sync(
+            "snapshot.audio", model="asr", language="zh"
+        )
+        == "complete-parts"
+    )
+    assert calls == [
+        (
+            "snapshot.audio",
+            stages,
+            {
+                "max_bytes": settings.USAGE_AUDIO_MAX_BYTES,
+                "max_ms": settings.USAGE_AUDIO_MAX_MS,
+                "language": "zh",
+            },
+        )
+    ]
