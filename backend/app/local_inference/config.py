@@ -17,10 +17,13 @@ def binding_for(
     # Execution details (device, cache, interpreter) do not change semantic identity.
     # Changing an instruction or adapter contract DOES require a new index.
     from .audio import ASR_CONTRACT, ALIGN_CONTRACT
+    from .speaker_audio import DIARIZATION_CONTRACT
 
-    contract = {"transcription": ASR_CONTRACT, "alignment": ALIGN_CONTRACT}.get(
-        role, LOCAL_EMBEDDING_CONTRACT
-    )
+    contract = {
+        "transcription": ASR_CONTRACT,
+        "alignment": ALIGN_CONTRACT,
+        "diarization": DIARIZATION_CONTRACT,
+    }.get(role, LOCAL_EMBEDDING_CONTRACT)
     value = [
         contract,
         role,
@@ -82,7 +85,7 @@ class ModelSpec:
             value = getattr(self, name)
             if not isinstance(value, str) or len(value) > 2048:
                 raise ValueError("invalid_prompt_prefix")
-        if self.role in {"reranking", "transcription", "alignment"} and (
+        if self.role in {"reranking", "transcription", "alignment", "diarization"} and (
             self.dimension != 1 or self.query_prefix or self.text_prefix
         ):
             raise ValueError("invalid_nonembedding_spec")

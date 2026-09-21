@@ -29,6 +29,10 @@ class InputTooLong(ValueError):
 
 
 def load_model(spec):
+    if spec.role == "diarization":
+        from app.local_inference.pyannote_audio import load
+
+        return load(spec)
     if spec.role in {"transcription", "alignment"}:
         from app.local_inference.qwen_audio import load
 
@@ -61,6 +65,10 @@ def infer(model, spec, task):
         from app.local_inference.qwen_audio import infer as infer_audio
 
         return infer_audio(model, spec, task)
+    if spec.role == "diarization":
+        from app.local_inference.pyannote_audio import infer as infer_speakers
+
+        return infer_speakers(model, spec, task)
     texts = task["texts"]
     with torch.inference_mode():
         if spec.role == "embedding":

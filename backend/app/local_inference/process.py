@@ -35,6 +35,7 @@ def environment(work: Path) -> dict[str, str]:
         HF_HUB_DISABLE_IMPLICIT_TOKEN="1",
         TOKENIZERS_PARALLELISM="false",
         DO_NOT_TRACK="1",
+        PYANNOTE_METRICS_ENABLED="0",
         OMP_NUM_THREADS="4",
         MKL_NUM_THREADS="4",
     )

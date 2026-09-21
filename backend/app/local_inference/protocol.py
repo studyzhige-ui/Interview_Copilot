@@ -21,7 +21,7 @@ VERSION = 1
 MAX_FRAME = 4 * 1024 * 1024
 MAX_TEXT_BYTES = 256 * 1024
 MAX_ITEMS = 32
-ROLES = {"embedding", "reranking", "transcription", "alignment"}
+ROLES = {"embedding", "reranking", "transcription", "alignment", "diarization"}
 PRIORITIES = {"interactive": 0, "background": 10}
 LOCAL_EMBEDDING_CONTRACT = "sentence-transformer-explicit-prompts-v1"
 
@@ -103,7 +103,11 @@ def request(value: dict) -> dict:
         "priority",
         "timeout",
     }
-    if isinstance(value, dict) and value.get("role") in ("transcription", "alignment"):
+    if isinstance(value, dict) and value.get("role") in (
+        "transcription",
+        "alignment",
+        "diarization",
+    ):
         expected = (expected - {"texts", "query"}) | {"audio", "text", "language"}
     if not isinstance(value, dict) or set(value) != expected:
         raise ProtocolError("invalid_request")
@@ -130,7 +134,11 @@ def request(value: dict) -> dict:
         or not 0 < duration <= 600
     ):
         raise ProtocolError("invalid_timeout")
-    if value["role"] in ("transcription", "alignment"):
+    if value["role"] in ("transcription", "alignment", "diarization"):
+        if value["role"] == "diarization":
+            from .speaker_audio import validate_diarization_request
+
+            return validate_diarization_request(value)
         from .audio import validate_audio_request
 
         return validate_audio_request(value)
@@ -178,7 +186,11 @@ def same_user(sock) -> bool:
 
 
 def validate_output(task, values, *, dimension):
-    if task["role"] in ("transcription", "alignment"):
+    if task["role"] in ("transcription", "alignment", "diarization"):
+        if task["role"] == "diarization":
+            from .speaker_audio import validate_diarization_result
+
+            return validate_diarization_result(task, values)
         from .audio import validate_audio_result
 
         return validate_audio_result(task, values)

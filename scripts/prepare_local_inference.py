@@ -26,6 +26,8 @@ def build_config(
     cache_root: Path,
     capacity_mib: int = 12000,
     audio_python: str | None = None,
+    diarization_python: str | None = None,
+    diarization_model: str = "pyannote/speaker-diarization-community-1",
     asr_model: str = "Qwen/Qwen3-ASR-1.7B",
     alignment_model: str = "Qwen/Qwen3-ForcedAligner-0.6B",
 ) -> BrokerConfig:
@@ -113,6 +115,37 @@ def build_config(
                     reservation_mib=reservation,
                 )
             )
+    if diarization_python is not None:
+        from app.local_inference.speaker_audio import DIARIZATION_BINDING_TOKENS
+
+        diarization_executable = Path(diarization_python).expanduser().absolute()
+        if not diarization_executable.is_file() or not os.access(
+            diarization_executable, os.X_OK
+        ):
+            raise ValueError("invalid_diarization_python")
+        revision = settings.MODEL_REVISIONS_JSON.get(diarization_model)
+        asset = inspect_model(
+            diarization_model,
+            model_root=model_root,
+            cache_root=cache_root / "huggingface",
+            revision=revision,
+            verify_hashes=True,
+        )
+        if not asset.loadable_candidate or asset.layout != "pipeline_bundle":
+            raise ValueError("diarization_requires_complete_local_weights")
+        specs.append(
+            ModelSpec(
+                "diarization",
+                diarization_model,
+                asset.path,
+                str(diarization_executable),
+                device=device,
+                revision=revision,
+                dimension=1,
+                max_tokens=DIARIZATION_BINDING_TOKENS,
+                reservation_mib=3000,
+            )
+        )
     return BrokerConfig(
         str(runtime_dir / "worker.sock"),
         str(runtime_dir / "cache"),
@@ -127,6 +160,12 @@ def main(argv=None):
     parser.add_argument(
         "--audio-python",
         help="Optional separate qwen-asr interpreter; never installs dependencies",
+    )
+    parser.add_argument(
+        "--diarization-python", help="Optional isolated pyannote.audio 4 interpreter"
+    )
+    parser.add_argument(
+        "--diarization-model", default="pyannote/speaker-diarization-community-1"
     )
     parser.add_argument("--asr-model", default="Qwen/Qwen3-ASR-1.7B")
     parser.add_argument("--alignment-model", default="Qwen/Qwen3-ForcedAligner-0.6B")
@@ -147,6 +186,8 @@ def main(argv=None):
         cache_root=cache,
         capacity_mib=args.capacity_mib,
         audio_python=args.audio_python,
+        diarization_python=args.diarization_python,
+        diarization_model=args.diarization_model,
         asr_model=args.asr_model,
         alignment_model=args.alignment_model,
     )

@@ -125,7 +125,11 @@ def make_audio_request(
             id=uuid.uuid4().hex,
             role=role,
             binding=binding,
-            operation="transcribe" if role == "transcription" else "align",
+            operation={
+                "transcription": "transcribe",
+                "alignment": "align",
+                "diarization": "diarize",
+            }.get(role, ""),
             audio=pcm_payload(pcm),
             text=text,
             language=language,
