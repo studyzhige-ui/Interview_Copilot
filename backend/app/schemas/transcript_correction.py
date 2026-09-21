@@ -51,6 +51,7 @@ class TranscriptCorrectionRequest(BaseModel):
 
 
 class TranscriptCorrectionReceipt(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
     request_id: str
     previous_transcript_id: str
     transcript_id: str
@@ -76,6 +77,8 @@ class TranscriptPage(BaseModel):
     source: str
     language: str | None
     audio_file_asset_id: str
+    audio_file_asset_version: str
+    audio_sha256: str
     duration_seconds: float
     word_count: int
     words: list[TranscriptWordView]
@@ -98,3 +101,10 @@ class TranscriptHistoryItem(BaseModel):
 class TranscriptHistoryPage(BaseModel):
     items: list[TranscriptHistoryItem]
     next_cursor: str | None
+
+
+class TranscriptPlaybackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    transcript_id: str = Field(min_length=1, max_length=80)
+    first_word_id: str = Field(pattern=r"^w\d{6}$")
+    last_word_id: str = Field(pattern=r"^w\d{6}$")

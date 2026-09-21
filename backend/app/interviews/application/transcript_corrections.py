@@ -207,6 +207,8 @@ def get_page(db, *, record_id, user_pk, transcript_id=None, offset=0, limit=100)
         source=tr.provider or "unknown",
         language=tr.language,
         audio_file_asset_id=evidence.audio.file_asset_id,
+        audio_file_asset_version=evidence.audio.file_asset_version,
+        audio_sha256=evidence.audio.sha256,
         duration_seconds=evidence.audio.duration_seconds,
         word_count=len(evidence.words),
         words=[

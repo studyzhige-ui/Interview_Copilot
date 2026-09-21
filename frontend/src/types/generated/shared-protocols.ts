@@ -1363,6 +1363,148 @@ export interface components {
             idempotency_key: string;
         };
         SubmissionKeyRequestContract: components["schemas"]["SubmissionKey"];
+        /** TranscriptCorrectionReceipt */
+        TranscriptCorrectionReceipt: {
+            /** Created At */
+            created_at: string;
+            /** Current Transcript Id */
+            current_transcript_id: string;
+            /** Previous Transcript Id */
+            previous_transcript_id: string;
+            /**
+             * Reanalysis Required
+             * @default true
+             */
+            reanalysis_required: boolean;
+            /** Request Id */
+            request_id: string;
+            /** Review Generation */
+            review_generation: number;
+            /** Transcript Id */
+            transcript_id: string;
+        };
+        TranscriptCorrectionReceiptResponseContract: components["schemas"]["TranscriptCorrectionReceipt"];
+        /** TranscriptCorrectionRequest */
+        TranscriptCorrectionRequest: {
+            /** Expected Transcript Id */
+            expected_transcript_id: string;
+            /** Reason */
+            reason: string;
+            /** Request Id */
+            request_id: string;
+            /** Speaker Roles */
+            speaker_roles?: {
+                [key: string]: "candidate" | "interviewer" | "unknown";
+            };
+            /** Words */
+            words?: components["schemas"]["TranscriptWordEdit"][];
+        };
+        TranscriptCorrectionRequestRequestContract: components["schemas"]["TranscriptCorrectionRequest"];
+        /** TranscriptHistoryItem */
+        TranscriptHistoryItem: {
+            /** Confirmed Roles */
+            confirmed_roles: {
+                [key: string]: "candidate" | "interviewer" | "unknown";
+            };
+            /** Created At */
+            created_at: string;
+            /** Previous Transcript Id */
+            previous_transcript_id: string;
+            /** Reason */
+            reason: string;
+            /** Request Id */
+            request_id: string;
+            /** Transcript Id */
+            transcript_id: string;
+            /** Word Ids */
+            word_ids: string[];
+        };
+        /** TranscriptHistoryPage */
+        TranscriptHistoryPage: {
+            /** Items */
+            items: components["schemas"]["TranscriptHistoryItem"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        TranscriptHistoryPageResponseContract: components["schemas"]["TranscriptHistoryPage"];
+        /** TranscriptPage */
+        TranscriptPage: {
+            /** Audio File Asset Id */
+            audio_file_asset_id: string;
+            /** Audio File Asset Version */
+            audio_file_asset_version: string;
+            /** Audio Sha256 */
+            audio_sha256: string;
+            /** Confirmed Roles */
+            confirmed_roles: {
+                [key: string]: "candidate" | "interviewer" | "unknown";
+            };
+            /** Current Transcript Id */
+            current_transcript_id: string;
+            /** Duration Seconds */
+            duration_seconds: number;
+            /** Language */
+            language: string | null;
+            /** Next Offset */
+            next_offset: number | null;
+            /** Source */
+            source: string;
+            /** Speakers */
+            speakers: string[];
+            /** Suggested Roles */
+            suggested_roles: {
+                [key: string]: "candidate" | "interviewer" | "unknown";
+            };
+            /** Transcript Id */
+            transcript_id: string;
+            /** Word Count */
+            word_count: number;
+            /** Words */
+            words: components["schemas"]["TranscriptWordView"][];
+        };
+        TranscriptPageResponseContract: components["schemas"]["TranscriptPage"];
+        /** TranscriptPlaybackRequest */
+        TranscriptPlaybackRequest: {
+            /** First Word Id */
+            first_word_id: string;
+            /** Last Word Id */
+            last_word_id: string;
+            /** Transcript Id */
+            transcript_id: string;
+        };
+        TranscriptPlaybackRequestRequestContract: components["schemas"]["TranscriptPlaybackRequest"];
+        /** TranscriptWordEdit */
+        TranscriptWordEdit: {
+            /**
+             * Speaker Id
+             * @default null
+             */
+            speaker_id?: string | null;
+            /**
+             * Text
+             * @default null
+             */
+            text?: string | null;
+            /** Word Id */
+            word_id: string;
+        };
+        /** TranscriptWordView */
+        TranscriptWordView: {
+            /** Alignment Status */
+            alignment_status: string;
+            /** End */
+            end: number | null;
+            /** Overlap */
+            overlap: boolean;
+            /** Speaker Id */
+            speaker_id: string | null;
+            /** Start */
+            start: number | null;
+            /** Text */
+            text: string;
+            /** Word Id */
+            word_id: string;
+        };
         /** UpdateExistingInterview */
         UpdateExistingInterview: {
             /** Expected Schedule Version */

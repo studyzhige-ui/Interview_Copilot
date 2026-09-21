@@ -22,8 +22,10 @@ import { DebriefGuidanceControl } from './DebriefGuidanceControl';
 import { InterviewOpportunityControl } from './InterviewOpportunityControl';
 import { CorrectionHistory } from './CorrectionHistory';
 import { QAEditor } from './QAEditor';
+import { TranscriptWorkbench } from './TranscriptWorkbench';
 
-type Tab = 'report' | 'qa' | 'transcript' | 'history';
+export type ReviewTab = 'report' | 'qa' | 'transcript' | 'history';
+type Tab = ReviewTab;
 
 interface Props {
   detail: InterviewRecordDetail | null;
@@ -33,6 +35,8 @@ interface Props {
   selectedQuestionIndexes?: number[];
   onToggleQuestion?: (index: number) => void;
   onCorrected?: () => void;
+  activeTab?: ReviewTab;
+  onTabChange?: (tab: ReviewTab) => void;
 }
 
 function asAnalysis(detail: InterviewRecordDetail | null): InterviewAnalysis | null {
@@ -75,11 +79,16 @@ export function QAPanel({
   selectedQuestionIndexes = [],
   onToggleQuestion,
   onCorrected,
+  activeTab,
+  onTabChange,
 }: Props) {
   // Default to the report tab when content first lands; flip to QA only if the
   // user explicitly switches. This matches the design spec.
-  const [tab, setTab] = useState<Tab>('report');
+  const [localTab, setLocalTab] = useState<Tab>('report');
+  const tab = activeTab ?? localTab;
+  const setTab = (next: Tab) => { setLocalTab(next); onTabChange?.(next); };
   const [invalidated, setInvalidated] = useState(false);
+  const [sourceInvalidated, setSourceInvalidated] = useState(false);
   if (loading) {
     return (
       <div className="flex-1 min-w-0 overflow-y-auto p-8">
@@ -100,7 +109,7 @@ export function QAPanel({
   }
 
   const analysis = invalidated ? null : asAnalysis(detail);
-  const qa = detail.qa ?? [];
+  const qa = sourceInvalidated ? [] : detail.qa ?? [];
 
   return (
     <div className="flex-1 min-w-0 overflow-y-auto p-6">
@@ -126,7 +135,7 @@ export function QAPanel({
         </div>
 
         {invalidated && <div role="status" className="mb-4 rounded-lg bg-amber-50 p-3 text-sm">内容已纠正，旧评分和综合报告已失效。重新分析需要你的明确操作。</div>}
-        <ReportTabs tab={tab} onChange={setTab} hasTranscript={!!detail.transcript} />
+        <ReportTabs tab={tab} onChange={setTab} hasTranscript={!!detail.transcript || detail.source === 'upload'} />
 
         {tab === 'report' && (
           <ReportView
@@ -166,14 +175,18 @@ export function QAPanel({
         )}
         {tab === 'history' && <CorrectionHistory recordId={detail.id} />}
         {tab === 'transcript' && (
-          detail.transcript
-            ? (
-                <TranscriptView
-                  transcript={detail.transcript}
-                  structure={detail.transcript_structure}
-                />
-              )
-            : <EmptyState icon={<FileText size={24} />} title="暂无转录文本" description="该面试尚未完成语音转录。" />
+          detail.source === 'upload'
+            ? <>
+                <TranscriptWorkbench recordId={detail.id} reanalyzing={reanalyzing}
+                  onCorrected={(needsAnalysis) => { setInvalidated(needsAnalysis); setSourceInvalidated(needsAnalysis); onCorrected?.(); }}
+                  onReanalyze={onReanalyze ? () => onReanalyze('extract') : undefined} />
+                {detail.transcript && <details className="mt-5"><summary>原始文本快照</summary>
+                  <TranscriptView transcript={detail.transcript} structure={detail.transcript_structure} />
+                </details>}
+              </>
+            : detail.transcript
+              ? <TranscriptView transcript={detail.transcript} structure={detail.transcript_structure} />
+              : <EmptyState icon={<FileText size={24} />} title="暂无转录文本" description="该面试尚未完成语音转录。" />
         )}
       </div>
     </div>

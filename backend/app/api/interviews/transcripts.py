@@ -1,6 +1,8 @@
 """Thin authenticated boundary for source evidence and correction receipts."""
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from app.core.rate_limit import RATE_EXPENSIVE, limiter
+from app.core.bounded_work import WorkCapacityExceeded
 from sqlalchemy.orm import Session
 from app.api.command_errors import command_errors
 from app.core.security import get_current_user
@@ -11,6 +13,7 @@ from app.schemas.transcript_correction import (
     TranscriptCorrectionReceipt,
     TranscriptHistoryPage,
     TranscriptPage,
+    TranscriptPlaybackRequest,
 )
 from app.interviews.application import transcript_corrections as service
 
@@ -84,3 +87,40 @@ def correction_receipt(
         return service.get_receipt(
             db, record_id=record_id, user_pk=user.id, request_id=request_id
         )
+
+
+@router.post("/interview-records/{record_id}/transcript/playback")
+@limiter.limit(RATE_EXPENSIVE)
+async def transcript_playback(
+    request: Request,
+    record_id: str,
+    body: TranscriptPlaybackRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from app.interviews.application.transcript_playback import create_playback
+    from app.media.application.workers import pool
+
+    # get_current_user used the same cached get_db dependency. Release that
+    # authentication transaction too, not only the application's source reads.
+    user_pk = int(user.id)
+    db.close()
+    with command_errors():
+        try:
+            selection, content = await pool("probe").run(
+                create_playback, record_id=record_id, user_pk=user_pk, command=body
+            )
+        except WorkCapacityExceeded as exc:
+            raise HTTPException(
+                status_code=429, detail="回放任务繁忙，请稍后重试"
+            ) from exc
+    return Response(
+        content=content,
+        media_type="audio/wav",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Transcript-ID": selection.transcript_id,
+            "X-Audio-Source-SHA256": selection.sha256,
+        },
+    )

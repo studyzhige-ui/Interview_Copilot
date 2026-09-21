@@ -3612,6 +3612,447 @@
       "SubmissionKeyRequestContract": {
         "$ref": "#/components/schemas/SubmissionKey"
       },
+      "TranscriptCorrectionReceipt": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_transcript_id": {
+            "title": "Current Transcript Id",
+            "type": "string"
+          },
+          "previous_transcript_id": {
+            "title": "Previous Transcript Id",
+            "type": "string"
+          },
+          "reanalysis_required": {
+            "default": true,
+            "title": "Reanalysis Required",
+            "type": "boolean"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "review_generation": {
+            "title": "Review Generation",
+            "type": "integer"
+          },
+          "transcript_id": {
+            "title": "Transcript Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "previous_transcript_id",
+          "transcript_id",
+          "current_transcript_id",
+          "review_generation",
+          "created_at",
+          "reanalysis_required"
+        ],
+        "title": "TranscriptCorrectionReceipt",
+        "type": "object"
+      },
+      "TranscriptCorrectionReceiptResponseContract": {
+        "$ref": "#/components/schemas/TranscriptCorrectionReceipt"
+      },
+      "TranscriptCorrectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_transcript_id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Expected Transcript Id",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 36,
+            "minLength": 36,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "speaker_roles": {
+            "additionalProperties": {
+              "enum": [
+                "candidate",
+                "interviewer",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "maxProperties": 32,
+            "title": "Speaker Roles",
+            "type": "object"
+          },
+          "words": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptWordEdit"
+            },
+            "maxItems": 200,
+            "title": "Words",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id",
+          "expected_transcript_id",
+          "reason"
+        ],
+        "title": "TranscriptCorrectionRequest",
+        "type": "object"
+      },
+      "TranscriptCorrectionRequestRequestContract": {
+        "$ref": "#/components/schemas/TranscriptCorrectionRequest"
+      },
+      "TranscriptHistoryItem": {
+        "properties": {
+          "confirmed_roles": {
+            "additionalProperties": {
+              "enum": [
+                "candidate",
+                "interviewer",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "title": "Confirmed Roles",
+            "type": "object"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "previous_transcript_id": {
+            "title": "Previous Transcript Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "transcript_id": {
+            "title": "Transcript Id",
+            "type": "string"
+          },
+          "word_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Word Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id",
+          "previous_transcript_id",
+          "transcript_id",
+          "reason",
+          "word_ids",
+          "confirmed_roles",
+          "created_at"
+        ],
+        "title": "TranscriptHistoryItem",
+        "type": "object"
+      },
+      "TranscriptHistoryPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptHistoryItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "TranscriptHistoryPage",
+        "type": "object"
+      },
+      "TranscriptHistoryPageResponseContract": {
+        "$ref": "#/components/schemas/TranscriptHistoryPage"
+      },
+      "TranscriptPage": {
+        "properties": {
+          "audio_file_asset_id": {
+            "title": "Audio File Asset Id",
+            "type": "string"
+          },
+          "audio_file_asset_version": {
+            "title": "Audio File Asset Version",
+            "type": "string"
+          },
+          "audio_sha256": {
+            "title": "Audio Sha256",
+            "type": "string"
+          },
+          "confirmed_roles": {
+            "additionalProperties": {
+              "enum": [
+                "candidate",
+                "interviewer",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "title": "Confirmed Roles",
+            "type": "object"
+          },
+          "current_transcript_id": {
+            "title": "Current Transcript Id",
+            "type": "string"
+          },
+          "duration_seconds": {
+            "title": "Duration Seconds",
+            "type": "number"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "speakers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Speakers",
+            "type": "array"
+          },
+          "suggested_roles": {
+            "additionalProperties": {
+              "enum": [
+                "candidate",
+                "interviewer",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "title": "Suggested Roles",
+            "type": "object"
+          },
+          "transcript_id": {
+            "title": "Transcript Id",
+            "type": "string"
+          },
+          "word_count": {
+            "title": "Word Count",
+            "type": "integer"
+          },
+          "words": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptWordView"
+            },
+            "title": "Words",
+            "type": "array"
+          }
+        },
+        "required": [
+          "transcript_id",
+          "current_transcript_id",
+          "source",
+          "language",
+          "audio_file_asset_id",
+          "audio_file_asset_version",
+          "audio_sha256",
+          "duration_seconds",
+          "word_count",
+          "words",
+          "speakers",
+          "confirmed_roles",
+          "suggested_roles",
+          "next_offset"
+        ],
+        "title": "TranscriptPage",
+        "type": "object"
+      },
+      "TranscriptPageResponseContract": {
+        "$ref": "#/components/schemas/TranscriptPage"
+      },
+      "TranscriptPlaybackRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "first_word_id": {
+            "pattern": "^w\\d{6}$",
+            "title": "First Word Id",
+            "type": "string"
+          },
+          "last_word_id": {
+            "pattern": "^w\\d{6}$",
+            "title": "Last Word Id",
+            "type": "string"
+          },
+          "transcript_id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Transcript Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transcript_id",
+          "first_word_id",
+          "last_word_id"
+        ],
+        "title": "TranscriptPlaybackRequest",
+        "type": "object"
+      },
+      "TranscriptPlaybackRequestRequestContract": {
+        "$ref": "#/components/schemas/TranscriptPlaybackRequest"
+      },
+      "TranscriptWordEdit": {
+        "additionalProperties": false,
+        "properties": {
+          "speaker_id": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Speaker Id"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Text"
+          },
+          "word_id": {
+            "pattern": "^w\\d{6}$",
+            "title": "Word Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "word_id"
+        ],
+        "title": "TranscriptWordEdit",
+        "type": "object"
+      },
+      "TranscriptWordView": {
+        "properties": {
+          "alignment_status": {
+            "title": "Alignment Status",
+            "type": "string"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "overlap": {
+            "title": "Overlap",
+            "type": "boolean"
+          },
+          "speaker_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speaker Id"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "word_id": {
+            "title": "Word Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "word_id",
+          "text",
+          "start",
+          "end",
+          "alignment_status",
+          "speaker_id",
+          "overlap"
+        ],
+        "title": "TranscriptWordView",
+        "type": "object"
+      },
       "UpdateExistingInterview": {
         "additionalProperties": false,
         "properties": {

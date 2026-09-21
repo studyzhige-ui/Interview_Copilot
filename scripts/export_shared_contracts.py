@@ -50,7 +50,17 @@ from app.schemas.invitation_submission import (  # noqa: E402
 from app.schemas.interview import QAEditRequest, QACorrectionPage  # noqa: E402
 from app.schemas.mock_preparation import MockPreparationRequest  # noqa: E402
 
+from app.schemas.transcript_correction import (  # noqa: E402
+    TranscriptCorrectionRequest,
+    TranscriptCorrectionReceipt,
+    TranscriptHistoryPage,
+    TranscriptPage,
+    TranscriptPlaybackRequest,
+)
+
 INPUT_MODELS = (
+    TranscriptCorrectionRequest,
+    TranscriptPlaybackRequest,
     QAEditRequest,
     MockPreparationRequest,
     ConfirmInterviewInvitation,
@@ -61,6 +71,9 @@ INPUT_MODELS = (
     SubmissionKey,
 )
 OUTPUT_MODELS = (
+    TranscriptCorrectionReceipt,
+    TranscriptHistoryPage,
+    TranscriptPage,
     QACorrectionPage,
     ConfirmInterviewInvitationResult,
     FactConfirmationRequest,

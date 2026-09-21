@@ -187,7 +187,7 @@ app.add_middleware(
     # that happens to be in CORS_ORIGINS by accident.
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
-    expose_headers=["X-Request-ID"],
+    expose_headers=["X-Request-ID", "X-Transcript-ID", "X-Audio-Source-SHA256"],
     max_age=600,
 )
 

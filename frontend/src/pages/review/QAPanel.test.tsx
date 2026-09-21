@@ -17,6 +17,16 @@ vi.mock('./DebriefGuidanceControl', () => ({
 vi.mock('./InterviewOpportunityControl', () => ({
   InterviewOpportunityControl: () => <div>岗位关联控件</div>,
 }));
+// The workbench's own query/receipt tests exercise its implementation. This
+// boundary verifies QAPanel consumes correction notifications without a model call.
+vi.mock('./TranscriptWorkbench', () => ({
+  TranscriptWorkbench: ({ onCorrected, onReanalyze }: {
+    onCorrected?: (required: boolean) => void; onReanalyze?: () => void;
+  }) => <div>
+    <button onClick={() => onCorrected?.(true)}>模拟转写纠正成功</button>
+    <button onClick={onReanalyze}>明确重新分析转写</button>
+  </div>,
+}));
 
 const detail: InterviewRecordDetail = {
   id: 'record-1',
@@ -224,4 +234,31 @@ describe('QAPanel editing', () => {
     expect(screen.getByText('面试官 · SPEAKER_01')).toBeInTheDocument();
     expect(screen.getByText('角色未确认 · UNKNOWN')).toBeInTheDocument();
   });
+  it('hides stale QA after source correction without automatically reanalyzing', () => {
+    const onReanalyze = vi.fn(), onCorrected = vi.fn();
+    render(<QAPanel detail={detail} loading={false} onReanalyze={onReanalyze} onCorrected={onCorrected} />);
+    fireEvent.click(screen.getByRole('button', { name: 'QA 对' }));
+    expect(screen.getByText('原答案')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '原始转录' }));
+    fireEvent.click(screen.getByText('模拟转写纠正成功'));
+    expect(onCorrected).toHaveBeenCalledOnce();
+    expect(onReanalyze).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'QA 对' }));
+    expect(screen.queryByText('原答案')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('旧评分和综合报告已失效');
+    fireEvent.click(screen.getByRole('button', { name: '原始转录' }));
+    fireEvent.click(screen.getByText('明确重新分析转写'));
+    expect(onReanalyze).toHaveBeenCalledWith('extract');
+  });
+
+  it('retains a page-owned transcript tab when refreshed detail is remounted', () => {
+    const onTabChange = vi.fn();
+    const { rerender } = render(<QAPanel key="old" detail={detail} loading={false} activeTab="transcript" onTabChange={onTabChange} />);
+    expect(screen.getByText('模拟转写纠正成功')).toBeInTheDocument();
+    rerender(<QAPanel key="new" detail={{ ...detail, status: 'failed', qa: [] }} loading={false} activeTab="transcript" onTabChange={onTabChange} />);
+    expect(screen.getByText('模拟转写纠正成功')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'QA 对' }));
+    expect(onTabChange).toHaveBeenCalledWith('qa');
+  });
+
 });
