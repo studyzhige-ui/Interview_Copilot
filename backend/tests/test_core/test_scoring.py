@@ -10,9 +10,12 @@ from app.core.scoring import (
 )
 
 
-@pytest.mark.parametrize("value", [n / 10 for n in range(101)])
-def test_every_tenth_is_valid_without_clipping(value):
-    assert TypeAdapter(Score).validate_python(value) == value
+def test_every_tenth_is_valid_without_clipping():
+    # One finite-domain contract, not 101 independent fixture lifecycles.
+    # Keep all values: this is not sampling the endpoints or dropping coverage.
+    adapter = TypeAdapter(Score)
+    values = [n / 10 for n in range(101)]
+    assert [adapter.validate_python(value) for value in values] == values
 
 
 @pytest.mark.parametrize(

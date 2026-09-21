@@ -106,9 +106,10 @@ jobs:
           alembic upgrade head
           alembic check
 
-      - name: Run unit tests
+      - name: Run backend regressions (browser cases have their own required job)
         run: |
           python -m pytest backend/tests \
+            --ignore=backend/tests/browser \
             -v \
             --tb=short \
             --junitxml=test-results/backend.xml
