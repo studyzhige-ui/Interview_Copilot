@@ -188,3 +188,5 @@ from .retrieval_index import RetrievalEntry, RetrievalGeneration  # noqa: F401
 from .transcript_correction import TranscriptCorrection  # noqa: F401
 
 from .mock_answer_submission import MockAnswerSubmission  # noqa: F401
+
+from .mock_media import MockMediaLease, MockMediaPlayback  # noqa: F401

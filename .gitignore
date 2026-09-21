@@ -65,3 +65,5 @@ Thumbs.db
 
 # Exports
 exports/
+
+/scripts/contract_codegen/node_modules

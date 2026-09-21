@@ -152,6 +152,9 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         logger.info("Draining background tasks before shutdown...")
+        from app.media.realtime.transport import registry as media_registry
+
+        await media_registry.close()
         audio_workers.close_pools()
         close_pools()
         try:
