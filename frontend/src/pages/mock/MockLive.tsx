@@ -10,10 +10,12 @@ import {
   abandonMockInterview,
   finishMockInterview,
   getMockLiveState,
+  getMockAnswerReceipt,
   prepareMockAnswerAudio,
   submitMockAnswer,
 } from '@/api/mock';
 import { extractErr } from '@/api/client';
+import { readAnswerIntent, clearAnswerIntent } from '@/api/answerIntent';
 import { useBlocker, useNavigate } from 'react-router-dom';
 import type { TtsVoice } from './MockSetup';
 import type { MockLiveMessage } from '@/types/api';
@@ -28,6 +30,7 @@ type LiveOperation =
   | 'completed';
 
 interface PendingAnswer {
+  requestId?: string;
   text: string;
   audioAssetId?: string;
   questionMessageId: number;
@@ -60,11 +63,11 @@ function findLatestInterviewer(messages: MockLiveMessage[]) {
 
 const SAVED_ANSWER_NOTICE = '你的回答已保存，尚未获得下一题。重新连接只同步现场；重试生成会发起新的模型请求，可能产生额外费用。';
 
-function pendingFromMessages(messages: MockLiveMessage[]): PendingAnswer | null {
+function pendingFromMessages(messages: MockLiveMessage[], intent?: { requestId: string; questionMessageId: number } | null): PendingAnswer | null {
   const question = findLatestInterviewer(messages);
   const last = messages.at(-1);
   if (!question || last?.speaker !== 'candidate' || last.id <= 0) return null;
-  return { text: last.text, questionMessageId: question.id, optimisticMessageId: last.id };
+  return { text: last.text, questionMessageId: question.id, optimisticMessageId: last.id, ...(intent?.questionMessageId === question.id ? { requestId: intent.requestId } : {}) };
 }
 
 export function MockLive({
@@ -78,9 +81,9 @@ export function MockLive({
   const [messages, setMessages] = useState<MockLiveMessage[]>(initialMessages);
   const [typing, setTyping] = useState('');
   const [operation, setOperation] = useState<LiveOperation>(
-    initialMessages.length > 0 ? 'idle' : 'recovering',
+    initialMessages.length > 0 && !readAnswerIntent(recordId) ? 'idle' : 'recovering',
   );
-  const initialPending = pendingFromMessages(initialMessages);
+  const initialPending = pendingFromMessages(initialMessages, readAnswerIntent(recordId));
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(initialPending ? SAVED_ANSWER_NOTICE : null);
   const [canRetryGeneration, setCanRetryGeneration] = useState(Boolean(initialPending));
   const pendingAnswerRef = useRef<PendingAnswer | null>(initialPending);
@@ -88,8 +91,9 @@ export function MockLive({
   const setPendingAnswer = useCallback((pending: PendingAnswer | null) => {
     // Immediate event guard + reactive UI state; rendering never reads a ref.
     pendingAnswerRef.current = pending;
+    if (!pending) clearAnswerIntent(recordId);
     setHasPendingAnswer(Boolean(pending));
-  }, []);
+  }, [recordId]);
   const isMounted = useIsMounted();
   // The model may suggest wrapping up, but the candidate keeps control of
   // when the interview actually ends.
@@ -128,16 +132,19 @@ export function MockLive({
   };
 
   useEffect(() => {
-    if (initialMessages.length > 0) return;
+    const intent = readAnswerIntent(recordId);
+    if (initialMessages.length > 0 && !intent) return;
     let active = true;
-    getMockLiveState(recordId)
-      .then((state) => {
+    Promise.all([
+      getMockLiveState(recordId),
+      intent ? getMockAnswerReceipt(recordId, intent.requestId) : Promise.resolve(null),
+    ]).then(([state, receipt]) => {
         if (active) {
           setMessages(state.messages);
-          const pending = pendingFromMessages(state.messages);
+          const pending = pendingFromMessages(state.messages, intent);
           setPendingAnswer(pending);
-          setCanRetryGeneration(Boolean(pending));
-          setRecoveryNotice(pending ? SAVED_ANSWER_NOTICE : null);
+          setCanRetryGeneration(Boolean(pending) && receipt?.status !== 'in_progress');
+          setRecoveryNotice(pending ? (receipt?.status === 'in_progress' ? '回答请求已登记，正在生成下一题；重新连接只核对收据。' : SAVED_ANSWER_NOTICE) : null);
         }
       })
       .catch(() => {
@@ -155,7 +162,8 @@ export function MockLive({
     message: MockLiveMessage,
     endSuggested: boolean,
   ) => {
-    setMessages((current) => [...current, message]);
+    if (!isMounted.current) return;
+    setMessages((current) => current.some((item) => item.id === message.id) ? current : [...current, message]);
     setPendingAnswer(null);
     setCanRetryGeneration(false);
     setVoiceDraft(null);
@@ -172,7 +180,9 @@ export function MockLive({
     setOperation('recovering');
     setCanRetryGeneration(false);
     try {
+      const receipt = pending.requestId ? await getMockAnswerReceipt(recordId, pending.requestId) : null;
       const canonical = await syncMessages();
+      if (!isMounted.current) return;
       const latest = findLatestInterviewer(canonical);
       if (latest && latest.id !== pending.questionMessageId) {
         setPendingAnswer(null);
@@ -184,7 +194,7 @@ export function MockLive({
       if (last?.speaker !== 'candidate' || last.text.trim() !== pending.text.trim()) {
         // Keep a different already persisted answer rather than authorizing an
         // overwrite. The service also enforces this immutable-answer boundary.
-        const retained = pendingFromMessages(canonical);
+        const retained = pendingFromMessages(canonical, pending.requestId ? { requestId: pending.requestId, questionMessageId: pending.questionMessageId } : null);
         setPendingAnswer(retained);
         setCanRetryGeneration(Boolean(retained));
         if (!retained) {
@@ -195,8 +205,10 @@ export function MockLive({
         return;
       }
       setVoiceDraft(null);
-      setCanRetryGeneration(true);
-      setRecoveryNotice(SAVED_ANSWER_NOTICE);
+      setCanRetryGeneration(receipt?.status !== 'in_progress' && receipt?.status !== 'completed');
+      setRecoveryNotice(receipt?.status === 'in_progress'
+        ? '回答请求已登记，正在生成下一题；重新连接只核对收据。'
+        : receipt?.status === 'completed' ? '该请求已完成，请重新连接同步最新现场。' : SAVED_ANSWER_NOTICE);
     } catch {
       setRecoveryNotice('连接暂时中断，回答仍保留在当前页面。恢复连接后可以继续同步。');
     } finally {
@@ -212,14 +224,17 @@ export function MockLive({
     try {
       // This mutation is only initiated by the clearly labelled user action,
       // never by a network catch/reload/read-only reconciliation path.
+      const retry = { ...pending, requestId: crypto.randomUUID() };
+      setPendingAnswer(retry);
       const response = await submitMockAnswer(recordId, {
+        request_id: retry.requestId,
         answer_text: pending.text,
         question_message_id: pending.questionMessageId,
       });
       acceptInterviewerMessage(response.message, response.end_suggested);
       if (isMounted.current) setOperation('idle');
     } catch {
-      await recoverPendingAnswer(pending);
+      await recoverPendingAnswer(pendingAnswerRef.current ?? pending);
     }
   };
 
@@ -232,7 +247,9 @@ export function MockLive({
       return;
     }
 
+    const requestId = crypto.randomUUID();
     const pending: PendingAnswer = {
+      requestId,
       text,
       ...(audioAssetId ? { audioAssetId } : {}),
       questionMessageId: question.id,
@@ -248,6 +265,7 @@ export function MockLive({
     ]);
     try {
       const response = await submitMockAnswer(recordId, {
+        request_id: requestId,
         answer_text: text,
         ...(audioAssetId ? { answer_audio_file_asset_id: audioAssetId } : {}),
         question_message_id: question.id,

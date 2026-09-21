@@ -58,7 +58,10 @@ from app.schemas.transcript_correction import (  # noqa: E402
     TranscriptPlaybackRequest,
 )
 
+from app.schemas.chat import MockAnswerRequest, MockAnswerResp, MockAnswerReceipt  # noqa: E402
+
 INPUT_MODELS = (
+    MockAnswerRequest,
     TranscriptCorrectionRequest,
     TranscriptPlaybackRequest,
     QAEditRequest,
@@ -71,6 +74,8 @@ INPUT_MODELS = (
     SubmissionKey,
 )
 OUTPUT_MODELS = (
+    MockAnswerResp,
+    MockAnswerReceipt,
     TranscriptCorrectionReceipt,
     TranscriptHistoryPage,
     TranscriptPage,

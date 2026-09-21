@@ -893,6 +893,46 @@ export interface components {
             /** Opportunity Id */
             opportunity_id: string;
         };
+        /** MockAnswerReceipt */
+        MockAnswerReceipt: {
+            /** Question Message Id */
+            question_message_id: number;
+            /** Request Id */
+            request_id: string;
+            /** @default null */
+            response: components["schemas"]["MockAnswerResp"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "unknown";
+        };
+        MockAnswerReceiptResponseContract: components["schemas"]["MockAnswerReceipt"];
+        /** MockAnswerRequest */
+        MockAnswerRequest: {
+            /**
+             * Answer Audio File Asset Id
+             * @default null
+             */
+            answer_audio_file_asset_id?: string | null;
+            /** Answer Text */
+            answer_text: string;
+            /** Question Message Id */
+            question_message_id: number;
+            /** Request Id */
+            request_id: string;
+        };
+        MockAnswerRequestRequestContract: components["schemas"]["MockAnswerRequest"];
+        /**
+         * MockAnswerResp
+         * @description ``POST /mock-interviews/{record_id}/answer`` — next interviewer line.
+         */
+        MockAnswerResp: {
+            /** End Suggested */
+            end_suggested: boolean;
+            message: components["schemas"]["MockLiveMessage"];
+        };
+        MockAnswerRespResponseContract: components["schemas"]["MockAnswerResp"];
         /**
          * MockClientActionRequest
          * @description Durable request stored in the existing AgentInteraction record.
@@ -1047,6 +1087,18 @@ export interface components {
              * @constant
              */
             runtime_status: "mock_in_progress";
+        };
+        /** MockLiveMessage */
+        MockLiveMessage: {
+            /** Id */
+            id: number;
+            /**
+             * Speaker
+             * @enum {string}
+             */
+            speaker: "interviewer" | "candidate";
+            /** Text */
+            text: string;
         };
         /** MockPrefillPayload */
         MockPrefillPayload: {

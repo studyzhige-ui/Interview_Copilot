@@ -11,7 +11,10 @@ from app.core.user_identity import resolve_user_pk
 from app.db.types import utc_now
 from app.models.mock_interview_runtime import MockInterviewRuntime
 
-ANSWER_CLAIM_TTL_SECONDS = 600
+from app.interviews.application.mock_answer_receipts import (
+    ANSWER_CLAIM_TTL_SECONDS,
+    mark_unknown,
+)
 
 
 def create_runtime(
@@ -132,9 +135,16 @@ def release_question_claim(
     *,
     question_message_id: int,
     claim_generation: int,
+    request_id: str | None = None,
 ) -> None:
     """Release only the exact lease, never a successor on the same question."""
     db.rollback()
+    # Preserve the shared record -> runtime -> receipt order on cancellation too.
+    from app.models.interview_record import InterviewRecord
+
+    db.query(InterviewRecord).filter_by(
+        id=interview_record_id
+    ).with_for_update().one_or_none()
     (
         db.query(MockInterviewRuntime)
         .filter(
@@ -147,6 +157,8 @@ def release_question_claim(
             synchronize_session=False,
         )
     )
+    if request_id is not None:
+        mark_unknown(db, interview_record_id, request_id, claim_generation)
     db.commit()
 
 

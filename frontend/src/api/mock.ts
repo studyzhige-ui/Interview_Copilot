@@ -1,4 +1,10 @@
 import { apiClient } from './client';
+import { isAxiosError } from 'axios';
+import type { components } from '@/types/generated/shared-protocols';
+import { clearAnswerIntent, rememberAnswerIntent } from './answerIntent';
+
+export type MockAnswerReceipt = components['schemas']['MockAnswerReceiptResponseContract'];
+type MockAnswerCommand = components['schemas']['MockAnswerRequestRequestContract'];
 import type {
   MockAnswerResp,
   MockAnswerAudioResp,
@@ -25,22 +31,34 @@ export async function startMockInterview(payload: {
 
 export async function submitMockAnswer(
   recordId: string,
-  payload: {
-    answer_text: string;
-    answer_audio_file_asset_id?: string;
-    /** Concurrency token (MOCK-3): id of the question being answered. */
-    question_message_id: number;
-  },
+  payload: MockAnswerCommand,
 ): Promise<MockAnswerResp> {
+  rememberAnswerIntent(recordId, payload.request_id, payload.question_message_id);
   const res = await apiClient.post(
     `/mock-interviews/${encodeURIComponent(recordId)}/answer`,
     payload,
   );
+  clearAnswerIntent(recordId, payload.request_id);
   return res.data;
+}
+
+/** Read-only reconciliation. A missing receipt never triggers a POST. */
+export async function getMockAnswerReceipt(recordId: string, requestId: string): Promise<MockAnswerReceipt | null> {
+  try {
+    const response = await apiClient.get<MockAnswerReceipt>(
+      `/mock-interviews/${encodeURIComponent(recordId)}/answer-receipts/${encodeURIComponent(requestId)}`,
+    );
+    if (response.data.request_id !== requestId) throw new Error('回答收据编号不匹配');
+    return response.data;
+  } catch (error) {
+    if (isAxiosError(error) && error.response?.status === 404) return null;
+    throw error;
+  }
 }
 
 export async function finishMockInterview(recordId: string): Promise<MockFinishResp> {
   const res = await apiClient.post(`/mock-interviews/${encodeURIComponent(recordId)}/finish`);
+  clearAnswerIntent(recordId);
   return res.data;
 }
 
@@ -94,6 +112,7 @@ interface AbandonMockResp {
 
 export async function abandonMockInterview(recordId: string): Promise<AbandonMockResp> {
   const res = await apiClient.delete(`/mock-interviews/${encodeURIComponent(recordId)}`);
+  clearAnswerIntent(recordId);
   return res.data;
 }
 

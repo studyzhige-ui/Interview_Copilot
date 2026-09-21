@@ -1401,6 +1401,7 @@ def test_mock_answer_appends_messages_and_advances(
     resp = client.post(
         f"/api/v1/mock-interviews/{record_id}/answer",
         json={
+            "request_id": "00000000-0000-4000-8000-000000000001",
             "answer_text": "我叫小王，三年后端。",
             "question_message_id": runtime.current_question_message_id,
         },
@@ -1459,6 +1460,7 @@ def test_mock_answer_failure_preserves_candidate_answer_for_recovery(
     response = client.post(
         f"/api/v1/mock-interviews/{record_id}/answer",
         json={
+            "request_id": "00000000-0000-4000-8000-000000000001",
             "answer_text": "这段回答必须被保留",
             "question_message_id": runtime.current_question_message_id,
         },
@@ -1635,7 +1637,11 @@ def test_answer_with_stale_token_maps_to_409(client: TestClient, db: Session):
 
     resp = client.post(
         f"/api/v1/mock-interviews/{record_id}/answer",
-        json={"answer_text": "回答", "question_message_id": 41},
+        json={
+            "request_id": "00000000-0000-4000-8000-000000000001",
+            "answer_text": "回答",
+            "question_message_id": 41,
+        },
     )
     assert resp.status_code == 409
     assert "已推进" in resp.json()["detail"]

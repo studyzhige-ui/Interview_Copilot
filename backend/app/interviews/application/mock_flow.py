@@ -24,6 +24,9 @@ import json
 import logging
 from dataclasses import dataclass
 
+from app.schemas.chat import MockAnswerRequest, MockAnswerResp, MockLiveMessage
+from app.interviews.application import mock_answer_receipts
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -352,6 +355,7 @@ async def submit_answer(
     answer_audio_file_asset_id: str | None,
     user_id: str | None = None,
     question_message_id: int,
+    request_id: str,
 ):
     """One turn in TWO short transactions (MOCK-4):
 
@@ -369,22 +373,39 @@ async def submit_answer(
 
     Returns only the persisted interviewer fields needed by the live API.
     """
-    # Freeze scalar inputs before committing Phase A. Accessing an expired ORM
-    # row later would silently start a fresh transaction across the model await.
-    conversation_id = runtime.conversation_id
-    record_id = runtime.interview_record_id
-    target_question_count = runtime.target_question_count
-    # Serialize lifecycle mutations in the same record -> runtime lock order.
+    command = MockAnswerRequest(
+        request_id=request_id,
+        answer_text=answer_text,
+        answer_audio_file_asset_id=answer_audio_file_asset_id,
+        question_message_id=question_message_id,
+    )
+    record_id, owner = record.id, record.user_id
     active_record = (
         db.query(InterviewRecord)
-        .filter_by(id=record_id, user_id=runtime.user_id, source="mock")
+        .filter_by(id=record_id, user_id=owner, source="mock")
         .with_for_update()
         .populate_existing()
         .one_or_none()
     )
-    if active_record is None or active_record.status != STATUS_MOCK_IN_PROGRESS:
+    if active_record is None:
+        raise StaleQuestionError("the mock interview is no longer available")
+    replay = mock_answer_receipts.replay(db, record_id, command)
+    if replay is not None:
+        # Release this read lock too; no model, file or cursor mutation on replay.
+        db.rollback()
+        return SubmittedTurn(
+            question_message_id=replay.message.id,
+            interviewer_message=replay.message.text,
+            is_ready_to_finish=replay.end_suggested,
+        )
+    if active_record.status != STATUS_MOCK_IN_PROGRESS or runtime is None:
         raise StaleQuestionError("the mock interview is no longer active")
-
+    # Refresh the cursor under the record lock, not a caller's stale identity map.
+    db.refresh(runtime)
+    if runtime.interview_record_id != record_id or runtime.user_id != owner:
+        raise StaleQuestionError("the mock runtime does not belong to this record")
+    conversation_id = runtime.conversation_id
+    target_question_count = runtime.target_question_count
     if question_message_id != runtime.current_question_message_id:
         raise StaleQuestionError(
             f"answer targets message {question_message_id}, current is "
@@ -415,6 +436,7 @@ async def submit_answer(
         raise QuestionBusyError("the current question is already being answered")
 
     claim_generation = runtime.answer_claim_generation
+    mock_answer_receipts.start(db, record_id, command, claim_generation)
 
     # ── Phase A: persist the answer, commit ─────────────────────────
     last = _last_message(db, conversation_id)
@@ -491,6 +513,7 @@ async def submit_answer(
             record_id,
             question_message_id=question_message_id,
             claim_generation=claim_generation,
+            request_id=request_id,
         )
         raise
 
@@ -525,6 +548,17 @@ async def submit_answer(
             commit=False,
         )
         current.answer_claimed_at = None
+        result = MockAnswerResp(
+            message=MockLiveMessage(
+                id=assistant_msg.id,
+                speaker="interviewer",
+                text=turn.interviewer_message,
+            ),
+            end_suggested=turn.is_ready_to_finish,
+        )
+        mock_answer_receipts.complete(
+            db, record_id, request_id, claim_generation, result
+        )
         db.commit()
     except BaseException:
         mock_runtime_service.release_question_claim(
@@ -532,12 +566,13 @@ async def submit_answer(
             record_id,
             question_message_id=question_message_id,
             claim_generation=claim_generation,
+            request_id=request_id,
         )
         raise
     return SubmittedTurn(
-        question_message_id=assistant_msg.id,
-        interviewer_message=turn.interviewer_message,
-        is_ready_to_finish=turn.is_ready_to_finish,
+        question_message_id=result.message.id,
+        interviewer_message=result.message.text,
+        is_ready_to_finish=result.end_suggested,
     )
 
 

@@ -2388,6 +2388,114 @@
         "title": "LinkExistingOpportunity",
         "type": "object"
       },
+      "MockAnswerReceipt": {
+        "properties": {
+          "question_message_id": {
+            "title": "Question Message Id",
+            "type": "integer"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MockAnswerResp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "enum": [
+              "in_progress",
+              "completed",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "question_message_id",
+          "status",
+          "response"
+        ],
+        "title": "MockAnswerReceipt",
+        "type": "object"
+      },
+      "MockAnswerReceiptResponseContract": {
+        "$ref": "#/components/schemas/MockAnswerReceipt"
+      },
+      "MockAnswerRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_audio_file_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Answer Audio File Asset Id"
+          },
+          "answer_text": {
+            "maxLength": 50000,
+            "minLength": 1,
+            "title": "Answer Text",
+            "type": "string"
+          },
+          "question_message_id": {
+            "exclusiveMinimum": 0,
+            "title": "Question Message Id",
+            "type": "integer"
+          },
+          "request_id": {
+            "maxLength": 36,
+            "minLength": 36,
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "answer_text",
+          "question_message_id"
+        ],
+        "title": "MockAnswerRequest",
+        "type": "object"
+      },
+      "MockAnswerRequestRequestContract": {
+        "$ref": "#/components/schemas/MockAnswerRequest"
+      },
+      "MockAnswerResp": {
+        "description": "``POST /mock-interviews/{record_id}/answer`` — next interviewer line.",
+        "properties": {
+          "end_suggested": {
+            "title": "End Suggested",
+            "type": "boolean"
+          },
+          "message": {
+            "$ref": "#/components/schemas/MockLiveMessage"
+          }
+        },
+        "required": [
+          "message",
+          "end_suggested"
+        ],
+        "title": "MockAnswerResp",
+        "type": "object"
+      },
+      "MockAnswerRespResponseContract": {
+        "$ref": "#/components/schemas/MockAnswerResp"
+      },
       "MockClientActionRequest": {
         "additionalProperties": false,
         "description": "Durable request stored in the existing AgentInteraction record.",
@@ -2789,6 +2897,33 @@
           "runtime_status"
         ],
         "title": "MockEnterLivePayload",
+        "type": "object"
+      },
+      "MockLiveMessage": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "speaker": {
+            "enum": [
+              "interviewer",
+              "candidate"
+            ],
+            "title": "Speaker",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "speaker",
+          "text"
+        ],
+        "title": "MockLiveMessage",
         "type": "object"
       },
       "MockPrefillPayload": {

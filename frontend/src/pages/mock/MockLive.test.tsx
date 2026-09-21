@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   getMockLiveState,
+  getMockAnswerReceipt,
   prepareMockAnswerAudio,
   submitMockAnswer,
 } from '@/api/mock';
@@ -28,6 +29,7 @@ vi.mock('@/api/mock', () => ({
   abandonMockInterview: vi.fn(),
   finishMockInterview: vi.fn(),
   getMockLiveState: vi.fn(),
+  getMockAnswerReceipt: vi.fn(),
   prepareMockAnswerAudio: vi.fn(),
   submitMockAnswer: vi.fn(),
 }));
@@ -67,6 +69,8 @@ const opening = { id: 10, speaker: 'interviewer' as const, text: '请先做自�
 
 describe('MockLive', () => {
   beforeEach(() => {
+    sessionStorage.clear();
+    vi.mocked(getMockAnswerReceipt).mockReset().mockResolvedValue(null);
     vi.mocked(getMockLiveState).mockReset();
     vi.mocked(prepareMockAnswerAudio).mockReset();
     vi.mocked(submitMockAnswer).mockReset();
@@ -138,6 +142,7 @@ describe('MockLive', () => {
     expect(await screen.findByText('请继续讲项目难点')).toBeInTheDocument();
     await waitFor(() => expect(submitMockAnswer).toHaveBeenCalledTimes(2));
     expect(submitMockAnswer).toHaveBeenLastCalledWith('record-1', {
+      request_id: expect.any(String),
       answer_text: '我负责接口性能优化',
       question_message_id: 10,
     });
@@ -175,6 +180,7 @@ describe('MockLive', () => {
 
     await waitFor(() => {
       expect(submitMockAnswer).toHaveBeenCalledWith('record-1', {
+        request_id: expect.any(String),
         answer_text: '这是我修订后的回答',
         answer_audio_file_asset_id: 'fa_voice_1',
         question_message_id: 10,
@@ -261,6 +267,18 @@ describe('MockLive', () => {
     await screen.findByText('已提交的下一题');
     expect(submitMockAnswer).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: '重试生成下一题' })).not.toBeInTheDocument();
+  });
+
+  it('an in-progress receipt permits read-only recovery but not another generation', async () => {
+    vi.mocked(submitMockAnswer).mockRejectedValueOnce(new Error('response lost'));
+    vi.mocked(getMockAnswerReceipt).mockResolvedValue({ request_id: 'receipt-id', question_message_id: 10, status: 'in_progress', response: null });
+    vi.mocked(getMockLiveState).mockResolvedValue({ messages: [opening, { id: 11, speaker: 'candidate', text: '回答' }] });
+    render(<MockLive recordId="record-1" initialMessages={[opening]} ttsVoice="zh-CN-YunxiNeural" onFinished={vi.fn()} onAbandoned={vi.fn()} />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '回答' } });
+    fireEvent.click(screen.getByRole('button', { name: '提交' }));
+    await screen.findByText('回答请求已登记，正在生成下一题；重新连接只核对收据。');
+    expect(submitMockAnswer).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: '重试生成下一题' })).toBeNull();
   });
 
 });

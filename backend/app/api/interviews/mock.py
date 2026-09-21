@@ -18,6 +18,7 @@ runtime rows in ``mock_runtime_service``.
 import io
 import logging
 import os
+from uuid import UUID
 
 from fastapi import (
     APIRouter,
@@ -44,6 +45,7 @@ from app.schemas.chat import (
     MockAbandonResp,
     MockAnswerAudioResp,
     MockAnswerRequest,
+    MockAnswerReceipt,
     MockAnswerResp,
     MockFinishResp,
     MockInProgressResp,
@@ -56,6 +58,7 @@ from app.schemas.chat import (
     TTSRequest,
 )
 from app.interviews.application.mock_sources import MockJobDescriptionUnavailable
+from app.interviews.application import mock_answer_receipts
 from app.interviews.application import mock_flow
 from app.interviews.application import mock_interview_service
 from app.interviews.application import mock_runtime_service
@@ -170,6 +173,26 @@ def start_mock_interview(
     )
 
 
+@router.get(
+    "/mock-interviews/{record_id}/answer-receipts/{request_id}",
+    response_model=MockAnswerReceipt,
+)
+@limiter.limit(RATE_DEFAULT)
+def get_mock_answer_receipt(
+    request: Request,
+    response: Response,
+    record_id: str,
+    request_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    record = _owned_mock_record_or_404(db, record_id, current_user.username)
+    receipt = mock_answer_receipts.read_receipt(db, record.id, str(request_id))
+    if receipt is None:
+        raise HTTPException(404, "回答请求收据尚不存在")
+    return receipt
+
+
 # ── /answer ────────────────────────────────────────────────────────────────
 
 
@@ -186,6 +209,17 @@ async def submit_mock_answer(
     """One turn: persist the candidate's answer, generate the next interviewer
     line from the plan + stage + recent messages, persist it, advance runtime."""
     record = _owned_mock_record_or_404(db, record_id, current_user.username)
+    # Shared read-only fast path before mutable clip validation or runtime lookup.
+    try:
+        replay = mock_answer_receipts.replay(db, record.id, body)
+    except mock_answer_receipts.AnswerRequestConflict as exc:
+        raise HTTPException(409, "请求编号已用于不同回答，请先核对收据。") from exc
+    except mock_answer_receipts.AnswerRequestUnresolved as exc:
+        raise HTTPException(
+            409, "该请求仍在执行或结果未确认，请读取收据，不要自动重新生成。"
+        ) from exc
+    if replay is not None:
+        return replay
     runtime = mock_runtime_service.get_runtime_for_record(
         db, interview_record_id=record_id
     )
@@ -220,7 +254,16 @@ async def submit_mock_answer(
             answer_audio_file_asset_id=body.answer_audio_file_asset_id,
             user_id=current_user.username,
             question_message_id=body.question_message_id,
+            request_id=body.request_id,
         )
+    except (
+        mock_answer_receipts.AnswerRequestConflict,
+        mock_answer_receipts.AnswerRequestUnresolved,
+    ) as exc:
+        db.rollback()
+        raise HTTPException(
+            409, "请求已登记，请核对收据；重新生成需要明确发起新请求。"
+        ) from exc
     except mock_flow.StaleQuestionError as exc:
         # May also be a late model result fenced after Phase A committed. Only
         # the current transaction is rolled back; the saved answer survives.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from uuid import uuid4
 from datetime import UTC, datetime
 
 import pytest
@@ -91,6 +92,7 @@ def test_stale_question_token_rejected(db_session, monkeypatch):
         asyncio.run(
             mock_flow.submit_answer(
                 db_session,
+                request_id=str(uuid4()),
                 record=record,
                 runtime=runtime,
                 answer_text="回答",
@@ -102,6 +104,7 @@ def test_stale_question_token_rejected(db_session, monkeypatch):
     turn = asyncio.run(
         mock_flow.submit_answer(
             db_session,
+            request_id=str(uuid4()),
             record=record,
             runtime=runtime,
             answer_text="回答",
@@ -122,6 +125,7 @@ def test_question_claim_rejects_overlapping_generation(db_session, monkeypatch):
         asyncio.run(
             mock_flow.submit_answer(
                 db_session,
+                request_id=str(uuid4()),
                 record=record,
                 runtime=runtime,
                 answer_text="重复提交",
@@ -146,6 +150,7 @@ def test_dangling_answer_retry_not_double_recorded(db_session, monkeypatch):
         asyncio.run(
             mock_flow.submit_answer(
                 db_session,
+                request_id=str(uuid4()),
                 record=record,
                 runtime=runtime,
                 answer_text="我的回答",
@@ -162,6 +167,7 @@ def test_dangling_answer_retry_not_double_recorded(db_session, monkeypatch):
     asyncio.run(
         mock_flow.submit_answer(
             db_session,
+            request_id=str(uuid4()),
             record=record,
             runtime=runtime,
             answer_text="我的回答",
@@ -183,6 +189,7 @@ def test_length_warning_is_fed_to_next_turn_without_forcing_finish(
     turn = asyncio.run(
         mock_flow.submit_answer(
             db_session,
+            request_id=str(uuid4()),
             record=record,
             runtime=runtime,
             answer_text="第一答",
@@ -201,6 +208,7 @@ def test_full_conversation_history_is_fed_to_prompt(db_session, monkeypatch):
     asyncio.run(
         mock_flow.submit_answer(
             db_session,
+            request_id=str(uuid4()),
             record=record,
             runtime=runtime,
             answer_text="回答",
@@ -319,6 +327,7 @@ def test_expired_owner_cannot_publish_or_release_successor(
         asyncio.run(
             mock_flow.submit_answer(
                 db_session,
+                request_id=str(uuid4()),
                 record=record,
                 runtime=runtime,
                 answer_text="唯一的原回答",
@@ -360,6 +369,7 @@ def test_model_result_cannot_extend_finished_interview(db_session, monkeypatch):
         asyncio.run(
             mock_flow.submit_answer(
                 db_session,
+                request_id=str(uuid4()),
                 record=record,
                 runtime=runtime,
                 answer_text="保留这个回答",
@@ -388,6 +398,7 @@ def test_dangling_answer_cannot_be_replaced_without_an_explicit_revision(
         asyncio.run(
             mock_flow.submit_answer(
                 db_session,
+                request_id=str(uuid4()),
                 record=record,
                 runtime=runtime,
                 answer_text="original answer",
@@ -400,6 +411,7 @@ def test_dangling_answer_cannot_be_replaced_without_an_explicit_revision(
         asyncio.run(
             mock_flow.submit_answer(
                 db_session,
+                request_id=str(uuid4()),
                 record=record,
                 runtime=runtime,
                 answer_text="different answer",
