@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     # Hugging Face, model, and framework caches
     CACHE_DIR: str = ""
     # Optional read-only weights shared from a Windows data drive into WSL.
-    # Framework metadata/locks remain under writable CACHE_DIR.
+    # Framework metadata/locks remain under writable CACHE_DIR separately.
     MODEL_ROOT_DIR: str = ""
     MODEL_REVISIONS_JSON: dict[str, str] = Field(default_factory=dict)
     LOCAL_MODELS_OFFLINE: bool = False
@@ -251,7 +251,10 @@ class Settings(BaseSettings):
     # with do_ocr=False so text PDFs still parse instead of failing on a missing
     # engine. Set False to disable OCR globally even where the engine is present.
     RAG_OCR_ENABLED: bool = True
-    TTS_DEFAULT_VOICE: str = "zh-CN-YunxiNeural"
+    TTS_PROVIDER: Literal["local_qwen3_tts", "edge"] = "local_qwen3_tts"
+    TTS_MODEL: str = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+    TTS_DEFAULT_VOICE: str = "Vivian"
+    TTS_LANGUAGE: str = "Auto"
     LEVER_API_BASE: str = "https://api.lever.co/v0"
     LEVER_SITES: str = "openai"
 

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { listResumes } from '@/api/resumes';
 import { listJobOpportunities } from '@/api/careerProcess';
-import { MockSetup } from './MockSetup';
+import { MockSetup, loadPreferredVoice } from './MockSetup';
 
 vi.mock('@/api/resumes', () => ({
   createResumeFromFile: vi.fn(),
@@ -113,8 +113,20 @@ describe('MockSetup', () => {
     await screen.findByRole('button', { name: /选已有.*1/ });
     fireEvent.click(screen.getByRole('button', { name: /专项练习.*无需简历/ }));
     fireEvent.change(screen.getByLabelText('本次考察目标'), { target: { value: '数据库锁' } });
-    fireEvent.click(screen.getByRole('button', { name: '开始模拟面试' }));
+    fireEvent.click(screen.getByRole('button', { name: /开始模拟面试/ }));
     expect(onReady).toHaveBeenCalledWith(expect.objectContaining({ resume_id: undefined }));
   });
 
+});
+
+
+it('old Edge preferences do not silently select a local voice', () => {
+  localStorage.clear();
+  localStorage.setItem('mock.ttsVoice', 'zh-CN-YunxiNeural');
+  expect(loadPreferredVoice()).toBe('default');
+  localStorage.setItem('mock.ttsVoice.v2', 'Serena');
+  expect(loadPreferredVoice()).toBe('Serena');
+  localStorage.setItem('mock.ttsVoice.v2', 'unknown');
+  expect(loadPreferredVoice()).toBe('default');
+  localStorage.clear();
 });

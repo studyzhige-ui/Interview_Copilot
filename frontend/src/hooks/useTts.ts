@@ -69,6 +69,10 @@ export function useTts({ enabled, voice }: UseTtsOptions) {
   const speak = useCallback(async (text: string) => {
     if (!enabled || !mounted.current || !text.trim()) return;
     stop();
+    if (text.length > 600) {
+      setState({ phase: 'error', message: '本地朗读每次最多 600 字，请阅读完整文字；不会截断内容。' });
+      return;
+    }
     const speech: Speech = {
       generation: generation.current,
       abort: new AbortController(),
@@ -93,7 +97,7 @@ export function useTts({ enabled, voice }: UseTtsOptions) {
     try {
       const response = await apiClient.post(
         '/mock-interviews/tts',
-        { text: text.trim(), voice },
+        { text: text.trim(), voice: voice === 'default' ? undefined : voice },
         { responseType: 'blob', signal: speech.abort.signal },
       );
       // Abort is best effort. A response can already be queued, or an adapter

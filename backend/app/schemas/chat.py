@@ -297,8 +297,10 @@ class MockAnswerAudioResp(BaseModel):
 
 
 class TTSRequest(BaseModel):
-    text: str
-    voice: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=600)
+    voice: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 __all__ = [

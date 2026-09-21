@@ -600,19 +600,41 @@ async def synthesize_speech(
     response: Response,
     body: TTSRequest,
     _current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Convert text to speech using edge-tts. Returns an mp3 audio stream."""
+    """Generate explicitly selected speech; audio format follows the provider."""
     from app.media.application.tts_service import tts_service
 
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="Text is empty")
 
-    audio_bytes = await tts_service.synthesize(text=body.text, voice=body.voice)
-    if not audio_bytes:
+    from app.core.model_policy import LocalModelPolicyError
+    from app.local_inference.client import LocalInferenceNotStarted
+    from app.core.execution_errors import ModelOutcomeUnknownError
+
+    # Authentication is complete; retain no database connection during speech.
+    db.close()
+    try:
+        audio = await tts_service.synthesize(text=body.text, voice=body.voice)
+    except (LocalModelPolicyError, LocalInferenceNotStarted) as exc:
+        raise HTTPException(
+            503, "本地语音尚未就绪，请检查模型与推理服务；未切换云端。"
+        ) from exc
+    except ModelOutcomeUnknownError as exc:
+        raise HTTPException(
+            503, "语音生成结果未确认，请使用文字继续；不会自动重试。"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(422, "语音文本、音色或输出超出允许范围。") from exc
+    if not audio.data:
         raise HTTPException(status_code=500, detail="TTS synthesis failed")
 
     return StreamingResponse(
-        iter([audio_bytes]),
-        media_type="audio/mpeg",
-        headers={"Content-Length": str(len(audio_bytes))},
+        iter([audio.data]),
+        media_type=audio.media_type,
+        headers={
+            "Content-Length": str(len(audio.data)),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )

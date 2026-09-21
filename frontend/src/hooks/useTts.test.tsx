@@ -171,3 +171,20 @@ describe('TTS playback generation', () => {
     expect(players[0].play).not.toHaveBeenCalled();
   });
 });
+
+
+it('deployment-default voice is omitted and WAV keeps its real content type', async () => {
+  const blob = new Blob(['wav'], { type: 'audio/wav' });
+  post.mockResolvedValueOnce({ data: blob });
+  const { result } = renderHook(() => useTts({ enabled: true, voice: 'default' }));
+  await act(() => result.current.speak('你好'));
+  expect(post.mock.calls[0][1]).toEqual({ text: '你好', voice: undefined });
+  expect(create).toHaveBeenCalledWith(blob);
+  expect(result.current.state.phase).toBe('playing');
+});
+it('oversized speech is not silently truncated or dispatched', async () => {
+  const { result } = renderHook(() => useTts({ enabled: true }));
+  await act(() => result.current.speak('字'.repeat(601)));
+  expect(post).not.toHaveBeenCalled();
+  expect(result.current.state.phase).toBe('error');
+});

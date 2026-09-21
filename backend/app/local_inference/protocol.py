@@ -21,7 +21,14 @@ VERSION = 1
 MAX_FRAME = 4 * 1024 * 1024
 MAX_TEXT_BYTES = 256 * 1024
 MAX_ITEMS = 32
-ROLES = {"embedding", "reranking", "transcription", "alignment", "diarization"}
+ROLES = {
+    "embedding",
+    "reranking",
+    "transcription",
+    "alignment",
+    "diarization",
+    "synthesis",
+}
 PRIORITIES = {"interactive": 0, "background": 10}
 LOCAL_EMBEDDING_CONTRACT = "sentence-transformer-explicit-prompts-v1"
 
@@ -109,6 +116,8 @@ def request(value: dict) -> dict:
         "diarization",
     ):
         expected = (expected - {"texts", "query"}) | {"audio", "text", "language"}
+    if isinstance(value, dict) and value.get("role") == "synthesis":
+        expected = (expected - {"texts", "query"}) | {"text", "voice", "language"}
     if not isinstance(value, dict) or set(value) != expected:
         raise ProtocolError("invalid_request")
     if type(value["version"]) is not int or value["version"] != VERSION:
@@ -142,6 +151,10 @@ def request(value: dict) -> dict:
         from .audio import validate_audio_request
 
         return validate_audio_request(value)
+    if value["role"] == "synthesis":
+        from .synthesis_audio import validate_synthesis_request
+
+        return validate_synthesis_request(value)
     texts, query = value["texts"], value["query"]
     if not isinstance(texts, list) or not 1 <= len(texts) <= MAX_ITEMS:
         raise ProtocolError("invalid_text_count")
@@ -186,6 +199,10 @@ def same_user(sock) -> bool:
 
 
 def validate_output(task, values, *, dimension):
+    if task["role"] == "synthesis":
+        from .synthesis_audio import validate_synthesis_result
+
+        return validate_synthesis_result(task, values)
     if task["role"] in ("transcription", "alignment", "diarization"):
         if task["role"] == "diarization":
             from .speaker_audio import validate_diarization_result

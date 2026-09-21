@@ -17,6 +17,9 @@ export type InterviewPurpose = 'full' | 'project_deep_dive' | 'focused_practice'
 export type InterviewerStyle = 'friendly' | 'professional' | 'rigorous' | 'pressure';
 export type TargetQuestionCount = 15 | 20 | 30;
 export type TtsVoice =
+  | 'default' | 'Vivian' | 'Serena' | 'Uncle_Fu' | 'Dylan' | 'Eric'
+  | 'Ryan' | 'Aiden' | 'Ono_Anna' | 'Sohee'
+  // Explicit legacy deployments can still request an Edge voice.
   | 'zh-CN-YunxiNeural'
   | 'zh-CN-XiaoxiaoNeural'
   | 'zh-CN-YunjianNeural'
@@ -46,12 +49,11 @@ const STYLE_OPTIONS: Array<{ id: InterviewerStyle; label: string; desc: string }
   { id: 'pressure', label: '高压面试官', desc: '连珠追问、质疑回答、压力面' },
 ];
 
-const VOICE_PREF_KEY = 'mock.ttsVoice';
+const VOICE_PREF_KEY = 'mock.ttsVoice.v2';
 const VOICE_OPTIONS: Array<{ id: TtsVoice; label: string }> = [
-  { id: 'zh-CN-YunxiNeural', label: '云希 · 沉稳男声' },
-  { id: 'zh-CN-XiaoxiaoNeural', label: '晓晓 · 自然女声' },
-  { id: 'zh-CN-YunjianNeural', label: '云健 · 专业男声' },
-  { id: 'zh-CN-XiaoyiNeural', label: '晓伊 · 温和女声' },
+  { id: 'default', label: '使用部署配置的默认音色' },
+  ...(['Vivian', 'Serena', 'Uncle_Fu', 'Dylan', 'Eric', 'Ryan', 'Aiden', 'Ono_Anna', 'Sohee'] as const)
+    .map((id) => ({ id, label: `本地 Qwen3 · ${id}` })),
 ];
 
 const LENGTH_OPTIONS: Array<{
@@ -72,7 +74,7 @@ export function loadPreferredVoice(): TtsVoice {
   } catch {
     // Storage may be unavailable in privacy-restricted browsers.
   }
-  return 'zh-CN-YunxiNeural';
+  return 'default';
 }
 
 interface ResumeState {
@@ -330,6 +332,9 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
                 <option key={option.id} value={option.id}>{option.label}</option>
               ))}
             </select>
+            <p className="mt-2 text-[12px] text-stone-500">
+              本地预设音色需要已配置的 Qwen3-TTS。其他部署请选择默认音色；模型不可用时仍可文字面试，不自动改用云端。
+            </p>
           </div>
         </div>
 

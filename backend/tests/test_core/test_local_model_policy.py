@@ -73,11 +73,14 @@ async def test_edge_tts_blocked_before_client_construction(local_only, monkeypat
     from app.media.application import tts_service
 
     connect = Mock(side_effect=AssertionError("online TTS must not start"))
-    monkeypatch.setattr(tts_service.edge_tts, "Communicate", connect)
+    import edge_tts
+
+    monkeypatch.setattr(settings, "TTS_PROVIDER", "edge")
+    monkeypatch.setattr(edge_tts, "Communicate", connect)
     with pytest.raises(LocalModelPolicyError):
         await tts_service.TTSService().synthesize("这是一段本地语音测试。")
     connect.assert_not_called()
-    assert await tts_service.TTSService().synthesize(" ") == b""
+    assert (await tts_service.TTSService().synthesize(" ")).data == b""
 
 
 def test_legacy_configured_deployment_still_allowed(monkeypatch):

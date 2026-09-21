@@ -18,11 +18,13 @@ def binding_for(
     # Changing an instruction or adapter contract DOES require a new index.
     from .audio import ASR_CONTRACT, ALIGN_CONTRACT
     from .speaker_audio import DIARIZATION_CONTRACT
+    from .synthesis_audio import SYNTHESIS_CONTRACT
 
     contract = {
         "transcription": ASR_CONTRACT,
         "alignment": ALIGN_CONTRACT,
         "diarization": DIARIZATION_CONTRACT,
+        "synthesis": SYNTHESIS_CONTRACT,
     }.get(role, LOCAL_EMBEDDING_CONTRACT)
     value = [
         contract,
@@ -85,10 +87,20 @@ class ModelSpec:
             value = getattr(self, name)
             if not isinstance(value, str) or len(value) > 2048:
                 raise ValueError("invalid_prompt_prefix")
-        if self.role in {"reranking", "transcription", "alignment", "diarization"} and (
-            self.dimension != 1 or self.query_prefix or self.text_prefix
-        ):
+        if self.role in {
+            "reranking",
+            "transcription",
+            "alignment",
+            "diarization",
+            "synthesis",
+        } and (self.dimension != 1 or self.query_prefix or self.text_prefix):
             raise ValueError("invalid_nonembedding_spec")
+
+        if self.role == "synthesis":
+            from .synthesis_audio import SYNTHESIS_TOKENS
+
+            if self.max_tokens != SYNTHESIS_TOKENS:
+                raise ValueError("invalid_synthesis_token_budget")
 
     @property
     def binding(self):
