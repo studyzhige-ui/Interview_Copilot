@@ -295,6 +295,7 @@ def _confirm_offer_terms_change(
             Offer.job_opportunity_id == job_id,
         )
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if offer is None:
@@ -357,6 +358,7 @@ def _ensure_offer_deadline_action(db: Session, *, offer: Offer) -> NextAction | 
             NextAction.status.in_(("suggested", "planned")),
         )
         .with_for_update()
+        .populate_existing()
         .all()
     )
     raw_deadline = dict(offer.terms_json or {}).get("response_deadline")
@@ -478,6 +480,7 @@ def _current_offer_locked(
             Offer.job_opportunity_id == job_opportunity_id,
         )
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
 

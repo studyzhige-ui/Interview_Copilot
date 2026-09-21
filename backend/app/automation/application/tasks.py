@@ -1247,6 +1247,7 @@ def _pending_triggers_locked(
             PersistentTaskTrigger.id.asc(),
         )
         .with_for_update()
+        .populate_existing()
         .all()
     )
 

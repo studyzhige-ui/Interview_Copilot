@@ -73,7 +73,10 @@ INPUT_MODELS = (
     MockClientActionTakeoverRequest,
     SubmissionKey,
 )
+from app.schemas.preparation import PreparationBrief  # noqa: E402
+
 OUTPUT_MODELS = (
+    PreparationBrief,
     MockAnswerResp,
     MockAnswerReceipt,
     TranscriptCorrectionReceipt,

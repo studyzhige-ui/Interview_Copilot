@@ -9,7 +9,8 @@ from app.models.long_term_memory import LongTermAgentMemory
 def _workspace(db, user_id: int) -> MemoryWorkspace:
     # Serializes first insertion as well as all control-plane mutations.
     db.query(User).filter(User.id == user_id).with_for_update().one()
-    row = db.get(MemoryWorkspace, user_id)
+    # Locks serialize writers; refresh also fences sessions holding older values.
+    row = db.get(MemoryWorkspace, user_id, populate_existing=True)
     if row is None:
         row = MemoryWorkspace(user_id=user_id)
         db.add(row)
@@ -38,6 +39,7 @@ def suppress_sources(
         .filter(
             MemoryExtraction.user_id == user_id, MemoryExtraction.turn_id.in_(turn_ids)
         )
+        .populate_existing()
         .all()
     ):
         row.status = status
@@ -48,6 +50,7 @@ def suppress_sources(
     for row in (
         db.query(LongTermAgentMemory)
         .filter(LongTermAgentMemory.user_id == user_id)
+        .populate_existing()
         .all()
     ):
         if any(e.get("turn_id") in turn_ids for e in row.evidence_json or []):

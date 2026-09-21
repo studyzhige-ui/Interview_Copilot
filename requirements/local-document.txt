@@ -1,0 +1,3 @@
+# Install in the isolated CPU interpreter selected by PARSER_LOCAL_PYTHON.
+# Docling/OCR assets must be prefetched separately; application runtime never downloads.
+docling[rapidocr]==2.118.1

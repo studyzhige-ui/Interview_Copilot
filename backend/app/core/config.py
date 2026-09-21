@@ -251,6 +251,12 @@ class Settings(BaseSettings):
     # with do_ocr=False so text PDFs still parse instead of failing on a missing
     # engine. Set False to disable OCR globally even where the engine is present.
     RAG_OCR_ENABLED: bool = True
+    # Local document models run in an owned CPU interpreter, never the API/GPU lane.
+    PARSER_LOCAL_PYTHON: str = ""
+    PARSER_TIMEOUT_SECONDS: float = Field(300.0, gt=0, le=3600)
+    PARSER_MAX_INPUT_BYTES: int = Field(50 * 1024 * 1024, ge=1, le=500 * 1024 * 1024)
+    PARSER_MAX_PAGES: int = Field(500, ge=1, le=10000)
+    PARSER_MAX_TEXT_BYTES: int = Field(4_000_000, ge=1, le=8_000_000)
     TTS_PROVIDER: Literal["local_qwen3_tts", "edge"] = "local_qwen3_tts"
     TTS_MODEL: str = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
     TTS_DEFAULT_VOICE: str = "Vivian"

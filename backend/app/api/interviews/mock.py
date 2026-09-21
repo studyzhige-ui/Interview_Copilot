@@ -58,6 +58,7 @@ from app.schemas.chat import (
     TTSRequest,
 )
 from app.interviews.application.mock_sources import MockJobDescriptionUnavailable
+from app.interviews.application.preparation import PreparationSourceChanged
 from app.interviews.application import mock_answer_receipts
 from app.interviews.application import mock_flow
 from app.interviews.application import mock_interview_service
@@ -123,8 +124,14 @@ def start_mock_interview(
             jd_snapshot_version=body.jd_snapshot_version,
             purpose=body.purpose,
             focus=body.focus,
+            resume_version_id=body.resume_version_id,
+            resume_sha256=body.resume_sha256,
+            jd_sha256=body.jd_sha256,
         )
         db.commit()
+    except PreparationSourceChanged as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except MockJobDescriptionUnavailable as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc

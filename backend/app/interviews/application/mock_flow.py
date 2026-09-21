@@ -231,6 +231,9 @@ def start_mock(
     jd_snapshot_version: int | None = None,
     purpose: InterviewPurpose = "full",
     focus: str | None = None,
+    resume_version_id: str | None = None,
+    resume_sha256: str | None = None,
+    jd_sha256: str | None = None,
 ) -> StartedMock:
     """Atomically create record + conversation + opening message + runtime.
 
@@ -246,6 +249,9 @@ def start_mock(
     from app.schemas.mock_preparation import MockPreparationRequest
 
     command = MockPreparationRequest(
+        resume_version_id=resume_version_id,
+        resume_sha256=resume_sha256,
+        jd_sha256=jd_sha256,
         resume_id=resume_id,
         jd_text=jd_text,
         jd_snapshot_id=jd_snapshot_id,
@@ -276,6 +282,15 @@ def start_mock(
         )
         if jd_text is not None or jd_snapshot_id is not None
         else ""
+    )
+
+    from app.interviews.application.preparation import check_preparation_sources
+
+    check_preparation_sources(
+        command,
+        resume_version_id=resolved_resume.artifact_version_id,
+        resume_text=resume_context,
+        jd_text=jd_context,
     )
 
     plan = mock_interview_service.generate_plan(

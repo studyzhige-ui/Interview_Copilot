@@ -128,6 +128,7 @@ def update_settings(
         db.query(AgentMemorySetting)
         .filter(AgentMemorySetting.user_id == user_pk)
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if row is None:
@@ -175,6 +176,7 @@ def update_conversation_controls(
             Conversation.user_id == user_pk,
         )
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if conversation is None:
@@ -300,6 +302,7 @@ def promote_memory_to_preference(
         db.query(CopilotPreference)
         .filter(CopilotPreference.user_id == user_pk)
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if preference is None:
@@ -598,6 +601,7 @@ def _locked_memory(db: Session, user_pk: int, memory_id: str) -> LongTermAgentMe
             LongTermAgentMemory.user_id == user_pk,
         )
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if row is None:

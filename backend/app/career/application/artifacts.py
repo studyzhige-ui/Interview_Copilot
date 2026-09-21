@@ -804,6 +804,7 @@ def _owned_artifact_locked(db: Session, user_pk: int, artifact_id: str) -> Artif
         db.query(Artifact)
         .filter(Artifact.id == artifact_id, Artifact.user_id == user_pk)
         .with_for_update()
+        .populate_existing()
         .one_or_none()
     )
     if artifact is None:

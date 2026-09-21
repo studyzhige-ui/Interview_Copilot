@@ -340,6 +340,7 @@ def test_incomplete_new_download_does_not_activate_or_damage_old(tmp_path, monke
 
 
 def test_doctor_does_not_import_models_or_change_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "TTS_PROVIDER", "edge")
     for name in ("EMBEDDING_PROVIDER", "RERANKER_PROVIDER"):
         monkeypatch.setattr(settings, name, "local")
     monkeypatch.setattr(settings, "TRANSCRIPTION_PROVIDER", "local_whisperx")
@@ -359,3 +360,57 @@ def test_doctor_does_not_import_models_or_change_files(tmp_path, monkeypatch):
     assert report["tts"]["enabled_by_policy"] is False
     assert report["acceptance"]["audio_review"] == "not_exercised"
     assert before == set(tmp_path.rglob("*"))
+
+
+def test_doctor_recognizes_selected_qwen_roles_not_legacy_whisper_only(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "TRANSCRIPTION_PROVIDER", "local_qwen_asr")
+    monkeypatch.setattr(settings, "TTS_PROVIDER", "local_qwen3_tts")
+    monkeypatch.setattr(settings, "AUXILIARY_MODEL_POLICY", "local_only")
+    monkeypatch.setattr(settings, "DIARIZATION_MODE", "auto")
+    report = build_report(model_root=tmp_path / "models", cache_root=tmp_path / "cache")
+    selected = {row["role"]: row["status"] for row in report["models"]}
+    for role in ("transcription", "alignment", "diarization", "synthesis"):
+        assert selected[role] != "not_selected_local"
+        assert role not in report["policy"]["conflicts"]
+        assert role in report["missing_or_incomplete_roles"]
+    assert report["tts"]["local"] and report["tts"]["enabled_by_policy"]
+    assert report["runtime"]["broker_connection"] == "not_exercised"
+
+
+def test_doctor_realtime_assets_use_explicit_local_hashes_without_loading(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    from app.media.realtime.config import config
+    from scripts.doctor_local import _detector_asset
+
+    path = tmp_path / "model.onnx"
+    path.write_bytes(b"test asset, not a real model")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    monkeypatch.setattr(config, "enabled", True)
+    for role in ("vad", "turn"):
+        monkeypatch.setattr(config, f"{role}_path", str(path))
+        monkeypatch.setattr(config, f"{role}_sha256", digest)
+    report = build_report(
+        model_root=tmp_path / "models",
+        cache_root=tmp_path / "cache",
+        verify_hashes=True,
+    )
+    assert len(report["realtime"]["detectors"]) == 2
+    assert all(
+        row["status"] == "detector_hash_verified" and row["loader_verified"] is False
+        for row in report["realtime"]["detectors"]
+    )
+    assert (
+        _detector_asset(str(path), "0" * 64, True)["status"] == "detector_hash_mismatch"
+    )
+    assert (
+        _detector_asset("https://host/model.onnx", digest, False)["status"]
+        == "detector_not_configured"
+    )
+    assert (
+        _detector_asset(str(tmp_path / "missing"), digest, False)["status"]
+        == "detector_file_invalid"
+    )
