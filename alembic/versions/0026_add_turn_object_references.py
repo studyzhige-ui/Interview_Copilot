@@ -31,7 +31,9 @@ def _empty_jsonb() -> sa.Column:
 def upgrade() -> None:
     op.add_column("pending_submissions", _empty_jsonb())
     op.add_column("conversation_turns", _empty_jsonb())
-    op.alter_column("pending_submissions", "object_references_json", server_default=None)
+    op.alter_column(
+        "pending_submissions", "object_references_json", server_default=None
+    )
     op.alter_column("conversation_turns", "object_references_json", server_default=None)
 
 

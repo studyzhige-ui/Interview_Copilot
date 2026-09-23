@@ -361,7 +361,9 @@ def test_manual_context_endpoints_enforce_owner_and_idle(checkpoint_db):
     with pytest.raises(HTTPException) as busy:
         asyncio.run(
             compact_context(
-                "window", current_user=SimpleNamespace(id=row.user_id), db=checkpoint_db
+                "window",
+                current_user=SimpleNamespace(id=row.user_id, username="owner"),
+                db=checkpoint_db,
             )
         )
     assert busy.value.status_code == 409

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
@@ -120,6 +120,8 @@ class Settings(BaseSettings):
     # Usage is observed per turn but does not determine task completion.
     # Cancellation, context limits, request/tool timeouts, and the worker
     # lifecycle provide the operational safety boundary.
+    AGENT_RUN_TIMEOUT_SECONDS: int = 1800
+    AGENT_RUN_MAX_TOTAL_TOKENS: int = 250000
     AGENT_TOOL_TIMEOUT_SECONDS: int = 30
     AGENT_TEMPERATURE: float = 0.2
     AGENT_MAX_RESPONSE_TOKENS: int = 4096
@@ -131,6 +133,7 @@ class Settings(BaseSettings):
     ANTHROPIC_PROMPT_CACHE_ENABLED: bool = True
     ANTHROPIC_PROMPT_CACHE_TTL: str = "5m"
     TURN_HEARTBEAT_SECONDS: int = 10
+    TURN_QUEUE_TIMEOUT_SECONDS: int = 900
     TURN_STALE_SECONDS: int = 60
     # Delay before the single automatic Memory producer rechecks that a
     # completed source Turn's Conversation is idle. Contribution remains
@@ -146,6 +149,8 @@ class Settings(BaseSettings):
     AGENT_MEMORY_LEASE_SECONDS: int = 300
     AGENT_MEMORY_MODEL_TIMEOUT_SECONDS: int = 120
     AGENT_MEMORY_RECALL_TIMEOUT_SECONDS: int = 12
+    AGENT_MEMORY_RECALL_INPUT_TOKENS: int = Field(default=8000, ge=1000)
+    AGENT_MEMORY_RECALL_OUTPUT_TOKENS: int = Field(default=2400, ge=256)
     AGENT_MEMORY_CONSOLIDATION_INPUT_TOKENS: int = 16000
     # Model-visible Tool-result projection thresholds. The canonical redacted
     # result remains on AgentToolCall and is paged by exact call identity.
@@ -293,28 +298,18 @@ class Settings(BaseSettings):
     S3_PUBLIC_ENDPOINT_URL: str = ""
     S3_BUCKET_NAME: str = "interview-copilot-bucket"
 
-    # Database connection pool — PER-WORKER limits.
-    #
-    # Hard math when running multi-worker:
-    #
-    #     uvicorn_workers * (DB_POOL_SIZE + DB_MAX_OVERFLOW)
-    #     + celery_concurrency
-    #     + headroom (replication / vacuum / psql)
-    #     <= postgresql.conf max_connections
-    #
-    # Default Postgres `max_connections` is 100. With these values
-    # (20 + 20 = 40 per process) you can safely run 2 uvicorn workers
-    # plus a few Celery slots; for 4+ workers either bump
-    # max_connections to 300+ or run pgbouncer in front.
-    DB_POOL_SIZE: int = 20
-    DB_MAX_OVERFLOW: int = 20
+    # Per-process budget, including every API and worker process:
+    # process_count * (pool_size + overflow) + operational headroom
+    # must fit PostgreSQL max_connections (default 100).
+    DB_POOL_TIMEOUT: int = 10
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 5
     DB_POOL_RECYCLE: int = 1800  # seconds
 
-    # Redis connection pool — shared across verification codes, celery
-    # broker/result, rate limiter, and ad-hoc app cache. Same per-worker
-    # multiplication applies; Redis default maxclients is 10000 so this is
-    # rarely the bottleneck.
-    REDIS_POOL_SIZE: int = 50
+    # Per-loop application pools. Celery and the limiter own separate pools.
+    # Blocking SSE/cancellation reads cannot consume command capacity.
+    REDIS_POOL_SIZE: int = 20
+    REDIS_EVENT_POOL_SIZE: int = 64
 
     @field_validator(
         "CACHE_DIR",
@@ -382,7 +377,9 @@ class Settings(BaseSettings):
         if not 1 <= self.GMAIL_PROVIDER_TIMEOUT_SECONDS <= 60:
             raise ValueError("GMAIL_PROVIDER_TIMEOUT_SECONDS must be between 1 and 60")
         if not 60 <= self.PLUGIN_OAUTH_STATE_TTL_SECONDS <= 900:
-            raise ValueError("PLUGIN_OAUTH_STATE_TTL_SECONDS must be between 60 and 900")
+            raise ValueError(
+                "PLUGIN_OAUTH_STATE_TTL_SECONDS must be between 60 and 900"
+            )
         if not 1 <= self.PLUGIN_PROVIDER_TIMEOUT_SECONDS <= 60:
             raise ValueError("PLUGIN_PROVIDER_TIMEOUT_SECONDS must be between 1 and 60")
         if self.ANTHROPIC_PROMPT_CACHE_TTL not in {"5m", "1h"}:

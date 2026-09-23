@@ -53,7 +53,7 @@ def _entry(provider: str, model: str) -> ModelEntry:
 @pytest.fixture
 def fake_redis(monkeypatch):
     fr = _FakeRedis()
-    monkeypatch.setattr(pipeline_mod, "redis_client", fr)
+    monkeypatch.setattr(pipeline_mod, "get_redis_client", lambda: fr)
     return fr
 
 

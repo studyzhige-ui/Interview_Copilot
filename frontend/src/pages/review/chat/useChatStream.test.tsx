@@ -10,6 +10,7 @@ const { createIdentity, streamChatTurn, toastInfo } = vi.hoisted(() => ({
 
 vi.mock('@/api/chat', () => ({
   cancelChatTurn: vi.fn(),
+  getChatTranscript: vi.fn().mockResolvedValue({ messages: [] }),
   createChatSubmissionIdentity: createIdentity,
   streamChatTurn,
 }));
@@ -21,7 +22,7 @@ vi.mock('@/store/uiStore', () => ({
 }));
 
 import { useChatStream } from './useChatStream';
-import { cancelChatTurn } from '@/api/chat';
+import { cancelChatTurn, getChatTranscript } from '@/api/chat';
 
 function runtime(): SessionRuntime {
   return {
@@ -40,6 +41,19 @@ function runtime(): SessionRuntime {
 }
 
 describe('useChatStream durable admission', () => {
+  it('restores the canonical answer after completion even when all text events were lost', async () => {
+    const state = runtime();
+    streamChatTurn.mockResolvedValueOnce({ status: 'admitted', turn_id: 'done-turn' });
+    vi.mocked(getChatTranscript).mockResolvedValueOnce({
+      messages: [{ role: 'Agent', content: 'durable answer', blocks: [{ type: 'text', text: 'durable answer' }] }],
+    } as Awaited<ReturnType<typeof getChatTranscript>>);
+    const { result } = renderHook(() => useChatStream({ activeSessionId: 'session', getRuntime: () => state, bump: vi.fn(), mode: 'CHAT', executionMode: 'standard' }));
+    act(() => result.current.resumeTurn('done-turn'));
+    await waitFor(() => expect(state.messages[0]?.content).toBe('durable answer'));
+    expect(state.streaming).toBe(false);
+    expect(state.turnId).toBeNull();
+  });
+
   it('keeps the durable turn and subscription when cancellation is rejected', async () => {
     const state = runtime();
     state.turnId = 'running-turn';

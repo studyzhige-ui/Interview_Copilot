@@ -9,7 +9,7 @@ What lives here:
   * Internal-model API-key resolution (deployment environment only)
   * Per-user api_base / organization / extra_headers override
     (consumes ``user_model_provider_settings``)
-  * Three caches, all process-local:
+  * Bounded caches owned by the executing event loop:
       - LlamaIndex ``OpenAILike`` keyed by (role, profile_id)
       - Native ``AsyncOpenAI`` and ``AsyncAnthropic`` clients keyed by
         (user_id, profile_id), with an LRU bound + auto-invalidate on
@@ -18,10 +18,10 @@ What lives here:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
-from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from threading import Lock
 from typing import Any
@@ -31,6 +31,7 @@ from openai import AsyncOpenAI, OpenAI
 
 from app.core import user_model_selection
 from app.core.config import settings
+from app.core.runtime_resources import current_resources
 from app.core.internal_models import get_internal_model_profile
 from app.core.model_catalog import ModelProfile
 from app.core.model_readiness import (
@@ -48,8 +49,8 @@ LLM_TEMPERATURE = 0.2
 # that contention isn't observable, so one lock keeps the invariants
 # (LRU ordering + cleanup) easy to reason about.
 _llm_cache_lock = Lock()
+_provider_versions: dict[str, int] = {}
 # key: (user_id, role, profile_id) → (credential fingerprint, LLM instance)
-_llm_cache: dict[tuple[str | None, str, str], tuple[str, Any]] = {}
 
 
 # ── Per-user provider overrides ────────────────────────────────────────
@@ -135,15 +136,11 @@ def _resolve_api_base(profile: ModelProfile, user_id: str | None = None) -> str:
 
 
 # ── AsyncOpenAI client cache ────────────────────────────────────────────
-# Process-local LRU. Avoids spinning up a fresh client (TLS handshake +
+# Loop-owned LRU. Avoids spinning up a fresh client (TLS handshake +
 # new TCP pool) per call when many requests hit the same (user, profile).
 # Bound at 256 entries — ~10 active users × 25 profiles. Each evicted
 # client is closed gracefully so the underlying TCP pool releases.
 _ASYNC_OPENAI_CACHE_MAX = 256
-_async_openai_cache: "OrderedDict[tuple[str | None, str], tuple[str, AsyncOpenAI]]" = (
-    OrderedDict()
-)
-_async_anthropic_cache: "OrderedDict[tuple[str | None, str], tuple[str, AsyncAnthropic]]" = OrderedDict()
 
 
 def _key_fingerprint(api_key: str) -> str:
@@ -165,39 +162,21 @@ def _native_anthropic_base_url(api_base: str) -> str:
 
 
 def _close_client_quietly(client: Any) -> None:
-    """Best-effort cleanup of a cached native provider client."""
-    import asyncio
-
-    aclose = getattr(client, "aclose", None) or getattr(client, "close", None)
-    if not callable(aclose):
-        return
-    try:
-        result = aclose()
-    except Exception:  # noqa: BLE001
-        return
-    if asyncio.iscoroutine(result):
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop is not None and not loop.is_closed():
-            loop.create_task(result)
-        else:
-            result.close()
+    current_resources().retire(client)
 
 
-def get_async_openai_client(
+async def get_async_openai_client(
     profile: ModelProfile, user_id: str | None = None
 ) -> AsyncOpenAI:
-    """Return a process-cached ``AsyncOpenAI`` for ``profile`` + ``user_id``.
+    """Return a loop-cached ``AsyncOpenAI`` for ``profile`` + ``user_id``.
 
     Auto-invalidates when the user changes ANY of (api_key, api_base,
     organization_id, extra_headers) by baking all of them into the
     cache-entry fingerprint. LRU-bounded — least-recently-used entries
     get evicted at the cap.
     """
-    api_key = resolve_api_key(profile, user_id=user_id)
-    overrides = _load_user_provider_overrides(profile, user_id)
+    api_key = await asyncio.to_thread(resolve_api_key, profile, user_id=user_id)
+    overrides = await asyncio.to_thread(_load_user_provider_overrides, profile, user_id)
     api_base = overrides.api_base or profile.api_base
     organization = overrides.organization_id
     extra_headers = overrides.extra_headers
@@ -209,8 +188,11 @@ def get_async_openai_client(
         f"{api_key}|{api_base}|org={organization or ''}|"
         f"hdr={json.dumps(extra_headers, sort_keys=True) if extra_headers else ''}"
     )
-    fp = _key_fingerprint(fp_input)
+    fp = _key_fingerprint(
+        fp_input + str(_provider_versions.get(profile.id.split("/")[0], 0))
+    )
     cache_key = (user_id, profile.id)
+    _async_openai_cache = current_resources().openai
     with _llm_cache_lock:
         cached = _async_openai_cache.get(cache_key)
         if cached is not None and cached[0] == fp:
@@ -244,7 +226,7 @@ def get_async_openai_client(
         return client
 
 
-def get_async_anthropic_client(
+async def get_async_anthropic_client(
     profile: ModelProfile,
     user_id: str | None = None,
 ) -> AsyncAnthropic:
@@ -257,16 +239,19 @@ def get_async_anthropic_client(
 
     if profile.provider != "anthropic":
         raise ValueError("native Anthropic client requires an anthropic profile")
-    api_key = resolve_api_key(profile, user_id=user_id)
-    overrides = _load_user_provider_overrides(profile, user_id)
+    api_key = await asyncio.to_thread(resolve_api_key, profile, user_id=user_id)
+    overrides = await asyncio.to_thread(_load_user_provider_overrides, profile, user_id)
     api_base = _native_anthropic_base_url(overrides.api_base or profile.api_base)
     extra_headers = overrides.extra_headers
     fp_input = (
         f"{api_key}|{api_base}|org={overrides.organization_id or ''}|"
         f"hdr={json.dumps(extra_headers, sort_keys=True) if extra_headers else ''}"
     )
-    fp = _key_fingerprint(fp_input)
+    fp = _key_fingerprint(
+        fp_input + str(_provider_versions.get(profile.id.split("/")[0], 0))
+    )
     cache_key = (user_id, profile.id)
+    _async_anthropic_cache = current_resources().anthropic
     with _llm_cache_lock:
         cached = _async_anthropic_cache.get(cache_key)
         if cached is not None and cached[0] == fp:
@@ -301,35 +286,10 @@ def clear_llm_cache_for_provider(provider: str) -> None:
     call inside a lock, so we use a string-prefix check on the
     profile id (always ``"{provider}/..."``).
     """
-    prefix = f"{provider}/"
+    # Every lookup fingerprints current credentials. No cross-loop mutation:
+    # the owner retires a changed client when next used.
     with _llm_cache_lock:
-        # LlamaIndex LLM cache: key is (user_id, role, profile_id)
-        to_drop_llm = [
-            key
-            for key in _llm_cache
-            if isinstance(key[2], str) and key[2].startswith(prefix)
-        ]
-        for k in to_drop_llm:
-            _llm_cache.pop(k, None)
-        # AsyncOpenAI cache: key is (user_id, profile_id)
-        to_drop_async = [
-            key
-            for key in _async_openai_cache
-            if isinstance(key[1], str) and key[1].startswith(prefix)
-        ]
-        for k in to_drop_async:
-            entry = _async_openai_cache.pop(k, None)
-            if entry is not None:
-                _close_client_quietly(entry[1])
-        to_drop_anthropic = [
-            key
-            for key in _async_anthropic_cache
-            if isinstance(key[1], str) and key[1].startswith(prefix)
-        ]
-        for k in to_drop_anthropic:
-            entry = _async_anthropic_cache.pop(k, None)
-            if entry is not None:
-                _close_client_quietly(entry[1])
+        _provider_versions[provider] = _provider_versions.get(provider, 0) + 1
 
 
 # ── Catalog serialization ───────────────────────────────────────────────
@@ -419,26 +379,43 @@ def _get_cached_llm(
     user_id: str | None,
     request_overrides: dict[str, Any] | None = None,
 ):
-    api_key = resolve_api_key(profile, user_id=user_id)
-    overrides = _load_user_provider_overrides(profile, user_id)
-    api_base = overrides.api_base or profile.api_base
-    fp = _key_fingerprint(
-        f"{api_key}|{api_base}|org={overrides.organization_id or ''}|"
-        f"hdr={json.dumps(overrides.extra_headers, sort_keys=True)}|"
-        f"req={json.dumps(request_overrides or {}, sort_keys=True)}"
-    )
-    cache_key = (user_id, cache_role, profile.id)
-    with _llm_cache_lock:
-        cached = _llm_cache.get(cache_key)
-        if cached is not None and cached[0] == fp:
-            return cached[1]
-        instance = _build_llm_instance(
-            profile,
-            user_id=user_id,
-            request_overrides=request_overrides,
+    # Synchronous consumers own their instance. Async reuse is bounded and
+    # belongs to the loop that will actually use the underlying transport.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _build_llm_instance(
+            profile, user_id=user_id, request_overrides=request_overrides
         )
-        _llm_cache[cache_key] = (fp, instance)
-        return instance
+    resources = current_resources()
+    overrides = _load_user_provider_overrides(profile, user_id)
+    fp = _key_fingerprint(
+        json.dumps(
+            {
+                "key": resolve_api_key(profile, user_id=user_id),
+                "base": overrides.api_base or profile.api_base,
+                "org": overrides.organization_id,
+                "headers": overrides.extra_headers,
+                "request": request_overrides,
+            },
+            sort_keys=True,
+        )
+    )
+    key = (user_id, cache_role, profile.id)
+    cached = resources.llms.get(key)
+    if cached is not None and cached[0] == fp:
+        resources.llms.move_to_end(key)
+        return cached[1]
+    if cached is not None:
+        resources.retire(cached[1])
+    instance = _build_llm_instance(
+        profile, user_id=user_id, request_overrides=request_overrides
+    )
+    resources.llms[key] = (fp, instance)
+    resources.llms.move_to_end(key)
+    while len(resources.llms) > _ASYNC_OPENAI_CACHE_MAX:
+        resources.retire(resources.llms.popitem(last=False)[1][1])
+    return instance
 
 
 def _legacy_request_overrides(profile: ModelProfile) -> dict[str, Any] | None:
@@ -476,33 +453,18 @@ def get_internal_llm(role: str):
     )
 
 
-def build_async_openai_client_for_role(
-    role: str,
-    user_id: str | None = None,
-) -> tuple[AsyncOpenAI, ModelProfile]:
-    """Return a cached ``AsyncOpenAI`` + profile for the current selection."""
-    profile = user_model_selection.get_profile_for_role(role, user_id=user_id)
-    return get_async_openai_client(profile, user_id=user_id), profile
-
-
-def build_provider_client_for_role(
+async def build_provider_client_for_role(
     role: str,
     user_id: str | None = None,
 ) -> tuple[Any, ModelProfile]:
     """Return the selected role's native transport client and profile."""
 
-    profile = user_model_selection.get_profile_for_role(role, user_id=user_id)
+    profile = await asyncio.to_thread(
+        user_model_selection.get_profile_for_role, role, user_id=user_id
+    )
     if profile.provider == "anthropic":
-        return get_async_anthropic_client(profile, user_id=user_id), profile
-    return get_async_openai_client(profile, user_id=user_id), profile
-
-
-def build_async_openai_client_for_internal_role(
-    role: str,
-) -> tuple[AsyncOpenAI, ModelProfile]:
-    """Return a platform-owned raw client using deployment settings only."""
-    profile = get_internal_model_profile(role)
-    return get_async_openai_client(profile, user_id=None), profile
+        return await get_async_anthropic_client(profile, user_id=user_id), profile
+    return await get_async_openai_client(profile, user_id=user_id), profile
 
 
 __all__ = [
@@ -515,8 +477,6 @@ __all__ = [
     "validate_role_update",
     "get_llm_for_role",
     "get_internal_llm",
-    "build_async_openai_client_for_role",
     "build_provider_client_for_role",
-    "build_async_openai_client_for_internal_role",
     "_serialize_profile",
 ]

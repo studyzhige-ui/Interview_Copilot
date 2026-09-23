@@ -178,7 +178,7 @@ async def test_get_current_user_rejects_refresh_token():
     refresh = create_refresh_token(data={"sub": "user-x"})
     with patch("app.core.security.is_revoked", return_value=False):
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(token=refresh, db=object())
+            get_current_user(token=refresh, db=object())
     assert exc_info.value.status_code == 401
 
 
@@ -189,12 +189,12 @@ async def test_get_current_user_rejects_revoked_jti():
 
     token = create_access_token(data={"sub": "user-y"})
 
-    async def _revoked(_jti):
+    def _revoked(_db, _jti):
         return True
 
     with patch("app.core.security.is_revoked", side_effect=_revoked):
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(token=token, db=object())
+            get_current_user(token=token, db=object())
     assert exc_info.value.status_code == 401
 
 
@@ -210,5 +210,5 @@ async def test_get_current_user_rejects_token_without_jti():
     )
     with patch("app.core.security.is_revoked", return_value=False):
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(token=token, db=object())
+            get_current_user(token=token, db=object())
     assert exc_info.value.status_code == 401

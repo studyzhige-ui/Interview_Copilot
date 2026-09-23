@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from app.db.redis import redis_client
+from app.db.redis import get_redis_client
 
 
 class TurnEventBuffer:
@@ -12,28 +12,24 @@ class TurnEventBuffer:
     def _key(turn_id: str) -> str:
         return f"chat:events:{turn_id}"
 
-    @staticmethod
-    def _cancel_key(turn_id: str) -> str:
-        return f"chat:cancel:{turn_id}"
-
     async def ping(self) -> None:
-        await redis_client.ping()
+        await get_redis_client().ping()
 
     async def append(self, turn_id: str, event_json: str) -> str:
         key = self._key(turn_id)
-        event_id = await redis_client.xadd(
+        event_id = await get_redis_client().xadd(
             key,
             {"event": event_json},
             maxlen=10_000,
             approximate=True,
         )
-        await redis_client.expire(key, self.ttl_seconds)
+        await get_redis_client().expire(key, self.ttl_seconds)
         return str(event_id)
 
     async def read(
         self, turn_id: str, cursor: str, *, block_ms: int = 15_000
     ) -> list[tuple[str, str]]:
-        rows = await redis_client.xread(
+        rows = await get_redis_client(blocking=True).xread(
             {self._key(turn_id): cursor},
             count=200,
             block=block_ms,
@@ -46,17 +42,9 @@ class TurnEventBuffer:
             for event_id, fields in events
         ]
 
-    async def request_cancel(self, turn_id: str) -> None:
-        key = self._cancel_key(turn_id)
-        await redis_client.lpush(key, "cancel")
-        await redis_client.expire(key, self.ttl_seconds)
-
     async def reset(self, turn_id: str) -> None:
         """Start a fresh event generation when the same Turn resumes."""
-        await redis_client.delete(self._key(turn_id), self._cancel_key(turn_id))
-
-    async def wait_cancel(self, turn_id: str) -> None:
-        await redis_client.blpop(self._cancel_key(turn_id), timeout=0)
+        await get_redis_client().delete(self._key(turn_id))
 
     @staticmethod
     def is_done(event_json: str) -> bool:

@@ -13,6 +13,11 @@ from __future__ import annotations
 
 import logging
 import socket
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass
+from copy import deepcopy
+from threading import Event, Thread
 from collections.abc import Collection
 from datetime import datetime, timedelta
 from typing import Any, Callable, Literal
@@ -26,8 +31,24 @@ from app.models.outbox_job import OutboxJob, generate_outbox_job_id
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True)
+class OutboxAttempt:
+    id: str
+    user_id: int
+    job_type: str
+    aggregate_id: str | None
+    payload_json: Any
+    idempotency_key: str | None
+    attempts: int
+    max_attempts: int
+    status: str
+    lease_version: int
+    locked_by: str | None
+
+
 # job_type -> handler(db, job) -> None (raise to fail/retry).
-_HANDLERS: dict[str, Callable[[Session, OutboxJob], None]] = {}
+_HANDLERS: dict[str, Callable[[Session, OutboxAttempt], None]] = {}
 
 # Exponential backoff per attempt, capped. attempts=1 -> 60s, 2 -> 240s, ...
 _BACKOFF_BASE_SECONDS = 60
@@ -99,7 +120,7 @@ event.listen(SessionLocal, "after_rollback", _clear_pending_outbox_wakeups)
 
 
 def register_handler(
-    job_type: str, handler: Callable[[Session, OutboxJob], None]
+    job_type: str, handler: Callable[[Session, OutboxAttempt], None]
 ) -> None:
     _HANDLERS[job_type] = handler
 
@@ -194,151 +215,161 @@ def enqueue_job(
     return job
 
 
-def run_due_outbox_jobs(
-    db: Session,
-    *,
-    limit: int = 50,
-    job_types: Collection[str] | None = None,
-) -> int:
-    """Claim and run up to ``limit`` due jobs. Returns the count processed.
+def _owned_job(db: Session, job: OutboxAttempt):
+    return db.query(OutboxJob).filter(
+        OutboxJob.id == job.id,
+        OutboxJob.status == "running",
+        OutboxJob.lease_version == job.lease_version,
+        OutboxJob.locked_by == job.locked_by,
+    )
 
-    A claimed job is locked (``locked_by`` = host) so concurrent workers don't
-    double-run it. Handlers are expected to be idempotent regardless.
-    """
-    allowed_types = tuple(sorted(set(job_types))) if job_types is not None else None
-    if allowed_types == ():
-        return 0
 
-    worker_id = f"{socket.gethostname()}:{id(db)}"
+def _claim_job(db: Session, allowed_types) -> OutboxAttempt | None:
     now = utc_now()
-    # Stale-lock recovery: a worker that is SIGKILLed after the claim commit
-    # leaves the job at status='running' with locked_at set — the finally
-    # block never runs, and without this clause the job would be invisible
-    # to every future claim forever. The drain task has a 15-minute hard
-    # limit, so the lease must be longer than that or another worker could
-    # steal a live LLM/indexing job.
-    stale_cutoff = now - timedelta(minutes=20)
-    # Atomic claim: lock a due batch with FOR UPDATE SKIP LOCKED and flip it to
-    # ``running`` in ONE transaction, so two concurrent workers never grab the
-    # same job. SKIP LOCKED is a no-op on sqlite (unit tests run single-
-    # threaded), so we only request it on Postgres.
     query = db.query(OutboxJob).filter(
         or_(
             and_(
-                or_(OutboxJob.status == "pending", OutboxJob.status == "failed"),
+                OutboxJob.status.in_(["pending", "failed"]),
                 OutboxJob.next_run_at <= now,
                 OutboxJob.locked_at.is_(None),
             ),
-            # Orphaned by a hard-killed worker — reclaim.
             and_(
                 OutboxJob.status == "running",
-                OutboxJob.locked_at < stale_cutoff,
+                OutboxJob.locked_at < now - timedelta(minutes=20),
             ),
         )
     )
     if allowed_types is not None:
         query = query.filter(OutboxJob.job_type.in_(allowed_types))
-    query = query.order_by(OutboxJob.next_run_at.asc()).limit(limit)
+    query = query.order_by(OutboxJob.next_run_at.asc()).limit(1)
     if db.get_bind().dialect.name == "postgresql":
         query = query.with_for_update(skip_locked=True)
-    claimed = query.all()
-    runnable: list[OutboxJob] = []
-    for job in claimed:
-        if job.status == "running":
-            # Count the crashed attempt: a handler that hard-kills its worker
-            # every time would otherwise be reclaimed forever without
-            # ``attempts`` moving, and could never reach ``dead``.
-            job.attempts += 1
-            logger.warning(
-                "outbox job %s reclaimed from stale lock (locked_by=%s since %s, attempt %d)",
-                job.id,
-                job.locked_by,
-                job.locked_at,
-                job.attempts,
-            )
-            if job.attempts >= job.max_attempts:
-                job.status = "dead"
-                job.last_error = (
-                    "worker died mid-run repeatedly (stale-lock reclaim limit)"
-                )
-                job.locked_at = None
-                job.locked_by = None
-                db.add(job)
-                logger.error(
-                    "outbox job %s dead after %d crashed attempts", job.id, job.attempts
-                )
-                continue
+    job = query.populate_existing().one_or_none()
+    if job is None:
+        db.rollback()
+        return None
+    if job.status == "running":
+        job.attempts += 1
+    if job.attempts >= job.max_attempts:
+        job.status = "dead"
+        job.last_error = "worker lease expired repeatedly"
+        job.locked_by = None
+        job.locked_at = None
+    else:
         job.status = "running"
-        job.locked_at = utc_now()
-        job.locked_by = worker_id
-        db.add(job)
-        runnable.append(job)
+        job.lease_version += 1
+        job.locked_by = f"{socket.gethostname()}:{uuid.uuid4().hex}"
+        job.locked_at = now
     db.commit()
+    db.refresh(job)
+    # Handlers receive an attempt snapshot. ORM autoflush must never write an
+    # obsolete job object after a newer owner has claimed it.
+    snapshot = OutboxAttempt(
+        **{
+            name: deepcopy(getattr(job, name))
+            for name in OutboxAttempt.__dataclass_fields__
+        }
+    )
+    db.rollback()  # release the refresh transaction before external I/O
+    return snapshot
 
+
+@contextmanager
+def _renew_lease(db: Session, job: OutboxAttempt):
+    stopped = Event()
+    bind = db.get_bind()
+    # Each renewal owns a new connection/transaction, not the handler Session.
+    engine = getattr(bind, "engine", bind)
+
+    def renew():
+        while not stopped.wait(60):
+            try:
+                with Session(engine) as lease_db:
+                    changed = _owned_job(lease_db, job).update(
+                        {OutboxJob.locked_at: utc_now()}, synchronize_session=False
+                    )
+                    lease_db.commit()
+                if not changed:
+                    return
+            except Exception:
+                logger.exception("outbox lease renewal failed: %s", job.id)
+                return
+
+    thread = Thread(target=renew, name="outbox-lease", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join(timeout=10)
+
+
+def run_due_outbox_jobs(
+    db: Session, *, limit: int = 50, job_types: Collection[str] | None = None
+) -> int:
+    """Claim just-in-time, renew while executing, and fence every settlement.
+
+    External operations must still be idempotent: losing a lease cannot undo
+    a request already accepted by another system.
+    """
+    allowed = tuple(sorted(set(job_types))) if job_types is not None else None
+    if allowed == ():
+        return 0
     processed = 0
-    for job in runnable:
-        handler = _HANDLERS.get(job.job_type)
-        try:
-            if handler is None:
-                raise RuntimeError(f"no handler registered for job_type={job.job_type}")
-            handler(db, job)
-            job.status = "succeeded"
-            job.last_error = None
-        except Exception as exc:  # noqa: BLE001 — record + retry, never crash the loop
-            job.attempts += 1
-            job.last_error = str(exc)[:2000]
-            if job.attempts >= job.max_attempts:
-                job.status = "dead"
-                logger.error(
-                    "outbox job %s dead after %d attempts: %s",
-                    job.id,
-                    job.attempts,
-                    exc,
-                )
+    for _ in range(limit):
+        job = _claim_job(db, allowed)
+        if job is None:
+            break
+        if job.status == "dead":
+            continue
+        values = {"status": "succeeded", "last_error": None}
+        with _renew_lease(db, job):
+            try:
+                handler = _HANDLERS.get(job.job_type)
+                if handler is None:
+                    raise RuntimeError(
+                        f"no handler registered for job_type={job.job_type}"
+                    )
+                handler(db, job)
+            except Exception as exc:
+                db.rollback()  # SQL failures must not poison the settlement.
+                attempts = job.attempts + 1
+                values = {
+                    "status": "dead" if attempts >= job.max_attempts else "failed",
+                    "attempts": attempts,
+                    "last_error": str(exc)[:2000],
+                    "next_run_at": utc_now()
+                    + timedelta(
+                        seconds=min(
+                            _BACKOFF_BASE_SECONDS * 4 ** (attempts - 1),
+                            _BACKOFF_CAP_SECONDS,
+                        )
+                    ),
+                }
+            values.update(locked_at=None, locked_by=None, updated_at=utc_now())
+            changed = _owned_job(db, job).update(values, synchronize_session=False)
+            if changed:
+                db.commit()
             else:
-                job.status = "failed"
-                delay = min(
-                    _BACKOFF_BASE_SECONDS * (4 ** (job.attempts - 1)),
-                    _BACKOFF_CAP_SECONDS,
-                )
-                job.next_run_at = utc_now() + timedelta(seconds=delay)
+                db.rollback()
                 logger.warning(
-                    "outbox job %s failed (attempt %d), retrying in %ds: %s",
+                    "outbox stale owner settlement rejected: %s/%s",
                     job.id,
-                    job.attempts,
-                    delay,
-                    exc,
+                    job.lease_version,
                 )
-        finally:
-            job.locked_at = None
-            job.locked_by = None
-            job.updated_at = utc_now()
-            db.add(job)
-            db.commit()
         processed += 1
-
-    # Dead-backlog visibility: dead jobs mean permanently-skipped side
-    # effects (leaked blobs / stale Milvus rows)
-    # and nothing else surfaces them. One WARNING per drain while
-    # any exist is deliberate — quiet enough to live with, loud enough to
-    # notice in logs.
-    dead_query = db.query(OutboxJob).filter(OutboxJob.status == "dead")
-    if allowed_types is not None:
-        dead_query = dead_query.filter(OutboxJob.job_type.in_(allowed_types))
-    dead_count = dead_query.count()
-    if dead_count:
-        logger.warning(
-            "outbox has %d dead job(s) needing manual attention "
-            "(inspect outbox_jobs WHERE status='dead')",
-            dead_count,
-        )
+    dead = db.query(OutboxJob).filter(OutboxJob.status == "dead")
+    if allowed is not None:
+        dead = dead.filter(OutboxJob.job_type.in_(allowed))
+    if count := dead.count():
+        logger.warning("outbox has %d dead job(s) needing manual attention", count)
     return processed
 
 
 # ── Object-storage cleanup handlers (this package's job types) ──────────────
 
 
-def _handle_delete_object(db: Session, job: OutboxJob) -> None:
+def _handle_delete_object(db: Session, job: OutboxAttempt) -> None:
     """Delete an object-storage blob (s3:// or local://). Missing is success."""
     from app.core.storage import (
         LOCAL_URI_PREFIX,

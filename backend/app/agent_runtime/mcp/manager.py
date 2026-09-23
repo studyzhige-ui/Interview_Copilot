@@ -282,11 +282,9 @@ class MCPManager:
             yield session
 
     def _handle_notification(self, config: MCPServerConfig, message) -> None:
-        from mcp.types import ServerNotification, ToolListChangedNotification
+        from mcp.types import ToolListChangedNotification
 
-        if isinstance(message, ServerNotification) and isinstance(
-            message.root, ToolListChangedNotification
-        ):
+        if isinstance(message, ToolListChangedNotification):
             runtime = self._runtimes.get((config.user_id, config.id))
             if runtime is not None and runtime.config.revision == config.revision:
                 runtime.tools = None
@@ -416,7 +414,7 @@ class MCPManager:
             remote_tools.extend(response.tools)
             if len(remote_tools) > 10_000:
                 raise ValueError("MCP tool catalog exceeds limit")
-            cursor = response.nextCursor
+            cursor = response.next_cursor
             if not cursor:
                 break
             if cursor in seen_cursors:
@@ -432,7 +430,7 @@ class MCPManager:
                 remote_name=tool.name,
                 description=tool.description or tool.title or tool.name,
                 input_schema=dict(
-                    tool.inputSchema or {"type": "object", "properties": {}}
+                    tool.input_schema or {"type": "object", "properties": {}}
                 ),
             )
             for tool in remote_tools
@@ -544,7 +542,7 @@ class MCPManager:
 class LoopScopedMCPManager:
     """Never share asyncio queues/tasks between API and worker event loops.
 
-    Workers keep a persistent loop per thread. Connection revisions are still
+    Workers keep one persistent loop per process. Connection revisions are still
     checked at every call; runtime status is a process-local observation.
     """
 

@@ -337,6 +337,241 @@ def test_semantic_selection_receipt_citation_and_feedback_are_distinct(
     assert row.usage_count == 1
 
 
+@pytest.mark.parametrize("during_selection", [False, True])
+def test_expiry_blocks_recall_even_when_producer_is_disabled(
+    db_session, monkeypatch, during_selection
+):
+    user, conversation, turn = source(db_session)
+    asyncio.run(pipeline.process_turn(turn.id))
+    row = db_session.query(LongTermAgentMemory).one()
+    extraction = db_session.get(MemoryExtraction, turn.id)
+    old = utc_now() - timedelta(days=100)
+    if not during_selection:
+        extraction.generated_at = old
+    # Exposure and a recent consolidation cannot extend source retention.
+    row.last_recalled_at = utc_now()
+    row.updated_at = utc_now()
+    db_session.commit()
+    monkeypatch.setattr(pipeline.settings, "AGENT_MEMORY_PRODUCER_ENABLED", False)
+    calls = []
+
+    async def select(prompt, data):
+        calls.append(data)
+        extraction.generated_at = old
+        db_session.commit()
+        return {"ids": [row.id]}
+
+    monkeypatch.setattr(recall, "model_json", select)
+    assert (
+        asyncio.run(
+            recall.recall(
+                conversation_id=conversation.id,
+                user_pk=user.id,
+                current_query="比较两个方案",
+                turn_id=turn.id,
+            )
+        )
+        == ""
+    )
+    assert len(calls) == int(during_selection)
+    assert db_session.query(MemoryReadReceipt).count() == 0
+    assert row.status == "active"  # Read filtering does not perform destructive GC.
+
+
+def test_used_source_survives_retention_and_index_exposes_conditions_and_age(
+    db_session, monkeypatch
+):
+    user, conversation, turn = source(db_session)
+    asyncio.run(pipeline.process_turn(turn.id))
+    row = db_session.query(LongTermAgentMemory).one()
+    db_session.get(MemoryExtraction, turn.id).generated_at = utc_now() - timedelta(
+        days=100
+    )
+    row.last_confirmed_at = utc_now() - timedelta(days=47)
+    row.last_used_at = utc_now()
+    db_session.commit()
+
+    async def select(prompt, data):
+        assert data["index"][0]["applicability"] == row.applicability
+        assert data["index"][0]["age_days"] == 47
+        return {"ids": [row.id]}
+
+    monkeypatch.setattr(recall, "model_json", select)
+    block = asyncio.run(
+        recall.recall(
+            conversation_id=conversation.id,
+            user_pk=user.id,
+            current_query="比较两个方案",
+            turn_id=turn.id,
+        )
+    )
+    assert row.content in block and '"age_days": 47' in block
+    pipeline._forget_expired(db_session, user.id)
+    assert db_session.get(MemoryExtraction, turn.id).status == "succeeded"
+
+
+@pytest.mark.parametrize("reason", ["missing", "forgotten", "empty_evidence"])
+def test_unavailable_evidence_never_reaches_selector(db_session, monkeypatch, reason):
+    user, conversation, turn = source(db_session)
+    asyncio.run(pipeline.process_turn(turn.id))
+    row = db_session.query(LongTermAgentMemory).one()
+    extraction = db_session.get(MemoryExtraction, turn.id)
+    if reason == "missing":
+        db_session.delete(extraction)
+    elif reason == "forgotten":
+        extraction.status = "forgotten"
+    else:
+        row.evidence_json = []
+    db_session.commit()
+
+    async def unexpected(*args):
+        pytest.fail("unavailable evidence entered selector context")
+
+    monkeypatch.setattr(recall, "model_json", unexpected)
+    assert (
+        asyncio.run(
+            recall.recall(
+                conversation_id=conversation.id,
+                user_pk=user.id,
+                current_query="比较两个方案",
+                turn_id=turn.id,
+            )
+        )
+        == ""
+    )
+
+
+def test_recall_budget_preserves_late_query_constraints_and_whole_records(
+    db_session, monkeypatch
+):
+    user, conversation, turn = source(db_session)
+    asyncio.run(pipeline.process_turn(turn.id))
+    row = db_session.query(LongTermAgentMemory).one()
+    query = "比较方案 " * 1700 + "本次仅考虑远程岗位"
+    monkeypatch.setattr(recall.settings, "AGENT_MEMORY_RECALL_INPUT_TOKENS", 30000)
+    monkeypatch.setattr(recall.settings, "AGENT_MEMORY_RECALL_OUTPUT_TOKENS", 1)
+
+    async def select(prompt, data):
+        assert data["query"] == query
+        return {"ids": [row.id]}
+
+    monkeypatch.setattr(recall, "model_json", select)
+    assert (
+        asyncio.run(
+            recall.recall(
+                conversation_id=conversation.id,
+                user_pk=user.id,
+                current_query=query,
+                turn_id=turn.id,
+            )
+        )
+        == ""
+    )
+    assert db_session.query(MemoryReadReceipt).count() == 0
+    assert row.recall_count == 0
+
+
+def test_old_feedback_does_not_score_a_revised_memory(db_session):
+    user, _, turn = source(db_session)
+    asyncio.run(pipeline.process_turn(turn.id))
+    row = db_session.query(LongTermAgentMemory).one()
+    db_session.add(
+        MemoryReadReceipt(
+            id="old-feedback",
+            user_id=user.id,
+            turn_id=turn.id,
+            memory_id=row.id,
+            memory_version=row.version,
+            feedback="unhelpful",
+        )
+    )
+    db_session.commit()
+    assert pipeline._inputs(db_session, user.id)[0]["previous"][0]["feedback"] == {
+        "helpful": 0,
+        "unhelpful": 1,
+    }
+    row.version += 1
+    db_session.commit()
+    assert pipeline._inputs(db_session, user.id)[0]["previous"][0]["feedback"] == {}
+
+
+def test_followup_uses_only_prior_context_of_owned_turn(db_session, monkeypatch):
+    user, conversation, turn = source(db_session)
+    asyncio.run(pipeline.process_turn(turn.id))
+    # The current turn is seq 1: an already-persisted assistant message at seq 2
+    # must not enter the selection request as if it were prior context.
+    seen = []
+
+    async def select(prompt, data):
+        seen.append(data["recent_context"])
+        return {"ids": []}
+
+    monkeypatch.setattr(recall, "model_json", select)
+    kwargs = dict(
+        conversation_id=conversation.id,
+        user_pk=user.id,
+        current_query="继续比较",
+        turn_id=turn.id,
+    )
+    assert asyncio.run(recall.recall(**kwargs)) == ""
+    assert seen == [[]]
+    turn.user_message_seq = 3
+    db_session.commit()
+    assert asyncio.run(recall.recall(**kwargs)) == ""
+    assert [m["role"] for m in seen[-1]] == ["User", "Assistant"]
+    _, _, foreign_turn = source(db_session, suffix="foreign")
+    assert asyncio.run(recall.recall(**{**kwargs, "turn_id": foreign_turn.id})) == ""
+    assert len(seen) == 2
+
+
+def test_oversized_request_and_empty_request_do_not_call_selector(
+    db_session, monkeypatch
+):
+    user, conversation, turn = source(db_session)
+    asyncio.run(pipeline.process_turn(turn.id))
+    monkeypatch.setattr(recall.settings, "AGENT_MEMORY_RECALL_INPUT_TOKENS", 1000)
+
+    async def unexpected(*args):
+        pytest.fail("selector called without a bounded useful request")
+
+    monkeypatch.setattr(recall, "model_json", unexpected)
+    for query in [" ", "比较方案 " * 10000]:
+        assert (
+            asyncio.run(
+                recall.recall(
+                    conversation_id=conversation.id,
+                    user_pk=user.id,
+                    current_query=query,
+                    turn_id=turn.id,
+                )
+            )
+            == ""
+        )
+
+
+def test_historical_provenance_edges_do_not_block_current_evidence(
+    db_session, monkeypatch
+):
+    from app.models.long_term_memory import LongTermAgentMemorySource
+    from app.services.memory_retention import unavailable_memory_ids
+
+    user, conversation, turn = source(db_session)
+    asyncio.run(pipeline.process_turn(turn.id))
+    row = db_session.query(LongTermAgentMemory).one()
+    db_session.add(
+        LongTermAgentMemorySource(
+            memory_id=row.id,
+            source_turn_identity="old-turn",
+            source_conversation_identity=conversation.id,
+            support_quote_hash="old",
+            observed_at=utc_now(),
+            source_deleted_at=utc_now(),
+        )
+    )
+    db_session.commit()
+    assert unavailable_memory_ids(db_session, user.id) == set()
+
+
 def test_recall_rechecks_delete_after_selection_and_rejects_foreign_ids(
     db_session, monkeypatch
 ):

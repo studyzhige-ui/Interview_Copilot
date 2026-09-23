@@ -25,6 +25,22 @@ describe('PluginConnectionPanel', () => {
     window.history.replaceState({}, '', '/plugins');
   });
 
+  it('connects Gmail through its read-only OAuth endpoint', async () => {
+    api.getGmailIntegration.mockResolvedValue({ adapter_available: true, connection_required: true, account: null });
+    api.authorizeGmailIntegration.mockResolvedValue({ authorization_url: 'https://accounts.google.com/o/oauth2/auth?state=safe' });
+    const replace = vi.fn();
+    const popup = { opener: window, location: { replace }, close: vi.fn() } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup);
+    renderPanel('gmail');
+    expect(await screen.findByText('读取招聘邮件与流程变化；不会发送、修改或删除邮件。')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: '前往 Google 连接' }));
+    await waitFor(() => expect(api.authorizeGmailIntegration).toHaveBeenCalledOnce());
+    expect(api.authorizeExternalPlugin).not.toHaveBeenCalled();
+    expect(replace).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/auth?state=safe');
+    expect(popup.opener).toBeNull();
+    open.mockRestore();
+  });
+
   it('starts Canva OAuth directly inside the plugin marketplace', async () => {
     api.getExternalPluginStatus.mockResolvedValue({ provider: 'canva', adapter_available: true, connection_required: true, account: null });
     api.authorizeExternalPlugin.mockResolvedValue({ provider: 'canva', authorization_url: 'https://www.canva.com/api/oauth/authorize?state=safe', expires_in_seconds: 600 });

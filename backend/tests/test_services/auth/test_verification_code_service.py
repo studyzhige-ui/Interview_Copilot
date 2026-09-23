@@ -8,7 +8,7 @@ from app.services.auth import verification_code_service as service
 def redis(monkeypatch):
     fake = AsyncMock()
     fake.exists.return_value = 0
-    monkeypatch.setattr(service, "redis_client", fake)
+    monkeypatch.setattr(service, "get_redis_client", lambda: fake)
     return fake
 
 

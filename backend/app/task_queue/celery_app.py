@@ -3,7 +3,7 @@ from threading import Lock
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import task_prerun, worker_process_init
+from celery.signals import task_prerun, worker_process_init, worker_shutdown
 
 from app.core.config import settings
 
@@ -19,14 +19,12 @@ logger = logging.getLogger(__name__)
 celery_app = Celery(
     "interview_copilot_worker",
     broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL,
     include=["app.worker.tasks"],
 )
 
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
-    result_serializer="json",
     timezone="Asia/Shanghai",
     enable_utc=True,
     # Opt into the Celery 6.0 default explicitly (silences the
@@ -34,7 +32,9 @@ celery_app.conf.update(
     # worker startup so a transient Redis hiccup at boot doesn't abort the
     # worker. This is the forward-compatible fix — no Celery major-version bump.
     broker_connection_retry_on_startup=True,
-    task_track_started=True,
+    task_ignore_result=True,
+    task_publish_retry=False,
+    broker_connection_timeout=5,
     task_time_limit=3600,  # Hard kill at 60 min (transcription headroom).
     task_soft_time_limit=3540,  # 1 min before hard kill, raise SoftTimeLimitExceeded
     # so handlers can flush partial state.
@@ -88,15 +88,16 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     # Avoid thundering-herd on transient backend outages.
     task_default_retry_delay=10,
-    # ── Result backend hygiene ──────────────────────────────────────────
-    # Without an explicit expiry, Celery keeps every result in Redis forever
-    # → memory grows linearly. 24h is enough for the UI to poll status.
-    result_expires=86400,
+    # Outcomes live in PostgreSQL; no unused Celery result subscriptions.
     # ── Broker transport ───────────────────────────────────────────────
     # visibility_timeout MUST exceed task_time_limit; otherwise Redis re-
     # delivers the message mid-execution and we get double-runs.
-    broker_transport_options={"visibility_timeout": 3700},
-    result_backend_transport_options={"visibility_timeout": 3700},
+    broker_transport_options={
+        "visibility_timeout": 3700,
+        "socket_connect_timeout": 5,
+        "socket_timeout": 5,
+        "retry_on_timeout": False,
+    },
     # Don't prefetch jobs the worker can't process before visibility_timeout
     # — important with our --pool=solo single-task model.
     worker_prefetch_multiplier=1,
@@ -108,6 +109,11 @@ celery_app.conf.update(
     # user_id, so the cron host's env must have the API keys for any
     # vendor you want pre-warmed (per-user-only keys won't apply here).
     beat_schedule={
+        "expired-token-pruning": {
+            "task": "tasks.prune_expired_tokens",
+            "schedule": crontab(minute="*/5"),
+            "options": {"expires": 240},
+        },
         "memory-discovery-every-five-minutes": {
             "task": "tasks.discover_agent_memories",
             "schedule": crontab(minute="*/5"),
@@ -290,3 +296,14 @@ def ensure_task_runtime(task=None, **kwargs):
         reranker=task_name == "tasks.process_conversation_turn",
         voice=task_name == "tasks.process_interview_analysis",
     )
+
+
+@worker_shutdown.connect
+def close_worker_resources(**_kwargs):
+    from app.core.async_runtime import shutdown_worker_runtime
+    from app.db.database import engine
+    from app.db.redis import sync_redis_client
+
+    shutdown_worker_runtime()
+    sync_redis_client.close()
+    engine.dispose()

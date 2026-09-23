@@ -2,6 +2,7 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from threading import Event
 
 from sqlalchemy import create_engine, text
@@ -14,8 +15,53 @@ from tests.test_db.test_alembic_migrations import fresh_pg_db, _make_alembic_con
 from tests.test_services.test_memory_pipeline import source
 
 
+def test_retention_read_filter_on_postgres(fresh_pg_db, monkeypatch):  # noqa: F811
+    from app.db.types import utc_now
+    from app.models.long_term_memory import LongTermAgentMemory
+    from app.services import memory_recall
+    from tests.test_services.test_memory_pipeline import model
+
+    command.upgrade(_make_alembic_config(fresh_pg_db), "head")
+    engine = create_engine(fresh_pg_db)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    monkeypatch.setattr(pipeline, "SessionLocal", factory)
+    monkeypatch.setattr(memory_recall, "SessionLocal", factory)
+    monkeypatch.setattr(pipeline, "model_json", model)
+    monkeypatch.setattr(pipeline.settings, "AGENT_MEMORY_PRODUCER_ENABLED", True)
+    try:
+        with factory() as db:
+            user, conversation, turn = source(db, suffix="pg-retention")
+            user_id, conversation_id, turn_id = user.id, conversation.id, turn.id
+        assert asyncio.run(pipeline.process_turn(turn_id)) == 1
+        with factory() as db:
+            db.get(MemoryExtraction, turn_id).generated_at = utc_now() - timedelta(
+                days=100
+            )
+            db.commit()
+        monkeypatch.setattr(pipeline.settings, "AGENT_MEMORY_PRODUCER_ENABLED", False)
+        assert (
+            asyncio.run(
+                memory_recall.recall(
+                    conversation_id=conversation_id,
+                    user_pk=user_id,
+                    current_query="比较两个方案",
+                    turn_id=turn_id,
+                )
+            )
+            == ""
+        )
+        with factory() as db:
+            assert db.query(LongTermAgentMemory).one().status == "active"
+            pipeline._forget_expired(db, user_id)
+            db.commit()
+            assert db.get(MemoryExtraction, turn_id).status == "forgotten"
+    finally:
+        engine.dispose()
+
+
 def test_upgrade_preserves_legacy_rows_and_parallel_claim_is_fenced(
-    fresh_pg_db, monkeypatch  # noqa: F811 - imported pytest fixture
+    fresh_pg_db,  # noqa: F811 - imported pytest fixture
+    monkeypatch,
 ):
     cfg = _make_alembic_config(fresh_pg_db)
     command.upgrade(cfg, "0043")

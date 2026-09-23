@@ -64,7 +64,11 @@ from app.models.job_opportunity import (
     NextAction,
     ProcessEvent,
 )
-from app.models.memory_pipeline import MemoryExtraction, MemoryWorkspace, MemoryReadReceipt
+from app.models.memory_pipeline import (
+    MemoryExtraction,
+    MemoryWorkspace,
+    MemoryReadReceipt,
+)
 from app.models.long_term_memory import (
     AgentMemorySetting,
     LongTermAgentMemory,
@@ -82,6 +86,7 @@ from app.models.pending_submission import PendingSubmission
 from app.models.persistent_task import PersistentTask, PersistentTaskTrigger
 from app.models.resume import Resume
 from app.models.resume_section import ResumeSection
+from app.models.token_revocation import TokenRevocation
 from app.models.user import User
 from app.models.user_mcp_server import UserMCPServer
 from app.models.user_model_credentials import UserModelCredential
@@ -92,6 +97,8 @@ from app.models.user_skill import UserSkill, UserSkillResource
 __all__ = [
     "ConversationMessage",
     "Conversation",
+    "ContextCheckpoint",
+    "TokenRevocation",
     "ConversationTurn",
     "CopilotPreference",
     "ConversationAttachmentDraft",

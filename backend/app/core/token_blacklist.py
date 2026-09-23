@@ -1,83 +1,52 @@
-"""JWT revocation via Redis blacklist.
+"""Durable JWT consumption. The caller owns the SQL transaction.
 
-Every issued token carries a ``jti`` claim (UUID hex). On logout / refresh-
-rotation we mark the jti as revoked in Redis with a TTL equal to the
-token's remaining lifetime — once the JWT itself expires the entry is
-auto-evicted, no cleanup needed.
-
-The blacklist is consulted on every authenticated request via the
-``is_revoked`` check in ``app.core.security.get_current_user`` and on
-``/auth/refresh`` for the old refresh token.
-
-Key shape:  revoked_jti:<jti>  → "1"
-
-Failure mode: if Redis is unreachable the safe default is to *deny* —
-better to ask the user to re-login than to honour a revoked token. The
-check raises so the auth dependency converts it to 401.
+A unique jti arbitrates concurrent refreshes in the database. A successful
+logout is acknowledged only after commit; Redis is not a security authority.
 """
 
 from __future__ import annotations
 
-import logging
-import time
+from datetime import datetime, timezone
 
-from app.db.redis import redis_client
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
-
-_PREFIX = "revoked_jti:"
-
-
-def _key(jti: str) -> str:
-    return f"{_PREFIX}{jti}"
+from app.models.token_revocation import TokenRevocation
 
 
-def _ttl_from_exp(exp: int | float | None) -> int:
-    """Return seconds remaining until ``exp`` (UNIX timestamp). Floor at 1."""
-    if not exp:
-        # Token without exp → use a 7-day TTL as upper bound; longer than any
-        # legitimately-issued refresh token in this project.
-        return 7 * 24 * 3600
-    remaining = int(exp) - int(time.time())
-    return max(1, remaining)
+def is_revoked(db: Session, jti: str | None) -> bool:
+    return not jti or db.get(TokenRevocation, jti) is not None
 
 
-async def revoke(jti: str, exp: int | float | None = None) -> None:
-    """Mark ``jti`` as revoked. ``exp`` is the JWT's ``exp`` claim; if given,
-    the Redis TTL matches so the key auto-cleans when the token would expire.
-    """
-    if not jti:
-        return
-    try:
-        await redis_client.set(_key(jti), "1", ex=_ttl_from_exp(exp))
-    except Exception as exc:  # noqa: BLE001
-        # Don't break the request flow on Redis hiccup — log loudly so this
-        # surfaces during monitoring; the token will still expire naturally.
-        #
-        # Known residual window (accepted): this write is fail-open while
-        # ``is_revoked`` is fail-closed. If Redis is down at logout time the
-        # revocation is LOST — after Redis recovers, the presented token
-        # stays valid until natural expiry (access: ~30 min). Backstops: a
-        # password change bumps ``token_version`` (kills everything without
-        # the blacklist), and during the outage itself every authed request
-        # 401s anyway via the fail-closed read.
-        logger.error("Failed to revoke jti=%s in Redis: %s", jti, exc)
+def consume(db: Session, jti: str, exp: int | float) -> bool:
+    """Return True for the single winner, without committing unrelated work."""
+    if not jti or len(jti) > 64:
+        raise ValueError("Invalid token identifier")
+    expiry = datetime.fromtimestamp(exp, timezone.utc).replace(tzinfo=None)
+    insert = sqlite_insert if db.get_bind().dialect.name == "sqlite" else pg_insert
+    result = db.execute(
+        insert(TokenRevocation)
+        .values(jti=jti, expires_at=expiry)
+        .on_conflict_do_nothing(index_elements=["jti"])
+    )
+    return result.rowcount == 1
 
 
-async def is_revoked(jti: str | None) -> bool:
-    """Return True if the jti has been revoked. Tokens without jti are
-    treated as not revoked (backward-compat for tokens issued before this
-    rollout); they expire naturally on their own short access TTL.
-    """
-    if not jti:
-        return False
-    try:
-        val = await redis_client.get(_key(jti))
-        return val is not None
-    except Exception as exc:  # noqa: BLE001
-        # Fail-closed: a Redis outage shouldn't let revoked tokens through.
-        logger.error("Blacklist check failed for jti=%s; failing closed: %s", jti, exc)
-        return True
+def revoke(db: Session, jti: str, exp: int | float) -> None:
+    """Idempotently persist revocation; storage errors deliberately propagate."""
+    consume(db, jti, exp)
 
 
-__all__ = ["revoke", "is_revoked"]
+def prune_expired(db: Session, *, limit: int = 1000) -> int:
+    """Bounded maintenance; an expired JWT cannot authorize another request."""
+    expired = (
+        select(TokenRevocation.jti)
+        .where(
+            TokenRevocation.expires_at < datetime.now(timezone.utc).replace(tzinfo=None)
+        )
+        .limit(limit)
+    )
+    result = db.execute(delete(TokenRevocation).where(TokenRevocation.jti.in_(expired)))
+    return result.rowcount

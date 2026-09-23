@@ -392,7 +392,6 @@ def test_active_turn_queues_submission_without_writing_history(
 def test_cancel_pending_turn_releases_session(
     client: TestClient, db: Session, monkeypatch
 ):
-    from app.services.chat.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
     conversation = Conversation(
@@ -413,10 +412,6 @@ def test_cancel_pending_turn_releases_session(
     db.add_all([conversation, turn])
     db.commit()
 
-    async def request_cancel(_turn_id: str):
-        return None
-
-    monkeypatch.setattr(turn_event_buffer, "request_cancel", request_cancel)
     response = client.post("/api/v1/chat/cancel-session/turns/cancel-turn/cancel")
 
     assert response.status_code == 202

@@ -2,7 +2,7 @@
 
 import asyncio
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, MetaData, Table
 from sqlalchemy.orm import sessionmaker
 from alembic import command
 from app.agent_runtime import tool_call_executor as runtime
@@ -15,7 +15,8 @@ from tests.test_db.test_alembic_migrations import fresh_pg_db, _make_alembic_con
 
 
 def test_tool_identity_upgrade_preserves_audit_and_fences_concurrent_execution(
-    fresh_pg_db, monkeypatch  # noqa: F811
+    fresh_pg_db,  # noqa: F811
+    monkeypatch,
 ):
     cfg = _make_alembic_config(fresh_pg_db)
     command.upgrade(cfg, "0045")
@@ -35,8 +36,28 @@ def test_tool_identity_upgrade_preserves_audit_and_fences_concurrent_execution(
                 mode="agent",
                 message="run",
             )
-            db.add(turn)
-            db.flush()
+            turn.id = "legacy-turn"
+            historical = Table("conversation_turns", MetaData(), autoload_with=engine)
+            from app.db.types import utc_now
+
+            db.execute(
+                historical.insert().values(
+                    id=turn.id,
+                    conversation_id=conversation.id,
+                    user_id=user.id,
+                    mode="agent",
+                    message="run",
+                    status="pending",
+                    created_at=utc_now(),
+                    question_indexes_json=[],
+                    attachments_json=[],
+                    object_references_json=[],
+                    tool_snapshot_json={},
+                    loaded_tool_schemas_json=[],
+                    budget_json={},
+                    dispatch_generation=1,
+                )
+            )
             # Core INSERT does not mention the not-yet-existing digest column.
             db.execute(
                 AgentToolCall.__table__.insert().values(

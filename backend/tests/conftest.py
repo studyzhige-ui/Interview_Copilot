@@ -153,3 +153,17 @@ def patch_session_locals(monkeypatch, db_session, *modules) -> None:
     """
     for mod in modules:
         monkeypatch.setattr(mod, "SessionLocal", lambda: NoCloseSession(db_session))
+
+
+@pytest.fixture(autouse=True)
+def isolate_unit_task_transport(request, monkeypatch):
+    """Unit tests must not publish real work or wait on an external broker."""
+    if request.node.get_closest_marker("integration"):
+        return
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.task_queue.celery_app import celery_app
+
+    monkeypatch.setattr(
+        celery_app, "send_task", lambda *args, **kwargs: SimpleNamespace(id=uuid4().hex)
+    )

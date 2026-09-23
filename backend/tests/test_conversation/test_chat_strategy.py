@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock as _AsyncFactoryMock
+
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 from app.conversation.chat_strategy import ChatPipelineStrategy
@@ -20,20 +21,40 @@ def test_chat_answers_always_use_the_user_primary_model(monkeypatch, uses_rag):
     calls: list[tuple[str, str | None]] = []
     generation_options: list[dict] = []
 
-    class FakeLLM:
-        async def astream_complete(self, prompt, **kwargs):
-            generation_options.append(kwargs)
+    profile = ModelProfile(
+        id="openai/test",
+        provider="openai",
+        display_name="Test",
+        model="test",
+        api_base="https://example.invalid",
+        api_key_env="OPENAI_API_KEY",
+    )
+
+    class FakeAdapter:
+        prompt_cache_supported = False
+        prompt_cache_enabled = False
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def start_stream(self, request):
+            generation_options.append({"max_tokens": request.max_tokens})
 
             async def chunks():
-                yield SimpleNamespace(delta="answer")
+                yield ProviderStreamEvent(text_delta="answer")
 
             return chunks()
 
     def fake_get_llm(role, user_id=None):
         calls.append((role, user_id))
-        return FakeLLM()
+        return object(), profile
 
-    monkeypatch.setattr(chat_strategy, "get_llm_for_role", fake_get_llm)
+    monkeypatch.setattr(
+        chat_strategy,
+        "build_provider_client_for_role",
+        _AsyncFactoryMock(side_effect=fake_get_llm),
+    )
+    monkeypatch.setattr(chat_strategy, "ModelProviderAdapter", FakeAdapter)
 
     ctx = StrategyContext(
         user_id="alice",
@@ -99,8 +120,8 @@ def test_chat_native_provider_path_uses_canonical_partition_and_usage(monkeypatc
 
     monkeypatch.setattr(
         chat_strategy,
-        "get_llm_for_role",
-        lambda *_args, **_kwargs: (object(), profile),
+        "build_provider_client_for_role",
+        _AsyncFactoryMock(side_effect=lambda *_args, **_kwargs: (object(), profile)),
     )
     monkeypatch.setattr(chat_strategy, "ModelProviderAdapter", FakeAdapter)
     assembled = AssembledContext(
@@ -127,9 +148,7 @@ def test_chat_native_provider_path_uses_canonical_partition_and_usage(monkeypatc
     assert "user guidance" not in request.system
     assert "turn data" not in request.system
     assert [message["role"] for message in request.messages] == ["user"] * 5
-    assert request.messages[-1]["content"].endswith(
-        "current direction"
-    )
+    assert request.messages[-1]["content"].endswith("current direction")
     assert result.final_answer == "native answer"
     assert result.prompt_tokens == 12
     assert result.completion_tokens == 3
@@ -144,8 +163,12 @@ def test_chat_refuses_without_calling_model_when_retrieval_misses(monkeypatch):
 
     monkeypatch.setattr(
         chat_strategy,
-        "get_llm_for_role",
-        lambda *_args, **_kwargs: pytest.fail("answer model must not be called"),
+        "build_provider_client_for_role",
+        _AsyncFactoryMock(
+            side_effect=lambda *_args, **_kwargs: pytest.fail(
+                "answer model must not be called"
+            )
+        ),
     )
     ctx = StrategyContext(
         user_id="alice",
@@ -199,8 +222,12 @@ def test_chat_does_not_claim_unproven_attachment_coverage(
 
     monkeypatch.setattr(
         chat_strategy,
-        "get_llm_for_role",
-        lambda *_args, **_kwargs: pytest.fail("model must not be called"),
+        "build_provider_client_for_role",
+        _AsyncFactoryMock(
+            side_effect=lambda *_args, **_kwargs: pytest.fail(
+                "model must not be called"
+            )
+        ),
     )
     ctx = StrategyContext(
         user_id="alice",
@@ -225,8 +252,12 @@ def test_chat_refuses_when_qualified_product_is_absent_from_evidence(monkeypatch
 
     monkeypatch.setattr(
         chat_strategy,
-        "get_llm_for_role",
-        lambda *_args, **_kwargs: pytest.fail("answer model must not be called"),
+        "build_provider_client_for_role",
+        _AsyncFactoryMock(
+            side_effect=lambda *_args, **_kwargs: pytest.fail(
+                "answer model must not be called"
+            )
+        ),
     )
     retrieval_result = RetrievalResult(
         chunks=[

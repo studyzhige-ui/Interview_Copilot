@@ -3,6 +3,7 @@ import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
 import {
   cancelChatTurn,
+  getChatTranscript,
   createChatSubmissionIdentity,
   streamChatTurn,
 } from '@/api/chat';
@@ -13,6 +14,7 @@ import type {
   ToolUseBlock,
 } from '@/types/api';
 import type { Attachment, Mode, SessionRuntime, RecoverableSubmission } from './types';
+import { toUI } from './types';
 import { saveUnconfirmed } from './submissionRecovery';
 
 /**
@@ -269,7 +271,7 @@ export function useChatStream({
         bump();
       },
     })
-      .then((admission) => {
+      .then(async (admission) => {
         if (admission) { getRuntime(sid).unconfirmedSubmission = undefined; saveUnconfirmed(sid); }
         if (admission && admission.status !== 'admitted' && optimisticUserMessage) {
           const runtime = getRuntime(sid);
@@ -285,6 +287,20 @@ export function useChatStream({
           onQueueChanged?.();
         }
         finalize();
+        if (admission?.status === 'admitted' || existingTurnId) {
+          try {
+            const snapshot = await getChatTranscript(sid);
+            const runtime = getRuntime(sid);
+            if (!runtime.streaming && !runtime.turnId) {
+              runtime.messages = snapshot.messages.map(toUI);
+              runtime.loadedHistory = true;
+              bump();
+            }
+            onQueueChanged?.();
+          } catch {
+            toast.error('本轮已结束，但完整记录暂时无法同步，请刷新后查看。');
+          }
+        }
       })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === 'AbortError') {

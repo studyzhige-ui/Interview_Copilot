@@ -54,7 +54,9 @@ def upgrade() -> None:
             "lifecycle IN ('exploring', 'active', 'paused', 'archived')",
             name="ck_career_profile_directions_lifecycle",
         ),
-        sa.CheckConstraint("priority >= 0", name="ck_career_profile_directions_priority"),
+        sa.CheckConstraint(
+            "priority >= 0", name="ck_career_profile_directions_priority"
+        ),
         sa.CheckConstraint(
             "confirmed_source_kind IN "
             "('user_edit', 'conversation_message', 'draft_acceptance')",

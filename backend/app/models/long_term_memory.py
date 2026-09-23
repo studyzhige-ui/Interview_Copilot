@@ -98,7 +98,9 @@ class LongTermAgentMemory(Base):
     last_confirmed_at = Column(DateTime, nullable=False, default=utc_now)
     last_recalled_at = Column(DateTime, nullable=True)
     recall_count = Column(Integer, nullable=False, default=0)
-    origin = Column(String(16), nullable=False, default="legacy", server_default="legacy")
+    origin = Column(
+        String(16), nullable=False, default="legacy", server_default="legacy"
+    )
     index_text = Column(Text, nullable=False, default="", server_default="")
     evidence_json = Column(JSON, nullable=False, default=list, server_default="[]")
     last_used_at = Column(DateTime, nullable=True)

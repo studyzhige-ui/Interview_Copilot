@@ -1,7 +1,7 @@
 """Outbox jobs: reliable, retryable cross-system work.
 
-Postgres is the transactional source of truth, but object storage and Milvus
-are NOT in the same transaction. Anything that must happen to those external
+Postgres is the transactional source of truth. Object-storage work and
+background index rebuilds execute after the business transaction commits. Anything that must happen to those external
 systems after a committed business change — delete an object, drop a Milvus
 index, clean up a failed upload, parse/ingest/transcribe — is enqueued here in
 the SAME transaction as the business write, then drained by a worker.
@@ -77,6 +77,7 @@ class OutboxJob(Base):
     # NULL when the job carries no natural idempotency key (the unique
     # constraint above only binds non-null keys per Postgres semantics).
     idempotency_key = Column(String, nullable=True)
+    lease_version = Column(Integer, default=0, nullable=False, server_default="0")
     locked_at = Column(DateTime, nullable=True)
     locked_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)

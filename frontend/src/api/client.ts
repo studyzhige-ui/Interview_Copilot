@@ -42,25 +42,39 @@ let refreshInFlight: Promise<string | null> | null = null;
  * refresh token / the refresh endpoint rejected it. Callers should
  * fall back to :func:`redirectToAuth` on ``null``.
  */
-async function refreshAccessToken(): Promise<string | null> {
+async function refreshAccessToken(rejectedAccess: string | null): Promise<string | null> {
   if (refreshInFlight) return refreshInFlight;
   const refresh = tokenStore.getRefresh();
   if (!refresh) return null;
 
-  refreshInFlight = (async () => {
+  const rotate = async () => {
+    // Another tab or an earlier request may already have rotated this ticket.
+    const current = tokenStore.getAccess();
+    if (current && current !== rejectedAccess) return current;
+    const ticket = tokenStore.getRefresh();
+    if (!ticket) return null;
     try {
-      const res = await axios.post(apiUrl('/auth/refresh'), { refresh_token: refresh }, { timeout: 10_000 });
+      const res = await axios.post(apiUrl('/auth/refresh'), { refresh_token: ticket }, { timeout: 10_000 });
       const access = res.data?.access_token as string | undefined;
-      const newRefresh = (res.data?.refresh_token as string | undefined) ?? refresh;
-      if (!access) return null;
+      const newRefresh = res.data?.refresh_token as string | undefined;
+      if (!access || !newRefresh) throw new Error('登录服务响应不完整，请稍后重试');
+      // Logout or account switching while the request was pending wins.
+      if (tokenStore.getRefresh() !== ticket) return tokenStore.getAccess();
       tokenStore.set(access, newRefresh);
       return access;
-    } catch {
-      return null;
-    } finally {
-      refreshInFlight = null;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 401) {
+        if (tokenStore.getRefresh() !== ticket) return tokenStore.getAccess();
+        return null;
+      }
+      throw error;
     }
-  })();
+  };
+  // Web Locks serializes one-time refresh tickets across same-origin tabs.
+  refreshInFlight = (navigator.locks
+    ? navigator.locks.request('interview-copilot-token-refresh', rotate)
+    : rotate()
+  ).finally(() => { refreshInFlight = null; });
   return refreshInFlight;
 }
 
@@ -104,9 +118,10 @@ export async function authedFetch(
     return fetch(input, { ...init, headers });
   };
 
+  const rejectedAccess = tokenStore.getAccess();
   let resp = await doFetch();
   if (resp.status === 401) {
-    const fresh = await refreshAccessToken();
+    const fresh = await refreshAccessToken(rejectedAccess);
     if (!fresh) {
       redirectToAuth();
       throw new Error('登录状态已失效，请重新登录');
@@ -124,7 +139,8 @@ apiClient.interceptors.response.use(
 
     if (status === 401 && !original._retry) {
       original._retry = true;
-      const newToken = await refreshAccessToken();
+      const authorization = String(original.headers?.Authorization ?? '');
+      const newToken = await refreshAccessToken(authorization.replace(/^Bearer /, '') || null);
       if (newToken) {
         original.headers = { ...(original.headers ?? {}), Authorization: `Bearer ${newToken}` };
         return apiClient.request(original);

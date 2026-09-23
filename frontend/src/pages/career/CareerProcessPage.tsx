@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { ManualInvitationForm } from './ManualInvitationForm';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
@@ -310,6 +311,7 @@ function JobDescriptionPanel({ opportunityId, sourceUrl }: { opportunityId: stri
 
 export function CareerProcessPage() {
   const [opportunityEditor, setOpportunityEditor] = useState(false);
+  const [invitationOpen, setInvitationOpen] = useState(false);
   const [directionEditor, setDirectionEditor] = useState(false);
   const [mergeReviewOpen, setMergeReviewOpen] = useState(false);
   const [actionEditor, setActionEditor] = useState(false);
@@ -373,7 +375,7 @@ export function CareerProcessPage() {
   if (jobsQuery.isError) return <div className="p-8" role="alert"><h1 className="text-xl">暂时无法读取求职进程</h1><p className="my-4 text-sm text-stone-500">请检查服务连接后重试。已有机会和安排不会因此改变。</p><Btn kind="outline" onClick={refresh}>重新加载</Btn></div>;
 
   return <div className="mx-auto max-w-7xl p-4 md:p-6">
-    <header className="mb-5 flex flex-wrap items-start justify-between gap-4"><div><h1 className="text-xl font-semibold text-stone-800">求职进程</h1><p className="mt-1 text-sm text-stone-500">记录想申请的岗位，跟进投递和面试，再安排下一步。</p></div><div className="flex gap-2"><Btn kind="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={refresh}>刷新</Btn><Btn kind="outline" size="sm" icon={<GitMerge size={14} />} onClick={() => setMergeReviewOpen(true)}>检查重复{mergeCandidatesQuery.data?.length ? ` · ${mergeCandidatesQuery.data.length}` : ''}</Btn><Btn size="sm" icon={<Plus size={14} />} onClick={() => setOpportunityEditor(true)}>添加机会</Btn></div></header>
+    <header className="mb-5 flex flex-wrap items-start justify-between gap-4"><div><h1 className="text-xl font-semibold text-stone-800">求职进程</h1><p className="mt-1 text-sm text-stone-500">记录想申请的岗位，跟进投递和面试，再安排下一步。</p></div><div className="flex gap-2"><Btn kind="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={refresh}>刷新</Btn><Btn kind="outline" size="sm" icon={<GitMerge size={14} />} onClick={() => setMergeReviewOpen(true)}>检查重复{mergeCandidatesQuery.data?.length ? ` · ${mergeCandidatesQuery.data.length}` : ''}</Btn><Btn kind="outline" size="sm" onClick={() => setInvitationOpen(true)}>记录新岗位面试</Btn><Btn size="sm" icon={<Plus size={14} />} onClick={() => setOpportunityEditor(true)}>添加机会</Btn></div></header>
     {jobs.length === 0 ? <section className="getting-started"><h2>先记下一个你想申请的岗位</h2><p className="workspace-start-note">填写公司和岗位即可开始跟进。之后把投递、面试和准备事项放在这份记录里。</p><Btn onClick={() => setOpportunityEditor(true)}>添加第一个机会</Btn><p className="workspace-start-note">还没有目标岗位？<Link to="/general-chat?start=direction">先一起梳理求职方向 →</Link></p></section> : <div className="grid gap-5 lg:grid-cols-[330px_minmax(0,1fr)]">
       <aside className="rounded-xl border border-stone-200 bg-white shadow-xs">
         <div className="border-b border-stone-100 px-4 py-3 text-sm font-semibold text-stone-800">岗位机会 · {jobs.length}</div>
@@ -410,6 +412,9 @@ export function CareerProcessPage() {
     {actionsQuery.isError && <div role="alert" className="mt-6 text-sm text-stone-600">下一步行动暂时无法加载。<Btn kind="ghost" onClick={() => actionsQuery.refetch()}>重试行动列表</Btn></div>}
     {!actionsQuery.isLoading && !actionsQuery.isError && (jobs.length > 0 || activeActions.length > 0) && <section className="mt-6"><div className="mb-3 flex items-center justify-between"><div><h2 className="font-semibold text-stone-800">下一步行动</h2><p className="mt-0.5 text-xs text-stone-500">跨岗位统一查看，但每条行动仍可明确关联岗位、面试、Offer 或材料。</p></div><Btn size="sm" icon={<Plus size={14} />} onClick={() => { setEditingAction(null); setActionEditor(true); }}>添加行动</Btn></div>{activeActions.length ? <div className="grid gap-3 md:grid-cols-2">{activeActions.map((action) => <ActionCard key={action.id} action={action} job={jobs.find((job) => job.id === action.job_opportunity_id)} busy={busy} onEdit={() => { setEditingAction(action); setActionEditor(true); }} onTransition={(transition) => run(() => transitionNextAction(action, transition), transition === 'complete' ? '行动已完成' : '行动状态已更新')} />)}</div> : <div className="rounded-xl border border-stone-200 bg-white"><EmptyState icon={<CalendarClock size={30} />} title="当前没有待办行动" /></div>}</section>}
 
+    {invitationOpen && <Modal open onClose={() => setInvitationOpen(false)} title="记录新岗位面试" width={560}>
+      <ManualInvitationForm onSaved={() => { setInvitationOpen(false); void queryClient.invalidateQueries({ queryKey: ['job-opportunities'] }); void queryClient.invalidateQueries({ queryKey: ['today-job-opportunities'] }); toast.success('面试安排已保存'); }} />
+    </Modal>}
     {opportunityEditor && <OpportunityEditor open busy={busy} directions={directions} onClose={() => setOpportunityEditor(false)} onSave={async (form, directionIds) => { if (!form.occurred_at) { toast.warn('请填写发生时间'); return; } const sourceIdentity = `ui:${crypto.randomUUID()}`; const ok = await run(() => createJobOpportunity({ company_name: form.company_name.trim(), job_title: form.job_title.trim(), entry_reason: form.entry_reason as 'explicit_tracking' | 'targeted_preparation' | 'user_confirmed_application', occurred_at: isoFromLocal(form.occurred_at), source_kind: 'user_assertion', source_identity: sourceIdentity, source_description: form.source_description.trim(), location: form.location.trim() || undefined, team: form.team.trim() || undefined, source_url: form.source_url.trim() || undefined, idempotency_key: sourceIdentity, directions: directionIds.map((directionId) => ({ direction_id: directionId, match_reason: `用户在创建岗位时明确关联到“${directionsById.get(directionId)?.label ?? directionId}”方向` })) }), '求职机会已加入跟进'); if (ok) setOpportunityEditor(false); }} />}
     <Modal open={mergeReviewOpen} onClose={() => setMergeReviewOpen(false)} title="核对疑似重复岗位" width={760} footer={<Btn kind="ghost" onClick={() => setMergeReviewOpen(false)}>关闭</Btn>}>
       <div className="space-y-5"><p className="text-sm leading-relaxed text-stone-600">系统只提示候选，不会自动合并。确认后双方外部标识和流程历史仍分别保留；误合并可随时撤销。</p>

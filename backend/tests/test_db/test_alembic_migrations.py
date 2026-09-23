@@ -52,6 +52,8 @@ def _pg_available() -> bool:
 def fresh_pg_db():
     """Provision an isolated, empty Postgres DB; drop it on teardown."""
     if not _pg_available():
+        if os.environ.get("TEST_PG_ADMIN_URL"):
+            pytest.fail("Configured PostgreSQL test service is unavailable")
         pytest.skip(
             "Postgres not reachable at TEST_PG_ADMIN_URL — skipping migration test."
         )

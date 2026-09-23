@@ -41,6 +41,7 @@ from app.agent_runtime.harness_events import HarnessEvent
 from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
+from app.core.async_runtime import run_async
 from app.db.database import get_db
 from app.models.chat import Conversation
 from app.models.conversation_turn import ConversationTurn
@@ -70,7 +71,7 @@ router = APIRouter(tags=["chat"])
     "/chat/{session_id}/turns/{turn_id}/tool-calls/{call_id}",
     response_model=AgentToolCallAuditView,
 )
-async def get_turn_tool_call_audit(
+def get_turn_tool_call_audit(
     session_id: str,
     turn_id: str,
     call_id: str,
@@ -115,7 +116,7 @@ def _attachment_draft_view(draft, projection, *, removed: bool = False):
     "/chat/{session_id}/attachment-drafts",
     response_model=AttachmentDraftResponse,
 )
-async def create_chat_attachment_draft(
+def create_chat_attachment_draft(
     session_id: str,
     body: AttachmentDraftCreateRequest,
     current_user: User = Depends(get_current_user),
@@ -161,7 +162,7 @@ async def create_chat_attachment_draft(
     "/chat/{session_id}/attachment-drafts/{draft_id}",
     response_model=AttachmentDraftResponse,
 )
-async def get_chat_attachment_draft(
+def get_chat_attachment_draft(
     session_id: str,
     draft_id: str,
     current_user: User = Depends(get_current_user),
@@ -193,7 +194,7 @@ async def get_chat_attachment_draft(
     "/chat/{session_id}/attachment-drafts/{draft_id}",
     response_model=AttachmentDraftResponse,
 )
-async def remove_chat_attachment_draft(
+def remove_chat_attachment_draft(
     session_id: str,
     draft_id: str,
     current_user: User = Depends(get_current_user),
@@ -228,7 +229,7 @@ async def remove_chat_attachment_draft(
     "/chat/{session_id}/turns/{turn_id}/interaction",
     response_model=AgentInteractionView | None,
 )
-async def get_turn_interaction(
+def get_turn_interaction(
     session_id: str,
     turn_id: str,
     current_user: User = Depends(get_current_user),
@@ -257,7 +258,7 @@ async def get_turn_interaction(
     "/chat/{session_id}/turns/{turn_id}/interactions/{interaction_id}/resolve",
     response_model=ResolveInteractionResponse,
 )
-async def resolve_turn_interaction(
+def resolve_turn_interaction(
     session_id: str,
     turn_id: str,
     interaction_id: str,
@@ -384,7 +385,7 @@ async def resolve_turn_interaction(
         db.rollback()
         raise HTTPException(status_code=409, detail="Turn is not waiting")
     try:
-        await turn_event_buffer.reset(turn_id)
+        run_async(turn_event_buffer.reset(turn_id))
         schedule_turn(turn_id)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Could not resume conversation turn %s", turn_id)
@@ -470,7 +471,7 @@ def _interaction_event(turn_id: str) -> str | None:
     response_model=ChatTurnResponse,
 )
 @limiter.limit(RATE_EXPENSIVE)
-async def create_chat_turn(
+def create_chat_turn(
     request: Request,
     response: Response,
     session_id: str,
@@ -527,7 +528,7 @@ async def create_chat_turn(
         return payload
 
     try:
-        await turn_event_buffer.ping()
+        run_async(turn_event_buffer.ping())
     except Exception as exc:  # noqa: BLE001
         fail_pending_turn(
             db,
@@ -572,7 +573,7 @@ async def create_chat_turn(
     "/chat/{session_id}/submissions",
     response_model=list[PendingSubmissionItem],
 )
-async def list_pending_submissions(
+def list_pending_submissions(
     session_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -652,7 +653,7 @@ def _submission_view(row) -> PendingSubmissionItem:
     "/chat/{session_id}/submissions/{submission_id}",
     response_model=PendingSubmissionItem,
 )
-async def edit_pending_submission(
+def edit_pending_submission(
     session_id: str,
     submission_id: str,
     body: PendingSubmissionUpdateRequest,
@@ -692,7 +693,7 @@ async def edit_pending_submission(
     "/chat/{session_id}/submissions/{submission_id}",
     status_code=204,
 )
-async def withdraw_pending_submission_endpoint(
+def withdraw_pending_submission_endpoint(
     session_id: str,
     submission_id: str,
     expected_version: int = Query(ge=1),
@@ -732,14 +733,14 @@ async def withdraw_pending_submission_endpoint(
     return Response(status_code=204)
 
 
-async def _dispatch_admission_result(db: Session, user_pk: int, result):
+def _dispatch_admission_result(db: Session, user_pk: int, result):
     from app.services.chat.turn_event_buffer import turn_event_buffer
     from app.services.chat.turn_executor import fail_pending_turn, schedule_turn
 
     if not result.should_dispatch:
         return
     try:
-        await turn_event_buffer.ping()
+        run_async(turn_event_buffer.ping())
         schedule_turn(result.dispatch_turn_id or "")
     except Exception as exc:  # noqa: BLE001
         fail_pending_turn(
@@ -755,7 +756,7 @@ async def _dispatch_admission_result(db: Session, user_pk: int, result):
     "/chat/{session_id}/submissions/{submission_id}/retry",
     response_model=ChatTurnResponse,
 )
-async def retry_pending_submission_endpoint(
+def retry_pending_submission_endpoint(
     session_id: str,
     submission_id: str,
     body: PendingSubmissionCommandRequest,
@@ -780,7 +781,7 @@ async def retry_pending_submission_endpoint(
     except SubmissionConflictError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    await _dispatch_admission_result(db, user_pk, result)
+    _dispatch_admission_result(db, user_pk, result)
     payload = {
         "submission_id": result.submission_id,
         "version": result.version,
@@ -801,7 +802,7 @@ class _InterruptRequest(PendingSubmissionCommandRequest):
     "/chat/{session_id}/turns/{turn_id}/interrupt",
     status_code=202,
 )
-async def interrupt_turn_for_submission(
+def interrupt_turn_for_submission(
     session_id: str,
     turn_id: str,
     body: _InterruptRequest,
@@ -813,7 +814,6 @@ async def interrupt_turn_for_submission(
         cancel_pending_turn,
         request_turn_interrupt,
     )
-    from app.services.chat.turn_event_buffer import turn_event_buffer
 
     user_pk = resolve_user_pk(db, current_user.username)
     _owned_conversation_or_404(db, session_id, user_pk)
@@ -830,7 +830,6 @@ async def interrupt_turn_for_submission(
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    await turn_event_buffer.request_cancel(turn_id)
     # Pending/waiting has no active worker to consume the signal; terminalize
     # synchronously. Running returns cancelling and its worker owns durability.
     if status in {"pending", "waiting"}:
@@ -845,13 +844,13 @@ async def interrupt_turn_for_submission(
 
 
 @router.get("/chat/{session_id}/turns/{turn_id}/events")
-async def stream_chat_turn_events(
+def stream_chat_turn_events(
     session_id: str,
     turn_id: str,
     after: str | None = Query(default=None),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_pk = resolve_user_pk(db, current_user.username)
     turn = db.get(ConversationTurn, turn_id)
@@ -861,10 +860,16 @@ async def stream_chat_turn_events(
 
     async def event_generator():
         import asyncio
+        from redis.exceptions import RedisError
 
         cursor = after or last_event_id or "0-0"
         while True:
-            events = await turn_event_buffer.read(turn_id, cursor)
+            try:
+                events = await turn_event_buffer.read(turn_id, cursor)
+            except (RedisError, ConnectionError, TimeoutError):
+                # Durable state remains authoritative when event delivery fails.
+                events = []
+                await asyncio.sleep(1)
             if not events:
                 status, error = await asyncio.to_thread(_turn_terminal_state, turn_id)
                 if status == "waiting":
@@ -903,7 +908,7 @@ async def stream_chat_turn_events(
 
 
 @router.post("/chat/{session_id}/turns/{turn_id}/cancel", status_code=202)
-async def cancel_chat_turn(
+def cancel_chat_turn(
     session_id: str,
     turn_id: str,
     current_user: User = Depends(get_current_user),
@@ -915,10 +920,8 @@ async def cancel_chat_turn(
         raise HTTPException(status_code=404, detail="Turn not found or access denied")
     if turn.status not in {"pending", "running", "waiting"}:
         return {"turn_id": turn_id, "status": turn.status, "cancelled": False}
-    from app.services.chat.turn_event_buffer import turn_event_buffer
     from app.services.chat.turn_executor import cancel_pending_turn
 
-    await turn_event_buffer.request_cancel(turn_id)
     cancelled_before_start = cancel_pending_turn(db, turn_id, user_pk)
     return {
         "turn_id": turn_id,

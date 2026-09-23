@@ -16,7 +16,6 @@ avatar storage logic in ``services.auth.avatar_service``.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import timedelta
 
@@ -25,6 +24,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from jwt.exceptions import PyJWTError as JWTError
 from sqlalchemy.orm import Session
 
+from app.core.async_runtime import run_async
 from app.core.config import settings
 from app.core.rate_limit import RATE_AUTH, RATE_UPLOAD, limiter
 from app.core.security import (
@@ -36,7 +36,7 @@ from app.core.security import (
     token_claims_for,
     verify_and_maybe_rehash,
 )
-from app.core.token_blacklist import is_revoked, revoke
+from app.core.token_blacklist import consume, revoke
 from app.db.database import get_db
 from app.models.user import User
 from app.services.auth import avatar_service, user_account_service
@@ -73,8 +73,8 @@ from app.schemas.auth import (  # noqa: E402, F401
 # ── Token helpers ──────────────────────────────────────────────────────
 
 
-async def _revoke_token_if_present(token: str | None) -> None:
-    """Decode + revoke a token's jti. Best-effort — invalid tokens are no-ops.
+def _revoke_token_if_present(db: Session, token: str | None) -> None:
+    """Decode and persist revocation; invalid tokens are already unusable.
 
     Used by /logout and /refresh to invalidate the consumed tokens.
     """
@@ -87,7 +87,7 @@ async def _revoke_token_if_present(token: str | None) -> None:
     jti = payload.get("jti")
     exp = payload.get("exp")
     if jti:
-        await revoke(jti, exp=exp)
+        revoke(db, jti, exp=exp)
 
 
 def _generic_400(detail_human: str) -> HTTPException:
@@ -120,7 +120,7 @@ def _conflict(code: str, message: str) -> HTTPException:
 
 @router.post("/send-code", response_model=dict)
 @limiter.limit(RATE_AUTH)
-async def send_verification_code(
+def send_verification_code(
     request: Request,
     response: Response,
     payload: EmailRequest,
@@ -154,10 +154,12 @@ async def send_verification_code(
         )
 
     try:
-        ttl = await request_code(
-            code_email,
-            purpose=payload.purpose,
-            deliver=deliver,
+        ttl = run_async(
+            request_code(
+                code_email,
+                purpose=payload.purpose,
+                deliver=deliver,
+            )
         )
     except CodeError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -166,7 +168,7 @@ async def send_verification_code(
 
 @router.post("/reset-password", response_model=dict)
 @limiter.limit(RATE_AUTH)
-async def reset_password(
+def reset_password(
     request: Request,
     response: Response,
     body: ResetPasswordRequest,
@@ -183,7 +185,7 @@ async def reset_password(
     client_ip = request.client.host if request.client else None
 
     try:
-        await assert_ip_not_locked(client_ip)
+        run_async(assert_ip_not_locked(client_ip))
     except CodeError:
         raise generic_err
 
@@ -191,23 +193,23 @@ async def reset_password(
     code_email = str(user.email) if user and user.email else str(body.email)
 
     try:
-        await verify_code(code_email, body.code, purpose="reset_password")
+        run_async(verify_code(code_email, body.code, purpose="reset_password"))
     except CodeError:
-        await record_verify_failure_for_ip(client_ip)
+        run_async(record_verify_failure_for_ip(client_ip))
         raise generic_err
 
     if user is None or not user.email_verified or not getattr(user, "is_active", True):
-        await record_verify_failure_for_ip(client_ip)
+        run_async(record_verify_failure_for_ip(client_ip))
         raise generic_err
 
-    await reset_ip_failures(client_ip)
+    run_async(reset_ip_failures(client_ip))
     user_account_service.apply_password_change(db, user, body.new_password)
     return {"status": "ok", "message": "密码已重置，请使用新密码登录"}
 
 
 @router.post("/register", response_model=dict)
 @limiter.limit(RATE_AUTH)
-async def register_user(
+def register_user(
     request: Request,
     response: Response,
     user_in: UserCreate,
@@ -229,7 +231,7 @@ async def register_user(
     # IP lockout — blocks attackers who rotate emails to keep each
     # per-(email, purpose) counter under its own threshold.
     try:
-        await assert_ip_not_locked(client_ip)
+        run_async(assert_ip_not_locked(client_ip))
     except CodeError:
         raise generic_err
 
@@ -246,12 +248,12 @@ async def register_user(
         )
 
     try:
-        await verify_code(user_in.email, user_in.code, purpose="register")
+        run_async(verify_code(user_in.email, user_in.code, purpose="register"))
     except CodeError:
-        await record_verify_failure_for_ip(client_ip)
+        run_async(record_verify_failure_for_ip(client_ip))
         raise generic_err
 
-    await reset_ip_failures(client_ip)
+    run_async(reset_ip_failures(client_ip))
 
     user = user_account_service.create_user(
         db,
@@ -280,6 +282,7 @@ def login_access_token(
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     refresh_token = create_refresh_token(data=claims)
+    db.commit()
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -289,7 +292,7 @@ def login_access_token(
 
 @router.post("/refresh", response_model=Token)
 @limiter.limit(RATE_AUTH)
-async def refresh_access_token(
+def refresh_access_token(
     request: Request,
     response: Response,
     body: RefreshRequest,
@@ -319,9 +322,13 @@ async def refresh_access_token(
     token_type = payload.get("type")
     jti = payload.get("jti")
     token_version = payload.get("token_version")
-    if not sub or token_type != "refresh" or token_version is None:
-        raise credentials_exception
-    if await is_revoked(jti):
+    if (
+        not sub
+        or token_type != "refresh"
+        or token_version is None
+        or not jti
+        or not payload.get("exp")
+    ):
         raise credentials_exception
 
     try:
@@ -329,7 +336,7 @@ async def refresh_access_token(
     except (TypeError, ValueError):
         raise credentials_exception
     user = user_account_service.get_by_id(db, user_id)
-    if user is None:
+    if user is None or not user.is_active:
         raise credentials_exception
 
     # A password change bumps token_version, so a refresh token minted before
@@ -339,7 +346,8 @@ async def refresh_access_token(
 
     # Revoke the consumed refresh token before issuing the new pair so a
     # double-spend race loses one of the two attempts.
-    await revoke(jti, exp=payload.get("exp"))
+    if not consume(db, jti, exp=payload["exp"]):
+        raise credentials_exception
 
     claims = token_claims_for(user)
     access_token = create_access_token(
@@ -347,6 +355,7 @@ async def refresh_access_token(
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     refresh_token = create_refresh_token(data=claims)
+    db.commit()
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -356,20 +365,22 @@ async def refresh_access_token(
 
 @router.post("/logout", response_model=dict)
 @limiter.limit(RATE_AUTH)
-async def logout(
+def logout(
     request: Request,
     response: Response,
     body: LogoutRequest | None = None,
     access_token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
 ):
     """Revoke the caller's access token and (optionally) their refresh token.
 
     Idempotent: revoking an already-revoked / already-expired token is a no-op.
     The endpoint never reveals whether the tokens were valid.
     """
-    await _revoke_token_if_present(access_token)
+    _revoke_token_if_present(db, access_token)
     if body and body.refresh_token:
-        await _revoke_token_if_present(body.refresh_token)
+        _revoke_token_if_present(db, body.refresh_token)
+    db.commit()
     return {"status": "ok"}
 
 
@@ -444,7 +455,7 @@ def update_me(
 
 @router.post("/me/avatar", response_model=MeResponse)
 @limiter.limit(RATE_UPLOAD)
-async def set_avatar(
+def set_avatar(
     request: Request,
     response: Response,
     body: AvatarSetRequest,
@@ -490,9 +501,7 @@ async def set_avatar(
     # the presigned PUT) — keeps a renamed executable from riding a permissive
     # image MIME into the user row.
     try:
-        head = await asyncio.to_thread(
-            avatar_service.read_object_head, asset.storage_uri, 32
-        )
+        head = avatar_service.read_object_head(asset.storage_uri, 32)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Avatar head read failed for user=%s: %s", current_user.username, exc

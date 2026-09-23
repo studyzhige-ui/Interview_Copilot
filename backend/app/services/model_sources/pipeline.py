@@ -34,7 +34,7 @@ import logging
 import os
 from pathlib import Path
 
-from app.db.redis import redis_client
+from app.db.redis import get_redis_client
 
 from .base import ModelEntry
 from .curated import apply_overrides
@@ -182,7 +182,9 @@ async def _persist_all(grouped: dict[str, list[ModelEntry]]) -> None:
         serialized = _serialize_entries(entries)
         snapshot[provider] = serialized
         try:
-            await redis_client.set(_redis_key(provider), serialized, ex=_CACHE_TTL_S)
+            await get_redis_client().set(
+                _redis_key(provider), serialized, ex=_CACHE_TTL_S
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "catalog: per-provider cache write failed for %s: %s",
@@ -190,7 +192,7 @@ async def _persist_all(grouped: dict[str, list[ModelEntry]]) -> None:
                 exc,
             )
     try:
-        await redis_client.set(
+        await get_redis_client().set(
             _redis_key_lkg(),
             json.dumps(snapshot, ensure_ascii=False),
         )
@@ -207,7 +209,7 @@ async def _load_one_provider(provider: str) -> list[ModelEntry]:
     ``ready=false`` because the user has no key — accurate UX.
     """
     try:
-        raw = await redis_client.get(_redis_key(provider))
+        raw = await get_redis_client().get(_redis_key(provider))
     except Exception as exc:  # noqa: BLE001
         logger.warning("catalog: Redis get failed for %s: %s", provider, exc)
         raw = None
@@ -223,7 +225,7 @@ async def _load_one_provider(provider: str) -> list[ModelEntry]:
 
 async def _load_one_from_lkg(provider: str) -> list[ModelEntry]:
     try:
-        raw = await redis_client.get(_redis_key_lkg())
+        raw = await get_redis_client().get(_redis_key_lkg())
     except Exception as exc:  # noqa: BLE001
         logger.warning("catalog: LKG read failed: %s", exc)
         return []
@@ -243,7 +245,7 @@ async def _load_all_from_lkg() -> dict[str, list[ModelEntry]]:
     when no LKG exists — so even a brand-new deploy with cold Redis
     serves something for the /catalog endpoint."""
     try:
-        raw = await redis_client.get(_redis_key_lkg())
+        raw = await get_redis_client().get(_redis_key_lkg())
     except Exception as exc:  # noqa: BLE001
         logger.warning("catalog: LKG read failed during refresh fallback: %s", exc)
         raw = None
@@ -309,9 +311,11 @@ async def refresh_catalog(
     Without a user_id (cron context), env-only fallback.
     """
     specs = ALL_SPECS
-    api_keys = {
-        s.provider: _resolve_key_for_provider(s.provider, user_id) for s in specs
-    }
+    api_keys = await asyncio.to_thread(
+        lambda: {
+            s.provider: _resolve_key_for_provider(s.provider, user_id) for s in specs
+        }
+    )
 
     async def _one(spec: VendorAdapterSpec) -> tuple[str, list[ModelEntry], bool]:
         defaults = get_provider_defaults(spec.provider)
@@ -381,7 +385,7 @@ async def refresh_catalog_for(
     defaults = get_provider_defaults(provider)
     if defaults is None:
         return []
-    api_key = _resolve_key_for_provider(provider, user_id)
+    api_key = await asyncio.to_thread(_resolve_key_for_provider, provider, user_id)
     if not api_key:
         return []
     api_base = _resolve_list_models_base(spec, defaults.default_api_base)
@@ -393,7 +397,7 @@ async def refresh_catalog_for(
         return await _load_one_from_lkg(provider)
     # Persist just this provider's slice + update LKG.
     try:
-        await redis_client.set(
+        await get_redis_client().set(
             _redis_key(provider),
             _serialize_entries(entries),
             ex=_CACHE_TTL_S,
@@ -408,7 +412,7 @@ async def refresh_catalog_for(
         existing = await _load_all_from_lkg()
         existing[provider] = entries
         snapshot = {p: _serialize_entries(es) for p, es in existing.items()}
-        await redis_client.set(
+        await get_redis_client().set(
             _redis_key_lkg(), json.dumps(snapshot, ensure_ascii=False)
         )
     except Exception as exc:  # noqa: BLE001

@@ -87,12 +87,6 @@ def api_context(db: Session, monkeypatch):
         "schedule_turn",
         dispatched_turns.append,
     )
-    from app.services.chat.turn_event_buffer import turn_event_buffer
-
-    async def request_cancel(_turn_id: str) -> None:
-        return None
-
-    monkeypatch.setattr(turn_event_buffer, "request_cancel", request_cancel)
 
     def fake_db() -> Iterator[Session]:
         yield db

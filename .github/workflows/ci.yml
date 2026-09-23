@@ -48,6 +48,7 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/interview_copilot
+      TEST_PG_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
       REDIS_URL: redis://localhost:6379/0
       SECRET_KEY: ci-test-secret-key-not-for-production
       DEEPSEEK_API_KEY: test-key-not-real

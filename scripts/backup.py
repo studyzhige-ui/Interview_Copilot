@@ -91,7 +91,9 @@ def _backup_objects(destination: Path) -> int:
     for page in paginator.paginate(Bucket=settings.S3_BUCKET_NAME):
         for item in page.get("Contents", []):
             key = item["Key"]
-            target = destination / Path(key)
+            target = (destination / key).resolve()
+            if not target.is_relative_to(destination.resolve()) or "\\" in key:
+                raise ValueError("Unsafe object key in backup")
             target.parent.mkdir(parents=True, exist_ok=True)
             s3_client.download_file(settings.S3_BUCKET_NAME, key, str(target))
             count += 1
@@ -156,6 +158,8 @@ def restore_backup(args: argparse.Namespace) -> int:
         )
     with dump_path.open("rb") as dump:
         subprocess_args = [
+            "--exit-on-error",
+            "--single-transaction",
             "--clean",
             "--if-exists",
             "--no-owner",

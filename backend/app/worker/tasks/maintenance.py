@@ -470,3 +470,14 @@ def sweep_runtime_files():
         "temp_files": temp_files,
         "dev_logs": dev_logs,
     }
+
+
+@celery_app.task(name="tasks.prune_expired_tokens", time_limit=120, soft_time_limit=100)
+def prune_expired_tokens():
+    """Bounded durable revocation retention; only cryptographically expired JWTs."""
+    from app.core.token_blacklist import prune_expired
+
+    with SessionLocal() as db:
+        removed = prune_expired(db, limit=10000)
+        db.commit()
+    return {"removed": removed}

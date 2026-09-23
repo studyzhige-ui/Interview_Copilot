@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.conversation.events import HarnessEvent
@@ -778,6 +778,7 @@ def request_turn_interrupt(
             return turn.status, int(turn.dispatch_generation or 1)
         raise SubmissionConflictError("another interrupt is already in progress")
 
+    turn.cancel_requested = True
     turn.interrupt_submission_id = target.id
     turn.interrupt_submission_version = expected_version
     turn.dispatch_generation = int(turn.dispatch_generation or 1) + 1
@@ -1026,6 +1027,12 @@ def cancel_pending_turn(db: Session, turn_id: str, user_id: int) -> bool:
     """Cancel an undispatched or waiting Turn and hand off its successor."""
     from app.models.persistent_task import PersistentTask, PersistentTaskTrigger
 
+    db.query(ConversationTurn).filter(
+        ConversationTurn.id == turn_id,
+        ConversationTurn.user_id == user_id,
+        ConversationTurn.status.in_(["pending", "running", "waiting"]),
+    ).update({ConversationTurn.cancel_requested: True}, synchronize_session="fetch")
+    db.commit()
     automation_task_id = (
         db.query(PersistentTask.id)
         .join(
@@ -1209,7 +1216,9 @@ def _finish(turn_id: str, status: str, error: str | None = None) -> bool:
                     db.commit()
                 except Exception:
                     db.rollback()
-                    logger.exception("Could not record memory citations for %s", turn_id)
+                    logger.exception(
+                        "Could not record memory citations for %s", turn_id
+                    )
             if status == "completed" and settings.AGENT_MEMORY_PRODUCER_ENABLED:
                 try:
                     from app.task_queue.dispatch import (
@@ -1367,6 +1376,7 @@ def resume_waiting_turn(
     ):
         return None
     row.status = "pending"
+    row.cancel_requested = False
     row.waiting_reason = None
     row.dispatch_generation = int(row.dispatch_generation or 1) + 1
     row.owner_id = None
@@ -1397,11 +1407,40 @@ def _has_assistant(turn_id: str) -> bool:
         db.close()
 
 
+def _cancellation_requested(turn_id: str) -> bool:
+    with SessionLocal() as db:
+        row = (
+            db.query(ConversationTurn.cancel_requested, ConversationTurn.status)
+            .filter(ConversationTurn.id == turn_id)
+            .one_or_none()
+        )
+        return row is None or bool(row.cancel_requested) or row.status != "running"
+
+
+async def _publish_event(turn_id: str, event_json: str) -> bool:
+    """Event delivery is transient; the transcript and Turn own the outcome."""
+    from redis.exceptions import RedisError
+
+    try:
+        await turn_event_buffer.append(turn_id, event_json)
+        return True
+    except (RedisError, ConnectionError, TimeoutError):
+        logger.warning("Turn event transport unavailable: %s", turn_id)
+        return False
+
+
 async def execute_turn(turn_id: str) -> None:
     turn = await asyncio.to_thread(_claim, turn_id)
     if turn is None:
         return
-    saw_done = False
+    delivery_available = True
+    done_event = None
+
+    async def publish(_turn_id, event_json):
+        nonlocal delivery_available
+        if delivery_available:
+            delivery_available = await _publish_event(_turn_id, event_json)
+
     failure: str | None = None
     diagnostic_error: str | None = None
     engine = None
@@ -1410,11 +1449,22 @@ async def execute_turn(turn_id: str) -> None:
     outcome = "completed"
     waiting_reason = "interaction"
     owner_task = asyncio.current_task()
+    control_failure: str | None = None
 
     async def watch_cancel() -> None:
-        await turn_event_buffer.wait_cancel(turn_id)
-        if owner_task is not None:
-            owner_task.cancel()
+        nonlocal control_failure
+        while True:
+            try:
+                stop = await asyncio.to_thread(_cancellation_requested, turn_id)
+            except Exception:  # noqa: BLE001 - loss of the durable control plane
+                logger.exception("turn cancellation control unavailable: %s", turn_id)
+                control_failure = "任务控制连接已中断，请稍后重试"
+                stop = True
+            if stop:
+                if owner_task is not None:
+                    owner_task.cancel()
+                return
+            await asyncio.sleep(1)
 
     cancel_watcher = asyncio.create_task(
         watch_cancel(), name=f"chat-turn-cancel:{turn_id}"
@@ -1482,8 +1532,10 @@ async def execute_turn(turn_id: str) -> None:
             strategy_extras=strategy_extras,
         )
         async for event in engine.submit_message():
-            await turn_event_buffer.append(turn_id, event.to_json())
-            saw_done = saw_done or event.type.value == "done"
+            if event.type.value == "done":
+                done_event = event
+                continue
+            await publish(turn_id, event.to_json())
             if event.type.value == "error":
                 # Error events are diagnostics, not an implicit Turn outcome.
                 diagnostic_error = str(
@@ -1509,9 +1561,13 @@ async def execute_turn(turn_id: str) -> None:
             failure = "本轮未生成有效回复"
             outcome = "failed"
     except asyncio.CancelledError:
-        failure = "Turn cancelled"
-        cancelled = True
-        raise
+        if control_failure is not None:
+            failure = control_failure
+            outcome = "failed"
+        else:
+            failure = "Turn cancelled"
+            cancelled = True
+            raise
     except Exception as exc:  # noqa: BLE001
         from app.rag.application.attachment_sources import (
             AttachmentParsingPendingError,
@@ -1524,16 +1580,14 @@ async def execute_turn(turn_id: str) -> None:
             waiting = True
             outcome = "waiting"
             waiting_reason = "attachment_parsing"
-            await turn_event_buffer.append(
+            await publish(
                 turn_id,
                 HarnessEvent.status("附件仍在解析，完成后将自动继续本轮。").to_json(),
             )
         elif isinstance(exc, ProductObjectReferenceUnavailableError):
             failure = UNAVAILABLE_MESSAGE
             outcome = "failed"
-            await turn_event_buffer.append(
-                turn_id, HarnessEvent.error(failure).to_json()
-            )
+            await publish(turn_id, HarnessEvent.error(failure).to_json())
             # The admitted user input is already exact History. Persist the
             # deterministic read failure too, so a refresh does not erase the
             # reason this Turn failed before ConversationEngine was created.
@@ -1547,9 +1601,7 @@ async def execute_turn(turn_id: str) -> None:
             failure = humanize_error(exc)
             outcome = "failed"
             logger.exception("background turn %s failed", turn_id)
-            await turn_event_buffer.append(
-                turn_id, HarnessEvent.error(failure).to_json()
-            )
+            await publish(turn_id, HarnessEvent.error(failure).to_json())
     finally:
         try:
             if engine is not None:
@@ -1561,24 +1613,6 @@ async def execute_turn(turn_id: str) -> None:
                     failure = diagnostic_error or "Turn execution failed"
             if failure and engine is not None and not cancelled and not waiting:
                 await engine.persist_background_failure(failure)
-            if not saw_done:
-                emitted_outcome = (
-                    "cancelled"
-                    if cancelled
-                    else "failed"
-                    if failure
-                    else "waiting"
-                    if waiting
-                    else outcome
-                )
-                await turn_event_buffer.append(
-                    turn_id,
-                    HarnessEvent.done(
-                        step=0,
-                        elapsed_ms=0,
-                        outcome=emitted_outcome,
-                    ).to_json(),
-                )
         finally:
             cancel_watcher.cancel()
             heartbeat.cancel()
@@ -1606,6 +1640,27 @@ async def execute_turn(turn_id: str) -> None:
                     failure,
                 )
 
+            # Commit the canonical outcome before clients receive completion
+            # and reload the transcript. Redis loss is recovered via DB polling.
+            emitted_outcome = (
+                "cancelled"
+                if cancelled
+                else "failed"
+                if failure
+                else "waiting"
+                if waiting
+                else outcome
+            )
+            if done_event is not None:
+                done_event.data["outcome"] = emitted_outcome
+            await publish(
+                turn_id,
+                (
+                    done_event
+                    or HarnessEvent.done(step=0, elapsed_ms=0, outcome=emitted_outcome)
+                ).to_json(),
+            )
+
 
 def schedule_turn(turn_id: str) -> None:
     """Dispatch a durable turn to the isolated conversation-worker queue."""
@@ -1614,66 +1669,69 @@ def schedule_turn(turn_id: str) -> None:
     dispatch_conversation_turn(turn_id)
 
 
-async def fail_orphaned_turns() -> int:
-    """Close turns whose worker heartbeat has expired."""
-    db = SessionLocal()
-    handoffs: list[str] = []
-    try:
-        cutoff = utc_now() - timedelta(seconds=settings.TURN_STALE_SECONDS)
-        candidate_ids = [
-            row_id
-            for (row_id,) in (
-                db.query(ConversationTurn.id)
-                .filter(
-                    or_(
-                        (ConversationTurn.status == "pending")
-                        & (ConversationTurn.created_at < cutoff),
-                        (ConversationTurn.status == "running")
-                        & (
-                            func.coalesce(
-                                ConversationTurn.heartbeat_at,
-                                ConversationTurn.started_at,
-                                ConversationTurn.created_at,
-                            )
-                            < cutoff
-                        ),
-                    )
+def _close_expired_turns() -> list[tuple[str, str]]:
+    """SQL state transitions own their session entirely outside the loop."""
+    closed = []
+    handoffs = []
+    with SessionLocal() as db:
+        for state, seconds, error in (
+            (
+                "pending",
+                settings.TURN_QUEUE_TIMEOUT_SECONDS,
+                "任务排队超时，请稍后重试",
+            ),
+            ("running", settings.TURN_STALE_SECONDS, "执行连接已中断，请重试本轮任务"),
+        ):
+            cutoff = utc_now() - timedelta(seconds=seconds)
+            clock = (
+                ConversationTurn.created_at
+                if state == "pending"
+                else func.coalesce(
+                    ConversationTurn.heartbeat_at,
+                    ConversationTurn.started_at,
+                    ConversationTurn.created_at,
                 )
+            )
+            ids = [
+                row[0]
+                for row in db.query(ConversationTurn.id)
+                .filter(ConversationTurn.status == state, clock < cutoff)
+                .limit(200)
                 .all()
-            )
-        ]
-        turn_ids: list[str] = []
-        for turn_id in candidate_ids:
-            changed, next_turn_id = _terminalize(
-                db,
-                turn_id,
-                allowed_statuses={"pending", "running"},
-                status="failed",
-                error="服务重启，本轮执行已中断",
-                stale_before=cutoff,
-            )
-            if changed:
-                turn_ids.append(turn_id)
-                if next_turn_id:
-                    handoffs.append(next_turn_id)
-    finally:
-        db.close()
+            ]
+            for turn_id in ids:
+                changed, next_id = _terminalize(
+                    db,
+                    turn_id,
+                    allowed_statuses={state},
+                    status="failed",
+                    error=error,
+                    stale_before=cutoff,
+                )
+                if changed:
+                    closed.append((turn_id, error))
+                    if next_id:
+                        handoffs.append(next_id)
+    for next_id in handoffs:
+        _dispatch_handoff(next_id)
+    return closed
 
-    for next_turn_id in handoffs:
-        _dispatch_handoff(next_turn_id)
 
-    for turn_id in turn_ids:
+async def fail_orphaned_turns() -> int:
+    """Queued deadlines and running leases are different contracts."""
+    closed = await asyncio.to_thread(_close_expired_turns)
+    for turn_id, error in closed:
         await asyncio.to_thread(
             transcript_service.complete_background_turn,
             turn_id=turn_id,
-            ai_msg="⚠️ 服务重启，本轮执行已中断",
-            ai_blocks=[{"type": "text", "text": "⚠️ 服务重启，本轮执行已中断"}],
+            ai_msg=f"⚠️ {error}",
+            ai_blocks=[{"type": "text", "text": f"⚠️ {error}"}],
         )
-        await turn_event_buffer.append(
+        await _publish_event(
             turn_id,
-            HarnessEvent.error("服务重启，本轮执行已中断").to_json(),
+            HarnessEvent.error(error).to_json(),
         )
-        await turn_event_buffer.append(
+        await _publish_event(
             turn_id,
             HarnessEvent.done(
                 step=0,
@@ -1681,7 +1739,7 @@ async def fail_orphaned_turns() -> int:
                 outcome="failed",
             ).to_json(),
         )
-    return len(turn_ids)
+    return len(closed)
 
 
 async def monitor_orphaned_turns() -> None:

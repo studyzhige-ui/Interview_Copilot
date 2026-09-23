@@ -66,7 +66,7 @@ class ActiveTurnContextReducer:
         if self.client is None:
             from app.core.llm_client_factory import build_provider_client_for_role
 
-            self.client, _ = build_provider_client_for_role(
+            self.client, _ = await build_provider_client_for_role(
                 "primary", user_id=self.user_id
             )
         replacement, report = await compact(

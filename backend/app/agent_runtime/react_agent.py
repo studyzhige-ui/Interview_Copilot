@@ -32,9 +32,9 @@ _LOCAL_TOOL_RECOVERY_LIMIT = 2
 class AgentRunState:
     """Observed usage and loop progress for one turn.
 
-    Steps, tool calls, tokens, and elapsed time are telemetry. They never stop
-    a valid task. Completion comes from the model, an explicit cancellation,
-    context-window exhaustion, or the surrounding worker/process lifecycle.
+    Steps and tool calls describe progress, without an arbitrary step cap.
+    The harness enforces deployment time and token limits between model calls;
+    reaching a resource limit preserves partial results with a blocked outcome.
     """
 
     started_at: float

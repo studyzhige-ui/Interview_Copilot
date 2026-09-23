@@ -1,7 +1,7 @@
 """JWT issuance, password hashing, and the FastAPI auth dependency.
 
 Every token carries a ``jti`` (random UUID hex) so it can be revoked via
-Redis blacklist on logout or refresh-rotation. See
+a durable SQL ledger on logout or refresh-rotation. See
 ``app.core.token_blacklist``.
 """
 
@@ -167,9 +167,9 @@ def token_claims_for(user: User) -> dict:
 
 
 # ── FastAPI auth dependency ─────────────────────────────────────────────
-async def get_current_user(
+def get_current_user(
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -193,7 +193,7 @@ async def get_current_user(
         # compliant pair, so the disruption is bounded to one round-trip.
         raise credentials_exception
 
-    if await is_revoked(jti):
+    if is_revoked(db, jti):
         raise credentials_exception
 
     # ``sub`` is the stable ``users.id``. Non-integer subs (e.g. legacy
@@ -205,7 +205,7 @@ async def get_current_user(
         raise credentials_exception
 
     user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
+    if user is None or not user.is_active:
         raise credentials_exception
 
     # Token-version gate: a password change bumps ``users.token_version``,

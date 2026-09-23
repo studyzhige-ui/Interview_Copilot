@@ -7,6 +7,7 @@ fallback wiring, and structured tool metrics.
 """
 
 import asyncio
+from unittest.mock import AsyncMock as _AsyncFactoryMock
 
 import pytest
 
@@ -196,8 +197,8 @@ def test_agent_provider_payload_partitions_stable_and_dynamic_context(monkeypatc
         max_output_tokens=4_000,
     )
     monkeypatch.setattr(
-        "app.conversation.agent_strategy.build_async_openai_client_for_role",
-        lambda *_args, **_kwargs: (object(), profile),
+        "app.conversation.agent_strategy.build_provider_client_for_role",
+        _AsyncFactoryMock(side_effect=lambda *_args, **_kwargs: (object(), profile)),
     )
     monkeypatch.setattr(
         "app.conversation.agent_strategy.TurnToolCatalog.create", create_catalog
@@ -305,15 +306,17 @@ def test_agent_task_context_precedes_and_does_not_replace_current_user_anchor(
         lambda *_args: snapshot,
     )
     monkeypatch.setattr(
-        "app.conversation.agent_strategy.build_async_openai_client_for_role",
-        lambda *_args, **_kwargs: (
-            object(),
-            SimpleNamespace(
-                model="test",
-                supports_function_calling=True,
-                context_window=128_000,
-                max_output_tokens=4_000,
-            ),
+        "app.conversation.agent_strategy.build_provider_client_for_role",
+        _AsyncFactoryMock(
+            side_effect=lambda *_args, **_kwargs: (
+                object(),
+                SimpleNamespace(
+                    model="test",
+                    supports_function_calling=True,
+                    context_window=128_000,
+                    max_output_tokens=4_000,
+                ),
+            )
         ),
     )
 
@@ -1133,8 +1136,10 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
         max_output_tokens = 4096
 
     monkeypatch.setattr(
-        "app.conversation.agent_strategy.build_async_openai_client_for_role",
-        lambda role, user_id=None: (object(), _StubProfile()),
+        "app.conversation.agent_strategy.build_provider_client_for_role",
+        _AsyncFactoryMock(
+            side_effect=lambda role, user_id=None: (object(), _StubProfile())
+        ),
     )
 
     # Stub the budget compactor so the loop reaches the LLM-stream call.
@@ -1213,8 +1218,10 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
         max_output_tokens = 4096
 
     monkeypatch.setattr(
-        "app.conversation.agent_strategy.build_async_openai_client_for_role",
-        lambda role, user_id=None: (object(), _StubProfile()),
+        "app.conversation.agent_strategy.build_provider_client_for_role",
+        _AsyncFactoryMock(
+            side_effect=lambda role, user_id=None: (object(), _StubProfile())
+        ),
     )
 
     class _StubCompactor:

@@ -276,7 +276,15 @@ def list_career_activity(
                         "等待用户决定"
                         if row.status == "waiting"
                         and row.waiting_reason == "interaction"
-                        else f"Turn {row.status}"
+                        else {
+                            "pending": "正在排队",
+                            "running": "正在执行",
+                            "completed": "已完成",
+                            "failed": "执行失败",
+                            "blocked": "需要调整后继续",
+                            "cancelled": "已取消",
+                            "waiting": "正在等待",
+                        }.get(row.status, "执行状态已更新")
                     ),
                     "status": row.status,
                 },

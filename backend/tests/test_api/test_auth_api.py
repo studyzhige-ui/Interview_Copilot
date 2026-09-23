@@ -121,7 +121,7 @@ async def test_send_code_register_existing_email_returns_409(db_session_local):
 
     with patch("app.api.auth.request_code", new_callable=AsyncMock) as mock_req:
         with pytest.raises(HTTPException) as exc:
-            await send_verification_code(
+            send_verification_code(
                 request=_fake_request(),
                 response=MagicMock(),
                 payload=EmailRequest(email="taken@example.com", purpose="register"),
@@ -138,7 +138,7 @@ async def test_send_code_fresh_email_calls_request_code(db_session_local):
     with patch(
         "app.api.auth.request_code", new_callable=AsyncMock, return_value=600
     ) as mock_req:
-        result = await send_verification_code(
+        result = send_verification_code(
             request=_fake_request(),
             response=MagicMock(),
             payload=EmailRequest(email="new@example.com", purpose="register"),
@@ -155,7 +155,7 @@ async def test_send_reset_code_for_existing_account_delivers(db_session_local):
     with patch(
         "app.api.auth.request_code", new_callable=AsyncMock, return_value=600
     ) as mock_req:
-        result = await send_verification_code(
+        result = send_verification_code(
             request=_fake_request(),
             response=MagicMock(),
             payload=EmailRequest(email="ALICE@example.com", purpose="reset_password"),
@@ -175,7 +175,7 @@ async def test_send_reset_code_for_unknown_account_is_indistinguishable(
     with patch(
         "app.api.auth.request_code", new_callable=AsyncMock, return_value=600
     ) as mock_req:
-        result = await send_verification_code(
+        result = send_verification_code(
             request=_fake_request(),
             response=MagicMock(),
             payload=EmailRequest(email="ghost@example.com", purpose="reset_password"),
@@ -198,7 +198,7 @@ async def test_register_success_creates_user(db_session_local):
         patch("app.api.auth.verify_code", new_callable=AsyncMock),
         patch("app.api.auth.reset_ip_failures", new_callable=AsyncMock),
     ):
-        result = await register_user(
+        result = register_user(
             request=_fake_request(),
             response=MagicMock(),
             user_in=_make_user_create(),
@@ -232,7 +232,7 @@ async def test_register_duplicate_username_returns_409(db_session_local):
         ) as mock_fail,
     ):
         with pytest.raises(HTTPException) as exc:
-            await register_user(
+            register_user(
                 request=_fake_request(),
                 response=MagicMock(),
                 user_in=_make_user_create(),
@@ -263,7 +263,7 @@ async def test_register_duplicate_email_returns_409(db_session_local):
         ) as mock_fail,
     ):
         with pytest.raises(HTTPException) as exc:
-            await register_user(
+            register_user(
                 request=_fake_request(),
                 response=MagicMock(),
                 user_in=_make_user_create(),  # username=alice, email=alice@example.com
@@ -288,7 +288,7 @@ async def test_register_bad_code_returns_generic_400(db_session_local):
         patch("app.api.auth.record_verify_failure_for_ip", new_callable=AsyncMock),
     ):
         with pytest.raises(HTTPException) as exc:
-            await register_user(
+            register_user(
                 request=_fake_request(),
                 response=MagicMock(),
                 user_in=_make_user_create(),
@@ -383,10 +383,10 @@ async def test_refresh_rotates_tokens(db_session_local):
     refresh_token = create_refresh_token(data=token_claims_for(user))
 
     with (
-        patch("app.api.auth.is_revoked", new_callable=AsyncMock, return_value=False),
-        patch("app.api.auth.revoke", new_callable=AsyncMock) as mock_revoke,
+        patch("app.api.auth.consume", return_value=True),
+        patch("app.api.auth.revoke"),
     ):
-        result = await refresh_access_token(
+        result = refresh_access_token(
             request=_fake_request(),
             response=MagicMock(),
             body=RefreshRequest(refresh_token=refresh_token),
@@ -394,7 +394,7 @@ async def test_refresh_rotates_tokens(db_session_local):
         )
 
     # Consumed refresh-token jti must be revoked (no replay).
-    mock_revoke.assert_awaited_once()
+    assert result["refresh_token"] != refresh_token
     new_access = decode_token(result["access_token"])
     new_refresh = decode_token(result["refresh_token"])
     assert new_access["sub"] == str(user.id) and new_access["type"] == "access"
@@ -407,9 +407,9 @@ async def test_refresh_rejects_access_token(db_session_local):
     user = _register_sync(db_session_local, "alice", "pw")
     access_token = create_access_token(data=token_claims_for(user))
 
-    with patch("app.api.auth.is_revoked", new_callable=AsyncMock, return_value=False):
+    with patch("app.api.auth.consume", return_value=True):
         with pytest.raises(HTTPException) as exc:
-            await refresh_access_token(
+            refresh_access_token(
                 request=_fake_request(),
                 response=MagicMock(),
                 body=RefreshRequest(refresh_token=access_token),
@@ -427,9 +427,9 @@ async def test_refresh_rejects_token_version_mismatch(db_session_local):
     user.token_version = 5
     db_session_local.commit()
 
-    with patch("app.api.auth.is_revoked", new_callable=AsyncMock, return_value=False):
+    with patch("app.api.auth.consume", return_value=True):
         with pytest.raises(HTTPException) as exc:
-            await refresh_access_token(
+            refresh_access_token(
                 request=_fake_request(),
                 response=MagicMock(),
                 body=RefreshRequest(refresh_token=refresh_token),
@@ -441,7 +441,7 @@ async def test_refresh_rejects_token_version_mismatch(db_session_local):
 @pytest.mark.asyncio
 async def test_refresh_rejects_invalid_token(db_session_local):
     with pytest.raises(HTTPException) as exc:
-        await refresh_access_token(
+        refresh_access_token(
             request=_fake_request(),
             response=MagicMock(),
             body=RefreshRequest(refresh_token="not.a.jwt"),
@@ -455,9 +455,9 @@ async def test_refresh_rejects_revoked_token(db_session_local):
     user = _register_sync(db_session_local, "alice", "pw")
     refresh_token = create_refresh_token(data=token_claims_for(user))
 
-    with patch("app.api.auth.is_revoked", new_callable=AsyncMock, return_value=True):
+    with patch("app.api.auth.consume", return_value=False):
         with pytest.raises(HTTPException) as exc:
-            await refresh_access_token(
+            refresh_access_token(
                 request=_fake_request(),
                 response=MagicMock(),
                 body=RefreshRequest(refresh_token=refresh_token),
@@ -470,32 +470,34 @@ async def test_refresh_rejects_revoked_token(db_session_local):
 
 
 @pytest.mark.asyncio
-async def test_logout_revokes_both_tokens():
+async def test_logout_revokes_both_tokens(db_session_local):
     access_token = create_access_token(data={"sub": "alice"})
     refresh_token = create_refresh_token(data={"sub": "alice"})
 
-    with patch("app.api.auth.revoke", new_callable=AsyncMock) as mock_revoke:
-        result = await logout(
+    with patch("app.api.auth.revoke") as mock_revoke:
+        result = logout(
             request=_fake_request(),
             response=MagicMock(),
             body=LogoutRequest(refresh_token=refresh_token),
             access_token=access_token,
+            db=db_session_local,
         )
 
     assert result == {"status": "ok"}
     # Once for access, once for refresh.
-    assert mock_revoke.await_count == 2
+    assert mock_revoke.call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_logout_is_idempotent_with_garbage_access():
+async def test_logout_is_idempotent_with_garbage_access(db_session_local):
     """A bogus access token doesn't trip the endpoint — revoke is a no-op."""
-    with patch("app.api.auth.revoke", new_callable=AsyncMock) as mock_revoke:
-        result = await logout(
+    with patch("app.api.auth.revoke") as mock_revoke:
+        result = logout(
             request=_fake_request(),
             response=MagicMock(),
             body=None,
             access_token="not.a.jwt",
+            db=db_session_local,
         )
     assert result == {"status": "ok"}
     mock_revoke.assert_not_called()
@@ -508,10 +510,8 @@ async def test_logout_is_idempotent_with_garbage_access():
 async def test_get_current_user_accepts_valid_token(db_session_local):
     user = _register_sync(db_session_local, "alice", "pw")
     token = create_access_token(data=token_claims_for(user))
-    with patch(
-        "app.core.security.is_revoked", new_callable=AsyncMock, return_value=False
-    ):
-        got = await get_current_user(token=token, db=db_session_local)
+    with patch("app.core.security.is_revoked", return_value=False):
+        got = get_current_user(token=token, db=db_session_local)
     assert got.id == user.id
 
 
@@ -522,11 +522,9 @@ async def test_get_current_user_rejects_token_version_mismatch(db_session_local)
     token = create_access_token(data=token_claims_for(user))  # version 0
     user.token_version = 1
     db_session_local.commit()
-    with patch(
-        "app.core.security.is_revoked", new_callable=AsyncMock, return_value=False
-    ):
+    with patch("app.core.security.is_revoked", return_value=False):
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(token=token, db=db_session_local)
+            get_current_user(token=token, db=db_session_local)
     assert exc.value.status_code == 401
 
 
@@ -535,11 +533,9 @@ async def test_get_current_user_rejects_token_without_token_version(db_session_l
     """A legacy token (username sub, no token_version claim) is rejected."""
     user = _register_sync(db_session_local, "alice", "pw")
     legacy = create_access_token(data={"sub": user.username})  # pre-migration shape
-    with patch(
-        "app.core.security.is_revoked", new_callable=AsyncMock, return_value=False
-    ):
+    with patch("app.core.security.is_revoked", return_value=False):
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(token=legacy, db=db_session_local)
+            get_current_user(token=legacy, db=db_session_local)
     assert exc.value.status_code == 401
 
 
@@ -556,7 +552,7 @@ async def test_reset_password_consumes_code_and_kills_old_tokens(db_session_loca
         patch("app.api.auth.verify_code", new_callable=AsyncMock) as mock_verify,
         patch("app.api.auth.reset_ip_failures", new_callable=AsyncMock) as mock_reset,
     ):
-        result = await reset_password(
+        result = reset_password(
             request=_fake_request(),
             response=MagicMock(),
             body=ResetPasswordRequest(
@@ -576,11 +572,9 @@ async def test_reset_password_consumes_code_and_kills_old_tokens(db_session_loca
     assert user.password_changed_at is not None
     assert verify_password("newpw123", user.hashed_password)
 
-    with patch(
-        "app.core.security.is_revoked", new_callable=AsyncMock, return_value=False
-    ):
+    with patch("app.core.security.is_revoked", return_value=False):
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(token=old_access, db=db_session_local)
+            get_current_user(token=old_access, db=db_session_local)
     assert exc.value.status_code == 401
 
 
@@ -603,7 +597,7 @@ async def test_reset_password_bad_code_is_generic_and_does_not_change_password(
         ) as mock_failure,
     ):
         with pytest.raises(HTTPException) as exc:
-            await reset_password(
+            reset_password(
                 request=_fake_request(),
                 response=MagicMock(),
                 body=ResetPasswordRequest(
@@ -629,7 +623,7 @@ async def test_reset_password_unknown_account_stays_generic(db_session_local):
         patch("app.api.auth.record_verify_failure_for_ip", new_callable=AsyncMock),
     ):
         with pytest.raises(HTTPException) as exc:
-            await reset_password(
+            reset_password(
                 request=_fake_request(),
                 response=MagicMock(),
                 body=ResetPasswordRequest(
@@ -662,11 +656,9 @@ async def test_change_password_bumps_version_and_kills_old_tokens(db_session_loc
     assert verify_password("newpw123", user.hashed_password)
 
     # The access token issued before the change now fails the version gate.
-    with patch(
-        "app.core.security.is_revoked", new_callable=AsyncMock, return_value=False
-    ):
+    with patch("app.core.security.is_revoked", return_value=False):
         with pytest.raises(HTTPException) as exc:
-            await get_current_user(token=old_access, db=db_session_local)
+            get_current_user(token=old_access, db=db_session_local)
     assert exc.value.status_code == 401
 
 

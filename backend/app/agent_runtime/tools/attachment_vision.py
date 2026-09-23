@@ -462,7 +462,7 @@ async def _run_vision_request(
 ) -> tuple[str, dict[str, int], str | None]:
     from app.core.llm_client_factory import build_provider_client_for_role
 
-    client, current_profile = build_provider_client_for_role(
+    client, current_profile = await build_provider_client_for_role(
         "primary",
         user_id=user_id,
     )

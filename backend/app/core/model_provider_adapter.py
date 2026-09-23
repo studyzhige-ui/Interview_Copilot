@@ -99,6 +99,7 @@ def build_provider_request(
 
     # Internal source/intent metadata never enters provider protocol messages.
     from app.conversation.context_window import wire
+
     messages = wire(messages)
     system_parts: list[str] = []
     first_data_index = 0

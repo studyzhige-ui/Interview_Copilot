@@ -211,18 +211,6 @@ def delete_persistent_task(
                 ingestion_task_id,
                 exc_info=True,
             )
-    if result.cancelled_turn_id:
-        try:
-            from app.core.async_runtime import run_async
-            from app.services.chat.turn_event_buffer import turn_event_buffer
-
-            run_async(turn_event_buffer.request_cancel(result.cancelled_turn_id))
-        except Exception:  # noqa: BLE001 - DB dispatch fence is authoritative
-            logger.warning(
-                "Could not signal deleted PersistentTask Turn %s",
-                result.cancelled_turn_id,
-                exc_info=True,
-            )
     return {
         "status": "success",
         "id": result.task_id,

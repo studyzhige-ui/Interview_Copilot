@@ -20,7 +20,7 @@ async def evaluate() -> dict:
     )
     from app.conversation.context_window import compact, item
 
-    client, profile = build_provider_client_for_role("primary")
+    client, profile = await build_provider_client_for_role("primary")
     history = [
         {"role": "system", "content": "依据对话确认任务，禁止猜测缺失事实。"},
         item(

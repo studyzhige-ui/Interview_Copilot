@@ -210,7 +210,7 @@ class TestWebSearchFallback:
                         '<a class="result__a" href="//duckduckgo.com/l/?uddg='
                         'https%3A%2F%2Fexample.com%2Fjobs">Example jobs</a>'
                         '<div class="result__snippet">A useful result</div>'
-                        '</div>'
+                        "</div>"
                     ),
                 )
 
@@ -251,7 +251,7 @@ class TestWebSearchFallback:
                     text=(
                         '<div class="result">'
                         '<a class="result__a" href="https://example.com">Example</a>'
-                        '</div>'
+                        "</div>"
                     ),
                 )
 

@@ -74,7 +74,7 @@ from app.conversation.strategy import StrategyContext, StrategyResult
 from app.core.config import settings
 from app.core.error_messages import humanize_error
 from app.core.llm_client_factory import (
-    build_provider_client_for_role as build_async_openai_client_for_role,
+    build_provider_client_for_role,
 )
 from app.core.model_provider_adapter import (
     ModelProviderAdapter,
@@ -438,9 +438,7 @@ class AgentLoopStrategy:
         # the engine also persists the identical source list on completion.
         # ── Per-turn state ────────────────────────────────────────
         budget = AgentRunState(started_at=time.perf_counter())
-        # Local compatibility name is retained for focused tests; the factory
-        # now returns the selected provider's native transport client.
-        client, profile = build_async_openai_client_for_role(
+        client, profile = await build_provider_client_for_role(
             "primary",
             user_id=ctx.user_id,
         )
@@ -710,22 +708,32 @@ class AgentLoopStrategy:
         ctx.extras.pop("_terminal_outcome", None)
 
         try:
-            if not ctx.extras.get("interaction_required"):
-                async for event in self._loop(
-                    ctx=ctx,
-                    messages=messages,
-                    blocks=blocks,
-                    budget=budget,
-                    client=client,
-                    profile=profile,
-                    compactor=compactor,
-                    tool_catalog=tool_catalog,
-                    tool_schemas=tool_schemas,
-                    base_task_content=base_current_task_content,
-                ):
-                    if event.type.value == "text":
-                        final_answer = event.data.get("content", "")
-                    yield event
+            async with asyncio.timeout(settings.AGENT_RUN_TIMEOUT_SECONDS):
+                if not ctx.extras.get("interaction_required"):
+                    async for event in self._loop(
+                        ctx=ctx,
+                        messages=messages,
+                        blocks=blocks,
+                        budget=budget,
+                        client=client,
+                        profile=profile,
+                        compactor=compactor,
+                        tool_catalog=tool_catalog,
+                        tool_schemas=tool_schemas,
+                        base_task_content=base_current_task_content,
+                    ):
+                        if event.type.value == "text":
+                            final_answer = event.data.get("content", "")
+                        yield event
+        except TimeoutError:
+            budget.stop_reason = "resource_time_limit"
+            ctx.extras["_terminal_outcome"] = "blocked"
+            final_answer = "本轮已达到部署允许的执行时长，现有结果已保留。你可以缩小任务范围后继续。"
+            yield HarnessEvent.text(
+                final_answer,
+                step=budget.steps,
+                elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
+            )
         except Exception as exc:
             logger.error("AgentLoopStrategy crashed: %s", exc)
             # Surface the failure to the LIVE stream as an actionable error.
@@ -794,7 +802,11 @@ class AgentLoopStrategy:
                 step=budget.steps,
                 elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
             )
-        elif not blocks or blocks[-1].get("type") != "text":
+        elif (
+            not blocks
+            or blocks[-1].get("type") != "text"
+            or blocks[-1].get("text") != final_answer
+        ):
             blocks.append({"type": "text", "text": final_answer})
 
         result.final_answer = final_answer
@@ -854,6 +866,15 @@ class AgentLoopStrategy:
         empty_response_attempts = 0
 
         while True:
+            if budget.total_tokens >= settings.AGENT_RUN_MAX_TOTAL_TOKENS:
+                budget.stop_reason = "resource_token_limit"
+                ctx.extras["_terminal_outcome"] = "blocked"
+                yield HarnessEvent.text(
+                    "本轮已达到部署允许的模型用量，现有结果已保留。你可以缩小任务范围后继续。",
+                    step=budget.steps,
+                    elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
+                )
+                return
             budget.consume_step()
 
             # AgentTask is durable runtime state, not a lossy compaction
@@ -1208,6 +1229,7 @@ class AgentLoopStrategy:
         otherwise — see issue C in commit message).
         """
         from app.agent_runtime.tool_call_streaming import ToolCallAssembler
+
         assembler = ToolCallAssembler()
         async for chunk in stream:
             event = (

@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.db.database import engine
-from app.db.redis import redis_client
+from app.db.redis import get_redis_client
 
 router = APIRouter()
 _PROBE_TIMEOUT_SECONDS = 2.0
@@ -29,7 +29,7 @@ async def dependency_status() -> dict[str, str]:
         return "ok"
 
     async def redis() -> str:
-        await redis_client.ping()
+        await get_redis_client().ping()
         return "ok"
 
     async def probe(check) -> str:

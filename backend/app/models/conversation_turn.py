@@ -1,6 +1,14 @@
 import uuid
 
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 
 from app.db.database import Base
 from app.db.types import JSONValue as JSON
@@ -50,6 +58,9 @@ class ConversationTurn(Base):
     # Operational reason for a released waiting Turn.  It is not model
     # context and does not own task direction.
     waiting_reason = Column(String(32), nullable=True)
+    cancel_requested = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     # A durable, one-shot request to cancel this Turn and admit exactly one
     # queued submission.  Keeping the target on the active Turn avoids a
     # second interrupt state machine while still surviving worker/browser

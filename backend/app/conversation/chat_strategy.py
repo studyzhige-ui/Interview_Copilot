@@ -22,7 +22,7 @@ from app.conversation.provider_context import compose_provider_context
 from app.conversation.strategy import StrategyContext, StrategyResult
 from app.core.config import settings
 from app.core.llm_client_factory import (
-    build_provider_client_for_role as get_llm_for_role,
+    build_provider_client_for_role,
 )
 from app.core.model_provider_adapter import ModelProviderAdapter, build_provider_request
 from app.core.tokens import token_count as _count_tokens
@@ -165,19 +165,20 @@ class ChatPipelineStrategy:
             result.completion_tokens = _count_tokens(answer)
             return
 
-        resolved_model = get_llm_for_role("primary", user_id=ctx.user_id)
-        if isinstance(resolved_model, tuple) and len(resolved_model) == 2:
-            from app.conversation.context_manager import prepare
+        resolved_model = await build_provider_client_for_role(
+            "primary", user_id=ctx.user_id
+        )
+        from app.conversation.context_manager import prepare
 
-            await prepare(
-                assembled,
-                renderer=self.renderer,
-                system_prompt=RAG_SYSTEM_PROMPT
-                if ctx.needs_knowledge_retrieval
-                else DIRECT_SYSTEM_PROMPT,
-                client=resolved_model[0],
-                profile=resolved_model[1],
-            )
+        await prepare(
+            assembled,
+            renderer=self.renderer,
+            system_prompt=RAG_SYSTEM_PROMPT
+            if ctx.needs_knowledge_retrieval
+            else DIRECT_SYSTEM_PROMPT,
+            client=resolved_model[0],
+            profile=resolved_model[1],
+        )
         prompt = self.renderer.render_answer_prompt(
             assembled,
             system_prompt=(
@@ -211,83 +212,74 @@ class ChatPipelineStrategy:
 
         # Final answers always use the model selected by the user. Internal
         # router/worker models are never allowed to answer on the user's behalf.
-        if isinstance(resolved_model, tuple) and len(resolved_model) == 2:
-            client, profile = resolved_model
-            projection = compose_provider_context(
-                assembled,
-                renderer=self.renderer,
-                system_prompt=(
-                    RAG_SYSTEM_PROMPT
-                    if ctx.needs_knowledge_retrieval
-                    else DIRECT_SYSTEM_PROMPT
+        client, profile = resolved_model
+        projection = compose_provider_context(
+            assembled,
+            renderer=self.renderer,
+            system_prompt=(
+                RAG_SYSTEM_PROMPT
+                if ctx.needs_knowledge_retrieval
+                else DIRECT_SYSTEM_PROMPT
+            ),
+        )
+        request = build_provider_request(
+            messages=projection.with_leading_system_message(),
+            tools=None,
+            max_tokens=min(
+                assembled.output_token_reserve,
+                int(getattr(profile, "max_output_tokens", 0) or 0)
+                or assembled.output_token_reserve,
+            ),
+            temperature=settings.AGENT_TEMPERATURE,
+        )
+        adapter = ModelProviderAdapter(client=client, profile=profile)
+        model_call_id = (
+            f"model:{ctx.dispatch_generation}:chat:1" if ctx.turn_id else None
+        )
+        if model_call_id and ctx.user_pk > 0:
+            import asyncio
+
+            await asyncio.to_thread(
+                start_model_dispatch_for_turn,
+                call_id=model_call_id,
+                turn_id=ctx.turn_id,
+                user_id=ctx.user_pk,
+                dispatch_generation=ctx.dispatch_generation,
+                provider=str(getattr(profile, "provider", "unknown") or "unknown"),
+                model=str(getattr(profile, "model", "unknown") or "unknown"),
+                fingerprint=request_fingerprint(
+                    messages=request.messages,
+                    tools=request.tools,
                 ),
             )
-            request = build_provider_request(
-                messages=projection.with_leading_system_message(),
-                tools=None,
-                max_tokens=min(
-                    assembled.output_token_reserve,
-                    int(getattr(profile, "max_output_tokens", 0) or 0)
-                    or assembled.output_token_reserve,
-                ),
-                temperature=settings.AGENT_TEMPERATURE,
-            )
-            adapter = ModelProviderAdapter(client=client, profile=profile)
-            model_call_id = (
-                f"model:{ctx.dispatch_generation}:chat:1" if ctx.turn_id else None
-            )
-            if model_call_id and ctx.user_pk > 0:
+        try:
+            provider_stream = await adapter.start_stream(request)
+        except BaseException as exc:
+            if model_call_id:
                 import asyncio
 
                 await asyncio.to_thread(
-                    start_model_dispatch_for_turn,
-                    call_id=model_call_id,
+                    finish_model_dispatch,
                     turn_id=ctx.turn_id,
-                    user_id=ctx.user_pk,
+                    call_id=model_call_id,
                     dispatch_generation=ctx.dispatch_generation,
-                    provider=str(getattr(profile, "provider", "unknown") or "unknown"),
-                    model=str(getattr(profile, "model", "unknown") or "unknown"),
-                    fingerprint=request_fingerprint(
-                        messages=request.messages,
-                        tools=request.tools,
+                    status=(
+                        "cancelled"
+                        if isinstance(exc, asyncio.CancelledError)
+                        else "failed"
                     ),
+                    error_code=type(exc).__name__,
                 )
-            try:
-                provider_stream = await adapter.start_stream(request)
-            except BaseException as exc:
-                if model_call_id:
-                    import asyncio
-
-                    await asyncio.to_thread(
-                        finish_model_dispatch,
-                        turn_id=ctx.turn_id,
-                        call_id=model_call_id,
-                        dispatch_generation=ctx.dispatch_generation,
-                        status=(
-                            "cancelled"
-                            if isinstance(exc, asyncio.CancelledError)
-                            else "failed"
-                        ),
-                        error_code=type(exc).__name__,
-                    )
-                raise
-            response_generator = durable_model_stream(
-                provider_stream,
-                turn_id=ctx.turn_id,
-                call_id=model_call_id,
-                dispatch_generation=ctx.dispatch_generation,
-            )
-            result.provider_id = str(getattr(profile, "provider", "") or "")
-            result.prompt_cache_supported = adapter.prompt_cache_supported
-            result.prompt_cache_enabled = adapter.prompt_cache_enabled
-        else:
-            # Focused tests and older injected LlamaIndex doubles use this
-            # compatibility seam. Production role resolution returns a native
-            # ``(client, profile)`` tuple and never enters this branch.
-            response_generator = await resolved_model.astream_complete(
-                prompt,
-                max_tokens=assembled.output_token_reserve,
-            )
+            raise
+        response_generator = durable_model_stream(
+            provider_stream,
+            turn_id=ctx.turn_id,
+            call_id=model_call_id,
+            dispatch_generation=ctx.dispatch_generation,
+        )
+        result.provider_id = str(getattr(profile, "provider", "") or "")
+        result.prompt_cache_supported = adapter.prompt_cache_supported
+        result.prompt_cache_enabled = adapter.prompt_cache_enabled
 
         final_answer = ""
         citation_guard = (
@@ -300,11 +292,7 @@ class ChatPipelineStrategy:
                 result.completion_tokens += int(usage.completion_tokens)
                 result.cache_read_tokens += int(usage.cache_read_tokens)
                 result.cache_creation_tokens += int(usage.cache_creation_tokens)
-            raw_delta = (
-                chunk.text_delta
-                if hasattr(chunk, "text_delta")
-                else getattr(chunk, "delta", "")
-            )
+            raw_delta = chunk.text_delta
             deltas = citation_guard.feed(raw_delta) if citation_guard else [raw_delta]
             for delta in deltas:
                 final_answer += delta

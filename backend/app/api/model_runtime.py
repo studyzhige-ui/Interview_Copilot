@@ -5,6 +5,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.async_runtime import run_async
 from app.core.background_tasks import safe_background_task
 from app.core.internal_models import (
     INTERNAL_MODEL_ROLES,
@@ -53,10 +54,21 @@ def _schedule_provider_catalog_refresh(provider: str, username: str) -> None:
                 "post-upsert catalog refresh failed for %s: %s", provider, exc
             )
 
-    safe_background_task(
-        _run(),
-        name=f"model-catalog-refresh:{provider}:{username}",
-    )
+    async def schedule():
+        safe_background_task(
+            _run(), name=f"model-catalog-refresh:{provider}:{username}"
+        )
+
+    run_async(schedule())
+
+
+def _catalog_projection(username: str):
+    selection = get_runtime_selection(user_id=username)
+    profiles = [
+        _serialize_profile(profile, selection, username)
+        for profile in _get_all_profiles().values()
+    ]
+    return selection, profiles
 
 
 router = APIRouter(tags=["models"])
@@ -77,7 +89,6 @@ async def api_model_catalog(
     from app.core.cache import cached
 
     async def _build():
-        selection = get_runtime_selection(user_id=current_user.username)
         # Pull the catalog from the Redis pipeline cache. ``load_catalog``
         # doesn't hit any vendor — that's the daily Celery beat's job
         # plus the manual refresh-catalog endpoint below. The
@@ -92,11 +103,9 @@ async def api_model_catalog(
         # next call.
         if grouped:
             repopulate_profile_cache(grouped)
-        profiles_map = _get_all_profiles()
-        profiles = [
-            _serialize_profile(p, selection, current_user.username)
-            for p in profiles_map.values()
-        ]
+        selection, profiles = await asyncio.to_thread(
+            _catalog_projection, current_user.username
+        )
         return {
             "status": "success",
             "selection": selection,
@@ -131,12 +140,9 @@ async def refresh_model_catalog(
     repopulate_profile_cache(grouped)
     await invalidate(f"models:catalog:{current_user.username}")
 
-    selection = get_runtime_selection(user_id=current_user.username)
-    profiles_map = _get_all_profiles()
-    profiles = [
-        _serialize_profile(p, selection, current_user.username)
-        for p in profiles_map.values()
-    ]
+    _selection, profiles = await asyncio.to_thread(
+        _catalog_projection, current_user.username
+    )
     return {
         "status": "refreshed",
         "providers_refreshed": len(grouped),
@@ -208,7 +214,7 @@ async def _ping_one(profile_id: str, user_id: str | None = None) -> dict:
         }
     try:
         if profile.provider == "anthropic":
-            client = get_async_anthropic_client(profile, user_id=user_id)
+            client = await get_async_anthropic_client(profile, user_id=user_id)
             call = client.messages.create(
                 model=profile.model,
                 messages=[{"role": "user", "content": "ping"}],
@@ -216,7 +222,7 @@ async def _ping_one(profile_id: str, user_id: str | None = None) -> dict:
                 temperature=0,
             )
         else:
-            client = get_async_openai_client(profile, user_id=user_id)
+            client = await get_async_openai_client(profile, user_id=user_id)
             call = client.chat.completions.create(
                 model=profile.model,
                 messages=[{"role": "user", "content": "ping"}],
@@ -271,7 +277,7 @@ def list_my_api_keys(
 
 
 @router.put("/models/api-keys/{provider}")
-async def upsert_my_api_key(
+def upsert_my_api_key(
     provider: str,
     payload: APIKeyUpsertRequest,
     current_user: User = Depends(get_current_user),
@@ -313,12 +319,12 @@ async def upsert_my_api_key(
     # models the vendor advertises. The per-user "ready"/"selected_for"
     # bits are recomputed every catalog read, sourced from this user's
     # api-key DB row at that moment.
-    await invalidate(f"models:catalog:{current_user.username}")
+    run_async(invalidate(f"models:catalog:{current_user.username}"))
     return {"status": "saved", **result}
 
 
 @router.delete("/models/api-keys/{provider}")
-async def delete_my_api_key(
+def delete_my_api_key(
     provider: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -333,7 +339,7 @@ async def delete_my_api_key(
     # Per-user 60s catalog wrapper needs to drop so the next /catalog read
     # recomputes "ready" flags from the now-empty key state. The 24h
     # global discovery cache is left alone — see comment in upsert.
-    await invalidate(f"models:catalog:{current_user.username}")
+    run_async(invalidate(f"models:catalog:{current_user.username}"))
     return {"status": "deleted" if deleted else "noop"}
 
 
@@ -427,7 +433,7 @@ def api_get_provider_settings(
 
 
 @router.patch("/models/providers/{provider}")
-async def api_update_provider_settings(
+def api_update_provider_settings(
     provider: str,
     body: ProviderSettingsUpdateRequest,
     current_user: User = Depends(get_current_user),
@@ -477,12 +483,12 @@ async def api_update_provider_settings(
     from app.core.llm_client_factory import clear_llm_cache_for_provider
 
     clear_llm_cache_for_provider(provider)
-    await invalidate(f"models:catalog:{current_user.username}")
+    run_async(invalidate(f"models:catalog:{current_user.username}"))
     return {"status": "saved", "provider": resolved.to_dict()}
 
 
 @router.delete("/models/providers/{provider}")
-async def api_delete_provider_settings(
+def api_delete_provider_settings(
     provider: str,
     current_user: User = Depends(get_current_user),
 ):
@@ -502,12 +508,12 @@ async def api_delete_provider_settings(
     from app.core.llm_client_factory import clear_llm_cache_for_provider
 
     clear_llm_cache_for_provider(provider)
-    await invalidate(f"models:catalog:{current_user.username}")
+    run_async(invalidate(f"models:catalog:{current_user.username}"))
     return {"status": "deleted" if deleted else "noop"}
 
 
 @router.put("/models/runtime")
-async def api_update_model_runtime(
+def api_update_model_runtime(
     request: RuntimeSelectionUpdateRequest,
     current_user: User = Depends(get_current_user),
 ):
@@ -529,7 +535,7 @@ async def api_update_model_runtime(
         selection = update_runtime_selection(updates, user_id=current_user.username)
         # The selection affects every profile's `selected_for` in the cached
         # catalog payload, so drop it for this user.
-        await invalidate(f"models:catalog:{current_user.username}")
+        run_async(invalidate(f"models:catalog:{current_user.username}"))
         return {
             "status": "success",
             "selection": selection,

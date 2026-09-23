@@ -102,7 +102,8 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
-            "source_document_id", name="uq_conversation_attachment_drafts_source_document_id"
+            "source_document_id",
+            name="uq_conversation_attachment_drafts_source_document_id",
         ),
     )
     for name, columns in (
@@ -307,9 +308,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "uq_agent_interactions_pending_turn", table_name="agent_interactions"
-    )
+    op.drop_index("uq_agent_interactions_pending_turn", table_name="agent_interactions")
     op.drop_index(
         op.f("ix_agent_interactions_turn_id"), table_name="agent_interactions"
     )

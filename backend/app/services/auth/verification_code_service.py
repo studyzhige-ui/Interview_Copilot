@@ -22,7 +22,7 @@ from typing import Literal
 
 from app.core.background_tasks import safe_background_task
 from app.core.config import settings
-from app.db.redis import redis_client
+from app.db.redis import get_redis_client
 from app.services.auth.email_service import send_email
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ def _generate_code() -> str:
 
 async def _incr_with_ttl(key: str, ttl: int) -> int:
     """Atomic INCR + EXPIRE-if-new. Returns the new counter value."""
-    return int(await redis_client.eval(_INCR_WITH_TTL_LUA, 1, key, ttl))
+    return int(await get_redis_client().eval(_INCR_WITH_TTL_LUA, 1, key, ttl))
 
 
 class CodeError(Exception):
@@ -97,7 +97,7 @@ async def _deliver_code_email(
         return
     if await send_email(email, subject, body):
         return
-    await redis_client.delete(code_key, cooldown_key)
+    await get_redis_client().delete(code_key, cooldown_key)
     logger.warning("Verification email delivery failed; cooldown cleared for retry")
 
 
@@ -116,7 +116,7 @@ async def request_code(
     ``deliver=False`` preserves the same Redis code/cooldown behavior without
     sending mail, which keeps unknown-account reset requests indistinguishable.
     """
-    r = redis_client
+    r = get_redis_client()
     cooldown_key = _cooldown_key(email, purpose)
     if await r.exists(cooldown_key):
         ttl = await r.ttl(cooldown_key)
@@ -166,7 +166,7 @@ async def assert_ip_not_locked(ip: str | None) -> None:
     """
     if not ip:
         return
-    raw = await redis_client.get(_ip_attempts_key(ip))
+    raw = await get_redis_client().get(_ip_attempts_key(ip))
     if raw is not None and int(raw) > _MAX_ATTEMPTS_PER_IP:
         raise CodeError("此 IP 的验证尝试次数过多，请稍后再试")
 
@@ -182,7 +182,7 @@ async def reset_ip_failures(ip: str | None) -> None:
     """Clear the per-IP failure counter after a successful verify."""
     if not ip:
         return
-    await redis_client.delete(_ip_attempts_key(ip))
+    await get_redis_client().delete(_ip_attempts_key(ip))
 
 
 async def verify_code(email: str, code: str, purpose: Purpose = "register") -> bool:
@@ -195,7 +195,7 @@ async def verify_code(email: str, code: str, purpose: Purpose = "register") -> b
     / ``reset_ip_failures`` after. The service stays IP-agnostic so it can
     be reused from non-HTTP contexts (CLI tools, background jobs).
     """
-    r = redis_client
+    r = get_redis_client()
     code_key = _code_key(email, purpose)
     attempts_key = _attempts_key(email, purpose)
 

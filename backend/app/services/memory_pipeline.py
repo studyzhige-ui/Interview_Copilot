@@ -15,7 +15,7 @@ from datetime import timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import or_, and_, func
+from sqlalchemy import or_, and_
 
 from app.core.config import settings
 from app.core.tokens import token_count
@@ -37,6 +37,7 @@ from app.models.memory_pipeline import (
 from app.models.user import User
 from app.services import agent_memory_service as memory
 from app.services.memory_prompts import EXTRACT, CONSOLIDATE, SELECT
+from app.services.memory_retention import expired_source_ids
 
 
 class ExtractedCandidate(memory._Candidate):
@@ -390,8 +391,16 @@ def _inputs(db, user_id: int):
     )
     feedback_rows = (
         db.query(MemoryReadReceipt.memory_id, MemoryReadReceipt.feedback)
+        .join(
+            LongTermAgentMemory,
+            and_(
+                LongTermAgentMemory.id == MemoryReadReceipt.memory_id,
+                LongTermAgentMemory.version == MemoryReadReceipt.memory_version,
+            ),
+        )
         .filter(
             MemoryReadReceipt.user_id == user_id,
+            LongTermAgentMemory.user_id == user_id,
             MemoryReadReceipt.feedback.is_not(None),
         )
         .all()
@@ -704,31 +713,7 @@ def suppress_sources(
 
 
 def _forget_expired(db, user_id: int):
-    cutoff = utc_now() - timedelta(days=settings.AGENT_MEMORY_MAX_UNUSED_DAYS)
-    expired = []
-    for extraction in (
-        db.query(MemoryExtraction)
-        .filter(
-            MemoryExtraction.user_id == user_id,
-            MemoryExtraction.status == "succeeded",
-            MemoryExtraction.generated_at < cutoff,
-        )
-        .all()
-    ):
-        used = (
-            db.query(func.max(LongTermAgentMemory.last_used_at))
-            .join(
-                LongTermAgentMemorySource,
-                LongTermAgentMemorySource.memory_id == LongTermAgentMemory.id,
-            )
-            .filter(
-                LongTermAgentMemory.user_id == user_id,
-                LongTermAgentMemorySource.source_turn_identity == extraction.turn_id,
-            )
-            .scalar()
-        )
-        if used is None or used < cutoff:
-            expired.append(extraction.turn_id)
+    expired = expired_source_ids(db, user_id)
     if expired:
         suppress_sources(db, user_id, set(expired), status="forgotten")
 

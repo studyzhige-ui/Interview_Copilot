@@ -14,7 +14,7 @@
       "coverage": "covered",
       "claim": "Direct UI explicit intake creates an Opportunity through the shared verified Operation without a second confirmation, NextAction, or external action.",
       "backend_tests": ["backend/tests/test_api/test_interview_invitations_api.py", "backend/tests/test_career/test_interview_invitation_operations.py"],
-      "frontend_tests": ["src/pages/interviews/ManualInvitationForm.test.tsx"]
+      "frontend_tests": ["src/pages/career/ManualInvitationForm.test.tsx"]
     },
     {
       "id": "VS01-S02",
@@ -112,7 +112,7 @@
       "coverage": "covered",
       "claim": "Today has no seed or fallback facts and projects real NextAction, Interaction, confirmed Domain Event, and Harness activity owners.",
       "backend_tests": ["backend/tests/test_api/test_interactions_api.py", "backend/tests/test_api/test_interview_invitations_api.py"],
-      "frontend_tests": ["src/pages/today/TodayPage.test.tsx", "src/pages/activities/ActivityCenterPage.test.tsx"]
+      "frontend_tests": ["src/pages/today/TodayPage.test.tsx", "src/pages/today/RecentActivity.test.tsx"]
     }
   ]
 }

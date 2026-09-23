@@ -25,6 +25,12 @@ class _NonClosingSession:
     def close(self):
         pass
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
 
 def test_turn_submission_fk_allows_ingress_cleanup():
     foreign_key = next(iter(ConversationTurn.__table__.c.submission_id.foreign_keys))

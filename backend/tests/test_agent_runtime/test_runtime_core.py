@@ -261,10 +261,9 @@ def test_reducer_preserves_tool_results_below_pressure_threshold():
     result, at_blocking = asyncio.run(pipeline.compress(messages))
 
     from app.conversation.context_window import wire
+
     assert wire(result) == messages
     assert at_blocking is False
-
-
 
 
 def test_request_measurement_counts_tools_once_and_uses_provider_delta():
@@ -325,8 +324,6 @@ def test_token_warning_default_1m_window():
 
 
 # ── Reactive reduction ───────────────────────────────────────────────────
-
-
 
 
 def test_should_compact_absolute_threshold():

@@ -22,7 +22,7 @@ import json
 import logging
 from typing import Awaitable, Callable, TypeVar
 
-from app.db.redis import redis_client
+from app.db.redis import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ async def cached(
     """
     redis_key = _key(name)
     try:
-        raw = await redis_client.get(redis_key)
+        raw = await get_redis_client().get(redis_key)
         if raw is not None:
             return json.loads(raw)
     except Exception as exc:  # noqa: BLE001
@@ -63,7 +63,7 @@ async def cached(
     value = await loader()
 
     try:
-        await redis_client.set(redis_key, json.dumps(value, default=str), ex=ttl)
+        await get_redis_client().set(redis_key, json.dumps(value, default=str), ex=ttl)
     except Exception as exc:  # noqa: BLE001
         # Don't propagate cache-write failures to the caller — they got the
         # right value, we just couldn't memoise it.
@@ -78,7 +78,7 @@ async def invalidate(*names: str) -> None:
         return
     keys = [_key(n) for n in names]
     try:
-        await redis_client.delete(*keys)
+        await get_redis_client().delete(*keys)
     except Exception as exc:  # noqa: BLE001
         logger.warning("cache invalidate failed for %s: %s", names, exc)
 

@@ -88,9 +88,7 @@ def _isolated_user_selection(monkeypatch):
 
     monkeypatch.setattr(user_model_selection, "_load_user_selection", fake_load)
     monkeypatch.setattr(user_model_selection, "_save_user_selection", fake_save)
-    llm_client_factory._llm_cache.clear()
     yield
-    llm_client_factory._llm_cache.clear()
 
 
 # ── ROLE_DEFAULTS resolve through the cache ─────────────────────────────
@@ -299,7 +297,7 @@ def test_build_llm_instance_applies_user_connection_overrides(
     assert client.default_headers["X-Tenant"] == "tenant-a"
 
 
-def test_native_anthropic_client_removes_catalog_v1_suffix(monkeypatch):
+async def test_native_anthropic_client_removes_catalog_v1_suffix(monkeypatch):
     """The native SDK appends /v1/messages; catalog REST bases already end /v1."""
 
     captured: dict = {}
@@ -316,9 +314,8 @@ def test_native_anthropic_client_removes_catalog_v1_suffix(monkeypatch):
             captured.update(kwargs)
 
     monkeypatch.setattr(llm_client_factory, "AsyncAnthropic", FakeAnthropic)
-    llm_client_factory._async_anthropic_cache.clear()
 
-    llm_client_factory.get_async_anthropic_client(profile, user_id="alice")
+    await llm_client_factory.get_async_anthropic_client(profile, user_id="alice")
 
     assert captured["base_url"] == "https://api.example.com"
     assert captured["max_retries"] == 0

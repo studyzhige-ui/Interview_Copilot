@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock as _AsyncFactoryMock
+
 import asyncio
 import hashlib
 from types import SimpleNamespace
@@ -187,7 +189,7 @@ def test_vision_request_uses_selected_primary_adapter_with_inline_page(monkeypat
     client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
     monkeypatch.setattr(
         "app.core.llm_client_factory.build_provider_client_for_role",
-        lambda role, user_id=None: (client, profile),
+        _AsyncFactoryMock(side_effect=lambda role, user_id=None: (client, profile)),
     )
 
     observations, usage, stop_reason = asyncio.run(

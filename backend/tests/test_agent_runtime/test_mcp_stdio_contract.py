@@ -12,8 +12,8 @@ from app.services.capabilities.mcp_server_service import MCPServerConfig
 def test_real_stdio_server_roundtrip_and_error_contract(tmp_path, monkeypatch):
     server = tmp_path / "server.py"
     server.write_text(
-        """from mcp.server.fastmcp import FastMCP
-mcp = FastMCP("contract")
+        """from mcp.server import MCPServer
+mcp = MCPServer("contract")
 @mcp.tool()
 def add(a: int, b: int) -> dict:
     return {"sum": a + b}

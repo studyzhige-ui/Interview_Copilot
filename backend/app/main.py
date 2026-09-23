@@ -104,7 +104,9 @@ async def lifespan(app: FastAPI):
         current_version = connection.execute(
             text("SELECT version_num FROM alembic_version")
         ).scalar()
-    script = ScriptDirectory.from_config(Config(str(PROJECT_ROOT / "alembic.ini")))
+    migration_config = Config(str(PROJECT_ROOT / "alembic.ini"))
+    migration_config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    script = ScriptDirectory.from_config(migration_config)
     head_version = script.get_current_head()
     if current_version != head_version:
         raise RuntimeError(
@@ -143,14 +145,24 @@ async def lifespan(app: FastAPI):
     logger.info(">>> Heavy AI runtimes are owned by their worker queues.")
     safe_background_task(monitor_orphaned_turns(), name="orphan-turn-monitor")
     logger.info("====== Interview Copilot startup sequence complete ======")
-    yield
+    try:
+        yield
+    finally:
+        logger.info("Draining background tasks before shutdown...")
+        await cancel_and_wait_all(timeout=10.0)
+        from app.agent_runtime.mcp import manager
 
-    logger.info("Draining background tasks before shutdown...")
-    await cancel_and_wait_all(timeout=10.0)
-    from app.agent_runtime.mcp import manager
+        await manager.close_all()
+        from app.core.runtime_resources import close_current_resources
+        from app.db.redis import sync_redis_client
 
-    await manager.close_all()
-    logger.info("====== Interview Copilot shutdown sequence complete ======")
+        await close_current_resources()
+        await asyncio.to_thread(sync_redis_client.close)
+        from app.core.async_runtime import shutdown_worker_runtime
+
+        await asyncio.to_thread(shutdown_worker_runtime)
+        await asyncio.to_thread(engine.dispose)
+        logger.info("====== Interview Copilot shutdown sequence complete ======")
 
 
 app = FastAPI(
@@ -242,12 +254,32 @@ async def unhandled_exception_logger(request: _Request, exc: Exception):
 # request.
 @app.middleware("http")
 async def request_id_middleware(request, call_next):
+    import re
+    import time
+
     incoming = request.headers.get("x-request-id", "").strip()
-    rid = incoming if incoming else new_request_id()
+    rid = (
+        incoming
+        if re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", incoming)
+        else new_request_id()
+    )
+    started = time.perf_counter()
     set_request_id(rid)
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = rid
-    return response
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        response.headers["X-Request-ID"] = rid
+        return response
+    finally:
+        route = getattr(request.scope.get("route"), "path", "unmatched")
+        logger.info(
+            "http_request method=%s route=%s status=%d response_start_ms=%.2f",
+            request.method,
+            route,
+            status,
+            (time.perf_counter() - started) * 1000,
+        )
 
 
 # ─── Security response headers ───────────────────────────────────────────

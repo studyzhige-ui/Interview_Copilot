@@ -4,6 +4,7 @@ Hierarchy (post-0018): an interview_record has N conversations; each
 session is a self-contained chat thread. No sub-conversation level.
 """
 
+import asyncio
 import logging
 from uuid import NAMESPACE_URL, uuid5
 from typing import List, Literal
@@ -56,49 +57,93 @@ router = APIRouter(tags=["chat"])
 
 
 @router.get("/chat/sessions/{session_id}/context")
-def get_context_status(session_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_context_status(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Owner-scoped diagnostics, excluding the actual private context payload."""
     from app.conversation.context_store import load
     from app.conversation.context_window import kind, UPSTREAM_REVISION
+
     row = db.get(Conversation, session_id)
     if row is None or row.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Conversation not found")
     checkpoint = load(session_id)
     active = load(session_id, scope=row.active_turn_id) if row.active_turn_id else None
     chosen = active or checkpoint or {}
-    return {"revision": UPSTREAM_REVISION, "version": chosen.get("version", 0),
-            "window_id": chosen.get("window_id"), "through_seq": chosen.get("through_seq", 0),
-            "active_turn": bool(row.active_turn_id),
-            "item_types": [kind(m) for m in chosen.get("state", {}).get("messages", [])],
-            "compaction": chosen.get("state", {}).get("compaction", {})}
+    return {
+        "revision": UPSTREAM_REVISION,
+        "version": chosen.get("version", 0),
+        "window_id": chosen.get("window_id"),
+        "through_seq": chosen.get("through_seq", 0),
+        "active_turn": bool(row.active_turn_id),
+        "item_types": [kind(m) for m in chosen.get("state", {}).get("messages", [])],
+        "compaction": chosen.get("state", {}).get("compaction", {}),
+    }
 
 
 @router.post("/chat/sessions/{session_id}/context/compact")
-async def compact_context(session_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def compact_context(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Manual compaction uses the same model, prompt and checkpoint transaction."""
-    import asyncio
     from app.conversation.context_manager import prepare
     from app.core.context_budget import ContextCapacityError
     from app.core.llm_client_factory import build_provider_client_for_role
-    from app.services.chat.context_assembly_pipeline import context_pipeline, prompt_renderer
+    from app.services.chat.context_assembly_pipeline import (
+        context_pipeline,
+        prompt_renderer,
+    )
     from app.prompts.chat import DIRECT_SYSTEM_PROMPT
     from app.prompts.agent import agent_system_prompt_for_runtime
 
-    row = db.get(Conversation, session_id)
-    if row is None or row.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    if row.active_turn_id:
-        raise HTTPException(status_code=409, detail="当前任务仍在执行，请结束后再手动压缩。")
-    system = agent_system_prompt_for_runtime(runtime_profile_for_type(row.type).name) if row.mode == "agent" else DIRECT_SYSTEM_PROMPT
-    client, profile = await asyncio.to_thread(build_provider_client_for_role, "primary", user_id=current_user.username)
-    assembled = await context_pipeline.assemble_answer_context(session_id, "", user_id=current_user.username,
-                model_context_window=profile.context_window, model_output_tokens=profile.max_output_tokens)
+    username = current_user.username
+    user_pk = current_user.id
+
+    def read_context():
+        try:
+            row = db.get(Conversation, session_id)
+            if row is None or row.user_id != user_pk:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            if row.active_turn_id:
+                raise HTTPException(
+                    status_code=409, detail="当前任务仍在执行，请结束后再手动压缩。"
+                )
+            return (
+                agent_system_prompt_for_runtime(runtime_profile_for_type(row.type).name)
+                if row.mode == "agent"
+                else DIRECT_SYSTEM_PROMPT
+            )
+        finally:
+            db.rollback()
+
+    system = await asyncio.to_thread(read_context)
+    client, profile = await build_provider_client_for_role("primary", user_id=username)
+    assembled = await context_pipeline.assemble_answer_context(
+        session_id,
+        "",
+        user_id=username,
+        model_context_window=profile.context_window,
+        model_output_tokens=profile.max_output_tokens,
+    )
     try:
-        await prepare(assembled, renderer=prompt_renderer, system_prompt=system,
-                      client=client, profile=profile, force=True)
+        await prepare(
+            assembled,
+            renderer=prompt_renderer,
+            system_prompt=system,
+            client=client,
+            profile=profile,
+            force=True,
+        )
     except ContextCapacityError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"version": assembled.checkpoint_version, "compaction": assembled.context_report.get("compaction", {})}
+    return {
+        "version": assembled.checkpoint_version,
+        "compaction": assembled.context_report.get("compaction", {}),
+    }
 
 
 @router.post("/chat/sessions", response_model=SessionCreateResponse)
@@ -136,13 +181,30 @@ def create_chat_session(
     default_titles = {"general": "通用对话", "debrief": "面试复盘"}
     title = req.title or default_titles.get(conv_type, "新的面试对话")
     user_pk = resolve_user_pk(db, current_user.username)
-    session_id = str(uuid5(NAMESPACE_URL, f"interview-copilot:session:{user_pk}:{req.client_request_id}")) if req.client_request_id else generate_uuid()
+    session_id = (
+        str(
+            uuid5(
+                NAMESPACE_URL,
+                f"interview-copilot:session:{user_pk}:{req.client_request_id}",
+            )
+        )
+        if req.client_request_id
+        else generate_uuid()
+    )
 
     def response_for(row: Conversation) -> SessionCreateResponse:
-        if row.user_id != user_pk or row.type != conv_type or row.subject_id != subject_id:
-            raise HTTPException(status_code=409, detail="创建请求与已有对话不一致，请重新开始")
+        if (
+            row.user_id != user_pk
+            or row.type != conv_type
+            or row.subject_id != subject_id
+        ):
+            raise HTTPException(
+                status_code=409, detail="创建请求与已有对话不一致，请重新开始"
+            )
         return SessionCreateResponse(
-            session_id=row.id, title=row.title, type=row.type,
+            session_id=row.id,
+            title=row.title,
+            type=row.type,
             execution_mode=row.execution_mode,
             execution_mode_version=row.execution_mode_version,
         )
@@ -397,18 +459,6 @@ def delete_chat_session(
                 logger.warning(
                     "Could not revoke deleted attachment ingestion task %s",
                     task_id,
-                    exc_info=True,
-                )
-        if deletion.cancelled_turn_id:
-            try:
-                from app.core.async_runtime import run_async
-                from app.services.chat.turn_event_buffer import turn_event_buffer
-
-                run_async(turn_event_buffer.request_cancel(deletion.cancelled_turn_id))
-            except Exception:  # noqa: BLE001 - durable fence is authoritative
-                logger.warning(
-                    "Could not signal deleted Conversation Turn %s",
-                    deletion.cancelled_turn_id,
                     exc_info=True,
                 )
         return deletion.result
