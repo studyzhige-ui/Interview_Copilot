@@ -74,10 +74,10 @@ export function TopBar({ pageTitle, onOpenCopilot }: { pageTitle?: string; onOpe
             </button>
             <button
               onClick={async () => {
-                // Await so the backend revocation lands before the page nav
-                // cancels the in-flight POST. logout() always resolves.
+                // Clear local access immediately; SPA navigation lets bounded
+                // best-effort credential revocation continue in the background.
                 await logout();
-                window.location.href = '/auth';
+                navigate('/auth', { replace: true });
               }}
               className="w-full flex items-center gap-2 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50"
             >

@@ -34,7 +34,7 @@ it('a background cloud event cannot replace an explicitly unlocked local session
 
 it('ignores cloud refresh completion after local logout', async () => {
   const auth = await import('./supabaseAuth'); await auth.initializeAuth(vi.fn());
-  tokenStore.set(jwt({ iss: 'https://fixture.supabase.co/auth/v1', sub: 'cloud-user' }), 'old-refresh');
+  tokenStore.set(jwt({ iss: 'https://fixture.supabase.co/auth/v1', sub: 'cloud-user', session_id: 'session-a' }), 'old-refresh');
   let resolve!: (value: unknown) => void;
   sdk.refreshSession.mockReturnValue(new Promise(r => { resolve = r; }));
   const pending = auth.refreshCloudAccess(tokenStore.getAccess()); tokenStore.clear();

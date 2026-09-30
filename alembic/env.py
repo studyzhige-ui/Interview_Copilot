@@ -79,7 +79,9 @@ def run_migrations_online() -> None:
                 raise RuntimeError(
                     "Unpublished PR2 migration baseline detected. Back up and stop writers, then use scripts/upgrade_legacy_pr2.py; never stamp or overwrite revision history"
                 )
-            connection.rollback()
+        # Introspection starts an implicit transaction even on an empty DB.
+        # End the read-only preflight so Alembic owns and commits its DDL.
+        connection.rollback()
         context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():

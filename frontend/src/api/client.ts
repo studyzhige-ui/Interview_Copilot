@@ -1,6 +1,6 @@
-import { isSupabaseAuth, refreshCloudAccess } from '@/lib/supabaseAuth';
+import { isSupabaseAuth, refreshCloudAccess, invalidateAuthAttempts } from '@/lib/supabaseAuth';
 import axios, { AxiosError, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
-import { tokenStore } from '@/lib/token';
+import { tokenStore, tokenAuthority, type AuthoritySnapshot } from '@/lib/token';
 import { toast } from '@/store/uiStore';
 import { API_BASE, apiUrl } from './apiUrl';
 
@@ -16,46 +16,44 @@ export const apiClient = axios.create({
   withCredentials: true,
 });
 
+interface RetryConfig extends AxiosRequestConfig {
+  _retry?: boolean;
+  _authority?: AuthoritySnapshot;
+}
+const staleAuthority = () => new Error('账号会话已变化，请在当前账号下重新操作');
+function canRetry(snapshot: AuthoritySnapshot, token: string | null): boolean {
+  return !!token && tokenStore.matches(snapshot) && snapshot.identity === tokenAuthority(token);
+}
+
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const request = config as InternalAxiosRequestConfig & RetryConfig;
   const token = tokenStore.getAccess();
   if (token && !config.headers.has('Authorization')) {
     config.headers.set('Authorization', `Bearer ${token}`);
   }
-  return config;
-});
-
-interface RetryConfig extends AxiosRequestConfig {
-  _retry?: boolean;
-}
-
-let refreshInFlight: Promise<string | null> | null = null;
-
-/**
- * Refresh the access token using the stored refresh token.
- *
- * Shared by the Axios interceptor and ``authedFetch`` so fetch-based
- * streams recover from a 401 through the same flow. In-flight
- * de-duplication is process-wide:
- * a second caller that arrives while a refresh is already pending awaits
- * the same promise rather than firing a duplicate refresh request.
- *
- * Returns the new access token on success, or ``null`` if there's no
- * refresh token / the refresh endpoint rejected it. Callers should
- * fall back to :func:`redirectToAuth` on ``null``.
- */
-async function refreshAccessToken(rejectedAccess: string | null): Promise<string | null> {
-  if (refreshInFlight) return refreshInFlight;
-  if (isSupabaseAuth()) {
-    refreshInFlight = refreshCloudAccess(rejectedAccess).finally(() => { refreshInFlight = null; });
-    return refreshInFlight;
+  const sent = String(config.headers.get('Authorization') ?? '').replace(/^Bearer /, '') || null;
+  if (request._retry) {
+    if (!request._authority || !canRetry(request._authority, sent)) throw staleAuthority();
+  } else {
+    request._authority = { ...tokenStore.snapshot(), identity: tokenAuthority(sent) };
   }
-  const refresh = tokenStore.getRefresh();
-  if (!refresh) return null;
+  return config;
+}, error => { throw error; }, { synchronous: true });
 
-  const rotate = async () => {
-    // Another tab or an earlier request may already have rotated this ticket.
+// A refresh flight belongs to an immutable account/session epoch. Requests
+// from A may never join B's refresh or replay A's mutation as B.
+const refreshFlights = new Map<string, Promise<string | null>>();
+async function refreshAccessToken(rejectedAccess: string | null, snapshot: AuthoritySnapshot): Promise<string | null> {
+  if (!canRetry(snapshot, rejectedAccess)) throw staleAuthority();
+  const key = JSON.stringify(snapshot);
+  const existing = refreshFlights.get(key);
+  if (existing) return existing;
+  const rotate = async (): Promise<string | null> => {
+    if (!canRetry(snapshot, rejectedAccess)) throw staleAuthority();
+    // A same-authority rotation may already have completed in another tab.
     const current = tokenStore.getAccess();
-    if (current && current !== rejectedAccess) return current;
+    if (current !== rejectedAccess) return current;
+    if (isSupabaseAuth()) return refreshCloudAccess(rejectedAccess);
     const ticket = tokenStore.getRefresh();
     if (!ticket) return null;
     try {
@@ -63,30 +61,38 @@ async function refreshAccessToken(rejectedAccess: string | null): Promise<string
       const access = res.data?.access_token as string | undefined;
       const newRefresh = res.data?.refresh_token as string | undefined;
       if (!access || !newRefresh) throw new Error('登录服务响应不完整，请稍后重试');
-      // Logout or account switching while the request was pending wins.
+      if (!canRetry(snapshot, rejectedAccess)) throw staleAuthority();
       if (tokenStore.getRefresh() !== ticket) return tokenStore.getAccess();
+      if (tokenAuthority(access) !== snapshot.identity) throw staleAuthority();
       tokenStore.set(access, newRefresh);
       return access;
     } catch (error) {
+      if (!canRetry(snapshot, rejectedAccess)) throw staleAuthority();
       if (axios.isAxiosError(error) && error.response?.status === 401) {
-        if (tokenStore.getRefresh() !== ticket) return tokenStore.getAccess();
-        return null;
+        return tokenStore.getRefresh() !== ticket ? tokenStore.getAccess() : null;
       }
       throw error;
     }
   };
-  // Web Locks serializes one-time refresh tickets across same-origin tabs.
-  refreshInFlight = (navigator.locks
+  // Web Locks also serialize one-time local refresh tickets across tabs.
+  const pending = (navigator.locks && !isSupabaseAuth()
     ? navigator.locks.request('interview-copilot-token-refresh', rotate)
     : rotate()
-  ).finally(() => { refreshInFlight = null; });
-  return refreshInFlight;
+  ).then(fresh => {
+    if (!tokenStore.matches(snapshot) || (fresh && !canRetry(snapshot, fresh))) throw staleAuthority();
+    return fresh;
+  }).finally(() => { refreshFlights.delete(key); });
+  refreshFlights.set(key, pending);
+  return pending;
 }
 
 /**
  * Clear tokens and bounce to /auth after either transport fails to refresh.
  */
-function redirectToAuth() {
+function redirectToAuth(rejectedAccess: string | null, snapshot: AuthoritySnapshot) {
+  // A late failure from A must not clear a newer B session.
+  if (!tokenStore.matches(snapshot) || tokenStore.getAccess() !== rejectedAccess) return;
+  invalidateAuthAttempts();
   tokenStore.clear();
   if (window.location.pathname !== '/auth') {
     window.location.href = '/auth';
@@ -114,24 +120,21 @@ export async function authedFetch(
   input: string,
   init: RequestInit = {},
 ): Promise<Response> {
-  const doFetch = (): Promise<Response> => {
-    const token = tokenStore.getAccess() ?? '';
-    const headers = new Headers(init.headers as HeadersInit | undefined);
-    if (token && !headers.has('Authorization')) {
-      headers.set('Authorization', `Bearer ${token}`);
-    }
-    return fetch(input, { ...init, headers });
-  };
-
-  const rejectedAccess = tokenStore.getAccess();
-  let resp = await doFetch();
+  const headers = new Headers(init.headers);
+  if (!headers.has('Authorization') && tokenStore.getAccess()) headers.set('Authorization', `Bearer ${tokenStore.getAccess()}`);
+  const rejectedAccess = (headers.get('Authorization') ?? '').replace(/^Bearer /, '') || null;
+  const snapshot = { ...tokenStore.snapshot(), identity: tokenAuthority(rejectedAccess) };
+  let resp = await fetch(input, { ...init, headers });
   if (resp.status === 401) {
-    const fresh = await refreshAccessToken(rejectedAccess);
+    const fresh = await refreshAccessToken(rejectedAccess, snapshot);
     if (!fresh) {
-      redirectToAuth();
+      redirectToAuth(rejectedAccess, snapshot);
       throw new Error('登录状态已失效，请重新登录');
     }
-    resp = await doFetch();
+    if (!canRetry(snapshot, fresh)) throw staleAuthority();
+    // Force the approved token, never reread a possibly different account.
+    headers.set('Authorization', `Bearer ${fresh}`);
+    resp = await fetch(input, { ...init, headers });
   }
   return resp;
 }
@@ -141,6 +144,8 @@ apiClient.interceptors.response.use(
   async (error: AxiosError<{ detail?: string | { code?: string; message?: string } }>) => {
     const status = error.response?.status;
     const original = (error.config ?? {}) as RetryConfig;
+    const rejectedAccess = String(original.headers?.Authorization ?? '').replace(/^Bearer /, '') || null;
+    const snapshot = original._authority ?? { epoch: null, identity: tokenAuthority(rejectedAccess) };
     const detail = error.response?.data?.detail;
     if (status === 409 && detail && typeof detail === 'object' && 'code' in detail && detail.code === 'LOCAL_PROFILE_REQUIRED') {
       if (window.location.pathname !== '/auth') window.location.href = '/auth';
@@ -153,17 +158,17 @@ apiClient.interceptors.response.use(
     if (status === 401 && credentialOperation) return Promise.reject(error);
     if (status === 401 && !original._retry) {
       original._retry = true;
-      const authorization = String(original.headers?.Authorization ?? '');
-      const newToken = await refreshAccessToken(authorization.replace(/^Bearer /, '') || null);
+      const newToken = await refreshAccessToken(rejectedAccess, snapshot);
       if (newToken) {
+        if (!canRetry(snapshot, newToken)) throw staleAuthority();
         original.headers = { ...(original.headers ?? {}), Authorization: `Bearer ${newToken}` };
         return apiClient.request(original);
       }
-      redirectToAuth();
+      redirectToAuth(rejectedAccess, snapshot);
       return Promise.reject(error);
     }
     if (status === 401) {
-      redirectToAuth();
+      redirectToAuth(rejectedAccess, snapshot);
     } else if (status === 429) {
       toast.warn('请求过于频繁，请稍后再试');
     }

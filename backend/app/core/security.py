@@ -8,6 +8,7 @@ a durable SQL ledger on logout or refresh-rotation. See
 from __future__ import annotations
 
 import uuid
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -95,10 +96,8 @@ def token_claims_for(user: User) -> dict:
 
 
 # ── FastAPI auth dependency ─────────────────────────────────────────────
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db, scope="function"),
-) -> User:
+def authenticate_token(token: str, db: Session) -> User:
+    """Synchronous validation kernel; callers own its DB/thread lifetime."""
     if settings.AUTH_PROVIDER == "supabase":
         from app.identity.application.supabase_auth import cloud_user
         from app.identity.application.local_unlock import local_user, LOCAL_ISSUER
@@ -155,8 +154,20 @@ def get_current_user(
     # so every token minted before it fails here on next use.
     if token_version != user.token_version:
         raise credentials_exception
+    return user
+
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db, scope="function"),
+) -> User:
+    """Verify off-thread, then bind attribution in the actual request context.
+
+    ContextVars set in a worker thread do not flow back to an async endpoint.
+    FastAPI propagates this caller context to its synchronous handlers too.
+    """
+    user = await asyncio.to_thread(authenticate_token, token, db)
     from app.usage.runtime import bind
-    import uuid
 
     bind(int(user.id), f"http:{uuid.uuid4().hex}", username=user.username)
     return user

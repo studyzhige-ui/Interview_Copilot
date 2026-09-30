@@ -1,5 +1,5 @@
 import { SESSION_SYNC_KEY } from './lib/token';
-import { initializeAuth } from './lib/supabaseAuth';
+import { initializeAuth, synchronizeStoredSession } from './lib/supabaseAuth';
 import { useAuthStore } from './store/authStore';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
@@ -13,10 +13,10 @@ import './styles/index.css';
 
 window.addEventListener('storage', event => {
   if (event.key !== SESSION_SYNC_KEY || event.newValue !== localStorage.getItem(SESSION_SYNC_KEY)) return;
-  if (!event.newValue) { useAuthStore.getState().clearSession(); return; }
+  if (!event.newValue) { synchronizeStoredSession(null); return; }
   try {
     const session = JSON.parse(event.newValue) as { access?: unknown; refresh?: unknown };
-    if (typeof session.access === 'string' && typeof session.refresh === 'string') useAuthStore.getState().setSession(session.access, session.refresh);
+    if (typeof session.access === 'string' && typeof session.refresh === 'string') synchronizeStoredSession({ access_token: session.access, refresh_token: session.refresh });
   } catch { /* A malformed local hint grants no authority; API verification still applies. */ }
 });
 

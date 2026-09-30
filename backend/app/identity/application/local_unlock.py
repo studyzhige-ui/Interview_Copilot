@@ -82,23 +82,24 @@ def unlock(db: Session, email: str, password: str) -> str:
         raise unauthorized()
     row.failed_attempts = 0
     row.locked_until = None
+    # Capture the verified generation BEFORE releasing the lock. Production
+    # sessions expire ORM attributes on commit; rereading afterwards could mint
+    # a new-generation token from a password checked against the old generation.
+    claims = {
+        "iss": LOCAL_ISSUER,
+        "aud": LOCAL_AUDIENCE,
+        "sub": str(user.id),
+        "type": "local_unlock",
+        "scope": "local_business",
+        "jti": uuid.uuid4().hex,
+        "iat": now,
+        "exp": now + timedelta(hours=8),
+        "token_version": user.token_version,
+        "credential_version": row.credential_version,
+    }
+    encoded = jwt.encode(claims, settings.SECRET_KEY, algorithm="HS256")
     db.commit()
-    return jwt.encode(
-        {
-            "iss": LOCAL_ISSUER,
-            "aud": LOCAL_AUDIENCE,
-            "sub": str(user.id),
-            "type": "local_unlock",
-            "scope": "local_business",
-            "jti": uuid.uuid4().hex,
-            "iat": now,
-            "exp": now + timedelta(hours=8),
-            "token_version": user.token_version,
-            "credential_version": row.credential_version,
-        },
-        settings.SECRET_KEY,
-        algorithm="HS256",
-    )
+    return encoded
 
 
 def decode_local_token(token: str) -> dict:

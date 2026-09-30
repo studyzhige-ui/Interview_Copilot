@@ -654,7 +654,7 @@ def test_interview_record_children_cascade(fresh_pg_db, monkeypatch):
     engine.dispose()
 
 
-def test_0047_preserves_legacy_metadata_and_json_on_upgrade_and_downgrade(fresh_pg_db):
+def test_main_upgrade_retires_legacy_cursors_but_preserves_business_json(fresh_pg_db):
     from datetime import datetime, UTC
     from alembic import command
     from sqlalchemy import create_engine, inspect, text
@@ -709,7 +709,7 @@ def test_0047_preserves_legacy_metadata_and_json_on_upgrade_and_downgrade(fresh_
                         "SELECT memory_extraction_cursor FROM conversations WHERE id='migration-context'"
                     )
                 ).scalar_one()
-                == 17
+                is None
             )
             assert (
                 conn.execute(
@@ -717,7 +717,7 @@ def test_0047_preserves_legacy_metadata_and_json_on_upgrade_and_downgrade(fresh_
                         "SELECT last_dreamed_at FROM users WHERE username='migration-retained-metadata'"
                     )
                 ).scalar_one()
-                == when
+                is None
             )
             assert (
                 conn.execute(

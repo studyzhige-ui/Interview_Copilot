@@ -5,14 +5,14 @@ import { beforeEach, expect, it, vi } from 'vitest';
 const fixture = vi.hoisted(() => {
   const auth = { signUp: vi.fn(), signInWithPassword: vi.fn(), resetPasswordForEmail: vi.fn(), updateUser: vi.fn(), signOut: vi.fn(), onAuthStateChange: vi.fn() };
   const state = { isAuthed: false, setSession: vi.fn(), setMe: vi.fn(), clearSession: vi.fn() };
-  return { auth, state, post: vi.fn(), generation: 0, recovery: false };
+  return { auth, state, post: vi.fn(), generation: 0, recovery: false, completeRecovery: vi.fn(), recoveryStates: { none: { status: 'none' }, ready: { status: 'ready', email: 'owner@example.test' } } };
 });
 vi.mock('@/api/client', () => ({ apiClient: { post: fixture.post }, extractErr: (e: Error) => e.message }));
 vi.mock('@/store/authStore', () => ({ useAuthStore: Object.assign((select: (s: typeof fixture.state) => unknown) => select(fixture.state), { getState: () => fixture.state }) }));
 vi.mock('@/lib/supabaseAuth', () => ({
   cloudAuth: () => ({ auth: fixture.auth }), isLocalUnlockSession: () => false,
-  isPasswordRecovery: () => fixture.recovery, isPublicEmailDeliveryReady: () => false, finishPasswordRecovery: vi.fn(),
-  beginAuthAttempt: () => ++fixture.generation, isCurrentAuthAttempt: (g: number) => g === fixture.generation, acceptAuthAttempt: vi.fn(), invalidateAuthAttempts: () => { fixture.generation += 1; }, runCloudAuthOperation: (fn: () => Promise<unknown>) => fn(),
+  isPasswordRecovery: () => fixture.recovery, getRecoveryState: () => fixture.recoveryStates[fixture.recovery ? 'ready' : 'none'], subscribeRecovery: () => () => {}, completePasswordRecovery: fixture.completeRecovery, discardUnacceptedSession: vi.fn().mockResolvedValue(undefined), isPublicEmailDeliveryReady: () => false, finishPasswordRecovery: vi.fn(),
+  beginAuthAttempt: () => ++fixture.generation, isCurrentAuthAttempt: (g: number) => g === fixture.generation, acceptCloudSession: (session: { access_token: string; refresh_token: string }) => { fixture.state.setSession(session.access_token, session.refresh_token); return true; }, invalidateAuthAttempts: () => { fixture.generation += 1; }, runCloudAuthOperation: (fn: () => Promise<unknown>) => fn(),
 }));
 import { SupabaseAuthPanel } from './SupabaseAuthPanel';
 
@@ -22,7 +22,7 @@ beforeEach(() => {
   fixture.auth.signInWithPassword.mockResolvedValue({ data: { session: { access_token: 'cloud-access', refresh_token: 'cloud-refresh' } }, error: null });
   fixture.auth.signUp.mockResolvedValue({ data: { session: null }, error: null });
   fixture.auth.resetPasswordForEmail.mockResolvedValue({ error: null });
-  fixture.auth.updateUser.mockResolvedValue({ error: null }); fixture.auth.signOut.mockResolvedValue({ error: null });
+  fixture.completeRecovery.mockResolvedValue(true); fixture.auth.updateUser.mockResolvedValue({ error: null }); fixture.auth.signOut.mockResolvedValue({ error: null });
   fixture.post.mockResolvedValue({ data: { profile: { username: 'owner' }, local_unlock_enabled: true } });
 });
 function show() { render(<MemoryRouter initialEntries={['/auth']}><Routes><Route path="/auth" element={<SupabaseAuthPanel />} /><Route path="/today" element={<p>Local workspace</p>} /></Routes></MemoryRouter>); }
@@ -98,7 +98,6 @@ it('requests password recovery through Auth with the exact recovery callback', a
 it('updates the recovered cloud password and requires a new sign-in', async () => {
   fixture.recovery = true; show(); fill('账号密码', 'new-cloud-password'); fill('再次输入密码', 'new-cloud-password');
   fireEvent.click(screen.getByRole('button', { name: '设置新账号密码' }));
-  await waitFor(() => expect(fixture.state.clearSession).toHaveBeenCalledOnce());
-  expect(fixture.auth.updateUser).toHaveBeenCalledWith({ password: 'new-cloud-password' });
+  await waitFor(() => expect(fixture.completeRecovery).toHaveBeenCalledWith('new-cloud-password'));
   expect(fixture.post).not.toHaveBeenCalled();
 });

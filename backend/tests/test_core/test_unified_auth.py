@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException
 
 from app.core.config import settings
-from app.core.security import get_current_user, get_password_hash
+from app.core.security import authenticate_token, get_password_hash
 from app.core.token_blacklist import revoke
 from app.db.types import utc_now
 from app.identity.application import supabase_auth as cloud, local_unlock
@@ -189,17 +189,17 @@ def test_cloud_owner_gate_checks_disabled_and_local_revocation(auth_config, db_s
     payload = claims()
     user = bind(db_session, payload)
     value = token(auth_config, payload)
-    assert get_current_user(value, db_session).id == user.id
+    assert authenticate_token(value, db_session).id == user.id
     user.is_active = False
     db_session.commit()
     with pytest.raises(HTTPException):
-        get_current_user(value, db_session)
+        authenticate_token(value, db_session)
     user.is_active = True
     db_session.commit()
     revoke(db_session, cloud.token_identity(value), exp=payload["exp"])
     db_session.commit()
     with pytest.raises(HTTPException):
-        get_current_user(value, db_session)
+        authenticate_token(value, db_session)
 
 
 def test_independent_unlock_works_offline_without_cloud_privileges(
@@ -215,7 +215,7 @@ def test_independent_unlock_works_offline_without_cloud_privileges(
     monkeypatch.setattr(cloud, "online_user", no_network)
     monkeypatch.setattr(cloud, "_jwks_client", no_network)
     value = local_unlock.unlock(db_session, payload["email"], "separate-local-password")
-    assert get_current_user(value, db_session).id == user.id
+    assert authenticate_token(value, db_session).id == user.id
     with pytest.raises(HTTPException) as caught:
         cloud.verify_cloud_token(value, online=True)
     assert caught.value.status_code == 401
@@ -231,7 +231,7 @@ def test_unlock_rotation_revocation_and_disabled_owner_are_enforced(
     first = local_unlock.unlock(db_session, payload["email"], "separate-local-password")
     local_unlock.enroll(db_session, user, "rotated-local-password")
     with pytest.raises(HTTPException):
-        get_current_user(first, db_session)
+        authenticate_token(first, db_session)
     current = local_unlock.unlock(
         db_session, payload["email"], "rotated-local-password"
     )
@@ -239,7 +239,7 @@ def test_unlock_rotation_revocation_and_disabled_owner_are_enforced(
     revoke(db_session, body["jti"], exp=body["exp"])
     db_session.commit()
     with pytest.raises(HTTPException):
-        get_current_user(current, db_session)
+        authenticate_token(current, db_session)
     user.is_active = False
     db_session.commit()
     with pytest.raises(HTTPException):
@@ -257,7 +257,7 @@ def test_unlock_lockout_persists_and_expired_sessions_are_rejected(
     decoded["exp"] = 1
     expired = jwt.encode(decoded, settings.SECRET_KEY, algorithm="HS256")
     with pytest.raises(HTTPException):
-        get_current_user(expired, db_session)
+        authenticate_token(expired, db_session)
     for _ in range(5):
         with pytest.raises(HTTPException):
             local_unlock.unlock(db_session, payload["email"], "wrong")

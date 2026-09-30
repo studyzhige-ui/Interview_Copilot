@@ -114,3 +114,33 @@ Official references:
 - https://supabase.com/docs/reference/javascript/auth-signup
 - https://supabase.com/docs/reference/javascript/auth-resetpasswordforemail
 - https://supabase.com/docs/guides/auth/auth-smtp
+
+## Integration hardening follow-up
+
+Authentication now has a synchronous verification kernel and an async-facing
+FastAPI dependency. Blocking verification stays off the event loop; the verified
+owner's usage context is bound in the actual request context. Live media owns its
+verification and lease transaction entirely in a worker thread. Regressions use
+real token verification and production-style expiring SQLAlchemy sessions.
+
+Account changes clear local UI/query state before admission. Refresh is bound to
+the original issuer, subject, session and a persisted account epoch. Both Axios
+and streaming fetch capture that authority before dispatch, isolate refresh
+flights, and pin the approved retry token. Logout/relogin invalidates in-flight
+requests even when the same subject returns; a late A mutation cannot retry as B.
+Accepted tokens and UI ownership update through one sink. Explicit logout locks
+local state immediately and persists that lock across reload while bounded
+server revocation runs in the background. Unlock tokens snapshot the verified
+credential generation before releasing its database lock.
+
+A recovery URL only requests the screen. Password submission requires a
+successful SDK recovery exchange, displays the verified account, and uses a
+separate non-persistent SDK client bound to that recovery session. Wrong-browser
+and expired links cannot reuse an existing account's session. Tests exercise the
+actual pinned SDK with synthetic HTTP, including a concurrent shared-storage
+account change. No real password is changed by these tests.
+
+The migration preflight ends its read-only introspection transaction for both
+fresh and existing databases so Alembic can own and commit its DDL. Real
+PostgreSQL gates cover fresh installation, published-main upgrade, exact PR2
+adoption and rollback of interrupted adoption. They remain required in CI.

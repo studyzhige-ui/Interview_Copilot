@@ -1,3 +1,4 @@
+import { invalidateAuthAttempts } from '@/lib/supabaseAuth';
 import { queryClient } from '@/lib/queryClient';
 import { create } from 'zustand';
 import { tokenStore, decodeJwtPayload } from '@/lib/token';
@@ -42,6 +43,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ subjectId: p?.sub ?? null, isAuthed: true, me: previous === p?.sub ? get().me : null, loadingMe: false });
   },
   clearSession: () => {
+    invalidateAuthAttempts();
     epoch += 1;
     tokenStore.clear();
     void queryClient.cancelQueries();
@@ -49,9 +51,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ subjectId: null, isAuthed: false, me: null, loadingMe: false });
   },
   logout: async () => {
-    const version = epoch;
-    await apiLogout();
-    if (epoch === version) get().clearSession();
+    // Capture/revoke the old credentials in apiLogout before clearing. Local
+    // privacy is immediate even if cloud Auth or the local API is unreachable.
+    const revocation = apiLogout();
+    get().clearSession();
+    void revocation.catch(() => undefined);
   },
   fetchMe: async (force = false) => {
     if (!get().isAuthed) return null;

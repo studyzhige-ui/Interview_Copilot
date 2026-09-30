@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 import uuid
 
-from app.core.security import get_current_user
+from app.core.security import authenticate_token
 from app.db.database import SessionLocal
 from app.db.types import utc_now
 from app.models.mock_media import MockMediaLease, MockMediaPlayback
@@ -64,13 +65,16 @@ class LiveInterview:
         return record, lease
 
     async def authorize(self):
+        await asyncio.to_thread(self._authorize_sync)
+
+    def _authorize_sync(self):
         # The original credential expires/revokes normally. Reconnecting acquires
         # a refreshed credential; an open data channel is not permanent auth.
         with usage.scope(
             self.user_id, f"media-auth:{self.connection_id}", username=self.username
         ):
             with SessionLocal() as db:
-                user = await get_current_user(token=self.token, db=db)
+                user = authenticate_token(token=self.token, db=db)
                 if user.id != self.user_id or not user.is_active:
                     raise MediaConflict("media_owner_lost")
                 _, lease = self.checked_record(db, lock=True)

@@ -1,4 +1,4 @@
-import { cloudAuth, isSupabaseAuth, invalidateAuthAttempts, runCloudAuthOperation } from '@/lib/supabaseAuth';
+import { cloudAuth, isSupabaseAuth, invalidateAuthAttempts, runCloudAuthOperation, finishPasswordRecovery } from '@/lib/supabaseAuth';
 import { apiClient } from './client';
 import { uploadFileAsset } from './fileAssets';
 import { tokenStore } from '@/lib/token';
@@ -15,7 +15,7 @@ export interface TokenPair {
  * never blocks on network. Pair this with `tokenStore.clear()` on the FE.
  */
 export async function logout(): Promise<void> {
-  if (isSupabaseAuth()) invalidateAuthAttempts();
+  if (isSupabaseAuth()) { invalidateAuthAttempts(); finishPasswordRecovery(); }
   // Enqueue immediately, before awaiting local revocation. A later sign-in
   // cannot be removed by this earlier logout's delayed SDK response.
   const cloudLogout = isSupabaseAuth()
