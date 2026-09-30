@@ -153,3 +153,29 @@ def test_migration_preflight_does_not_capture_alembic_transaction(
     runpy.run_path(str(Path(__file__).parents[3] / "alembic/env.py"))
     assert configured == [True]
     engine.dispose()
+
+
+def test_literal_migration_targets_exist_after_history_integration():
+    """Check aliased calls too, so skipped PG tests cannot retain removed IDs."""
+    import ast
+    from alembic.script import ScriptDirectory
+
+    root = Path(__file__).resolve().parents[3]
+    config = _make_alembic_config("postgresql://unused/fixture")
+    revisions = {
+        item.revision for item in ScriptDirectory.from_config(config).walk_revisions()
+    }
+    valid = revisions | {"head", "heads", "base"}
+    for source in (root / "backend/tests").rglob("test_*.py"):
+        for node in ast.walk(ast.parse(source.read_text())):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"upgrade", "downgrade"}
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)
+            ):
+                assert node.args[1].value in valid, (
+                    f"{source}:{node.lineno}: unknown migration {node.args[1].value}"
+                )

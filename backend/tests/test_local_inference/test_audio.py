@@ -37,7 +37,11 @@ def audio_task(spec, pcm=b"\0\0" * 16000, **kwargs):
     return make_audio_request(spec.role, spec.binding, pcm, **kwargs)
 
 
-@pytest.mark.parametrize("pcm", [b"", b"x", b"x" * (MAX_PCM_BYTES + 2), "text"])
+@pytest.mark.parametrize(
+    "pcm",
+    [b"", b"x", b"x" * (MAX_PCM_BYTES + 2), "text"],
+    ids=["empty", "unaligned", "oversized", "wrong-type"],
+)
 def test_invalid_pcm(pcm):
     with pytest.raises(ProtocolError):
         pcm_payload(pcm)

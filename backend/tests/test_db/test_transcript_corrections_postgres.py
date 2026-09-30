@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 import pytest
 from alembic import command as migration
+from alembic.script import ScriptDirectory
 from app.core.command_errors import CommandError
 from app.models.interview_record import InterviewRecord
 from app.models.interview_transcript import InterviewTranscript
@@ -98,19 +99,21 @@ def test_prior_review_generation_cannot_publish_after_source_correction(database
             lock_record(worker, record_id)
 
 
-def test_0057_preserves_old_evidence_and_refuses_to_drop_nonempty_history(database):
+def test_0070_preserves_old_evidence_and_refuses_to_drop_nonempty_history(database):
     _, cfg, factory = database
+    # Test the actual predecessor of transcript corrections, not a copied PR2 ID.
+    predecessor = ScriptDirectory.from_config(cfg).get_revision("0070").down_revision
     user_pk, record_id, tr_id, cmd = initialize(factory)
     with factory() as db:
         original = db.get(InterviewTranscript, tr_id).evidence_json
-    migration.downgrade(cfg, "0056")
+    migration.downgrade(cfg, predecessor)
     migration.upgrade(cfg, "head")
     migration.check(cfg)
     with factory() as db:
         assert db.get(InterviewTranscript, tr_id).evidence_json == original
         correct_transcript(db, record_id=record_id, user_pk=user_pk, command=cmd)
     with pytest.raises(RuntimeError, match="requires_export"):
-        migration.downgrade(cfg, "0056")
+        migration.downgrade(cfg, predecessor)
     with factory() as db:
         assert db.get(InterviewTranscript, tr_id).evidence_json == original
         assert db.query(TranscriptCorrection).count() == 1
