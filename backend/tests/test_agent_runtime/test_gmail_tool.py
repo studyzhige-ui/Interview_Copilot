@@ -16,11 +16,9 @@ from app.models.conversation_turn import ConversationTurn
 from app.models.gmail_integration import GmailIntegrationAccount
 from app.models.user import User
 from app.schemas.gmail_integration import GmailMessageSummary, GmailSearchMessagesArgs
-from app.services.gmail_integration_service import (
-    GMAIL_READONLY_SCOPE,
-    GmailGrantInspection,
-    bind_verified_grant,
-)
+from app.integrations.gmail.contract import GMAIL_READONLY_SCOPE
+from app.integrations.gmail.contract import GmailGrantInspection
+from app.integrations.gmail.contract import bind_verified_grant
 
 from tests.conftest import patch_session_locals
 
@@ -180,7 +178,7 @@ def test_connected_gmail_tool_returns_typed_read_without_handle(
 
 def test_gmail_tool_is_not_self_registered_without_real_adapter():
     import app.agent_runtime.tools.gmail as gmail_tool_module
-    from app.agent_runtime.tool_registry import registry
+    from app.agent_runtime.builtin_tools import registry
 
     assert gmail_tool_module.build_gmail_search_messages_tool
     assert "gmail_search_messages" not in registry.tool_names

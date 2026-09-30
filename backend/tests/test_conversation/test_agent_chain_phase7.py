@@ -4,7 +4,8 @@ turn weights (AGT-7), ctx-aware tool probes (AGT-9), mode persistence
 
 from __future__ import annotations
 
-from app.services.chat.context_assembly_pipeline import TokenBudget, _turn_tokens
+from app.conversation.application.context_assembly_pipeline import TokenBudget
+from app.conversation.application.context_assembly_pipeline import _turn_tokens
 
 # ── AGT-6: TokenBudget takes the model's real window ─────────────────────
 

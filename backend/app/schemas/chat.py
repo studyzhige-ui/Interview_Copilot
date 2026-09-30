@@ -3,7 +3,9 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, PositiveInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, field_validator
+
+from app.schemas.mock_preparation import MockPreparationRequest
 
 # ── Generic chat session DTOs ────────────────────────────────────────────
 
@@ -182,25 +184,8 @@ class SessionExecutionModeResponse(BaseModel):
 # history. Mirrored 1:1 by the TS interfaces in frontend/src/types/api.ts.
 
 
-class MockStartRequest(BaseModel):
-    resume_id: str = Field(min_length=1)
-    jd_text: str = Field(min_length=20, max_length=50_000)
-    interviewer_style: Literal["friendly", "professional", "rigorous", "pressure"] = (
-        "professional"
-    )
-    # Advisory whole-interview length. This activates a prompt reminder but
-    # never caps a stage or forcibly ends the interview.
-    target_question_count: Literal[15, 20, 30] = 20
-    job_opportunity_id: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=35,
-    )
-
-    @field_validator("resume_id", "jd_text", mode="before")
-    @classmethod
-    def strip_required_context(cls, value: object) -> object:
-        return value.strip() if isinstance(value, str) else value
+class MockStartRequest(MockPreparationRequest):
+    """The HTTP adapter uses the same preparation contract as Agent tools."""
 
 
 class MockLiveMessage(BaseModel):
@@ -217,13 +202,29 @@ class MockStartResp(BaseModel):
 
 
 class MockAnswerRequest(BaseModel):
-    answer_text: str
+    model_config = ConfigDict(extra="forbid", strict=True)
+    request_id: str = Field(min_length=36, max_length=36)
+    answer_text: str = Field(min_length=1, max_length=50_000)
     # Optional voice answer clip (file_assets.id, purpose="mock_audio_clip").
     answer_audio_file_asset_id: str | None = None
     # Optimistic concurrency token (MOCK-3): the id of the interviewer
     # message this answer responds to. Mismatch → 409 (a concurrent submit
     # already advanced the interview).
-    question_message_id: int
+    question_message_id: int = Field(gt=0)
+
+    @field_validator("request_id")
+    @classmethod
+    def canonical_request_id(cls, value):
+        if str(UUID(value)) != value:
+            raise ValueError("request_id must be a canonical UUID")
+        return value
+
+    @field_validator("answer_text")
+    @classmethod
+    def nonblank_answer(cls, value):
+        if not value.strip():
+            raise ValueError("answer must not be blank")
+        return value
 
 
 class MockAnswerResp(BaseModel):
@@ -232,6 +233,14 @@ class MockAnswerResp(BaseModel):
     message: MockLiveMessage
     # Advisory only; the candidate still decides when to finish.
     end_suggested: bool
+
+
+class MockAnswerReceipt(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+    request_id: str
+    question_message_id: int
+    status: Literal["in_progress", "completed", "unknown"]
+    response: MockAnswerResp | None = None
 
 
 class MockFinishResp(BaseModel):
@@ -288,8 +297,10 @@ class MockAnswerAudioResp(BaseModel):
 
 
 class TTSRequest(BaseModel):
-    text: str
-    voice: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=600)
+    voice: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 __all__ = [

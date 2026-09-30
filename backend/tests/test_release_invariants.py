@@ -7,7 +7,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_event_transport_failure_does_not_fail_execution(monkeypatch):
-    from app.services.chat import turn_executor
+    from app.conversation.application import turn_executor
     from redis.exceptions import ConnectionError
 
     async def unavailable(*args):
@@ -44,7 +44,7 @@ def test_running_cancel_survives_transport_loss(db_session, monkeypatch):
     from app.models.user import User
     from app.models.chat import Conversation
     from app.models.conversation_turn import ConversationTurn
-    from app.services.chat import turn_executor
+    from app.conversation.application import turn_executor
 
     user = User(username="cancel-owner", hashed_password="x")
     db_session.add(user)
@@ -77,9 +77,9 @@ def test_running_cancel_survives_transport_loss(db_session, monkeypatch):
 async def test_turn_commits_before_done_and_survives_event_loss(
     monkeypatch, transport_down
 ):
-    import app.conversation as conversation
+    import app.conversation.engine as conversation
     from app.conversation.events import HarnessEvent
-    from app.services.chat import turn_executor as executor
+    from app.conversation.application import turn_executor as executor
     from redis.exceptions import ConnectionError
 
     order = []
@@ -90,11 +90,14 @@ async def test_turn_commits_before_done_and_survives_event_loss(
         conversation_id="session",
         message="hello",
         username="user",
+        user_pk=1,
     )
     monkeypatch.setattr(executor, "_claim", lambda _: turn)
     monkeypatch.setattr(executor, "_cancellation_requested", lambda _: False)
     monkeypatch.setattr(executor, "_has_assistant", lambda _: True)
-    monkeypatch.setattr(executor, "_finish", lambda *args: order.append("committed"))
+    monkeypatch.setattr(
+        executor, "_finish", lambda *args, **kwargs: order.append("committed")
+    )
 
     class Engine:
         outcome = "completed"
@@ -128,8 +131,8 @@ async def test_turn_commits_before_done_and_survives_event_loss(
 
 @pytest.mark.asyncio
 async def test_lost_cancellation_control_stops_the_paid_execution(monkeypatch):
-    import app.conversation as conversation
-    from app.services.chat import turn_executor as executor
+    import app.conversation.engine as conversation
+    from app.conversation.application import turn_executor as executor
 
     started = asyncio.Event()
     stopped = []
@@ -140,6 +143,7 @@ async def test_lost_cancellation_control_stops_the_paid_execution(monkeypatch):
         conversation_id="session",
         message="hello",
         username="user",
+        user_pk=1,
     )
     monkeypatch.setattr(executor, "_claim", lambda _: turn)
 
@@ -153,7 +157,9 @@ async def test_lost_cancellation_control_stops_the_paid_execution(monkeypatch):
 
     monkeypatch.setattr(executor, "_cancellation_requested", unavailable)
     monkeypatch.setattr(executor.asyncio, "to_thread", read_control)
-    monkeypatch.setattr(executor, "_finish", lambda *args: settled.append(args))
+    monkeypatch.setattr(
+        executor, "_finish", lambda *args, **kwargs: settled.append(args)
+    )
 
     class Engine:
         outcome = "completed"
@@ -215,7 +221,7 @@ async def test_agent_usage_limit_stops_before_another_paid_call(monkeypatch):
 @pytest.mark.asyncio
 async def test_sse_redis_failure_recovers_durable_terminal(monkeypatch):
     from app.api.chat import streaming
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     monkeypatch.setattr(streaming, "resolve_user_pk", lambda *args: 1)
     db = SimpleNamespace(
@@ -224,8 +230,8 @@ async def test_sse_redis_failure_recovers_durable_terminal(monkeypatch):
     calls = []
     monkeypatch.setattr(
         streaming,
-        "_turn_terminal_state",
-        lambda *args: calls.append("db") or ("completed", None),
+        "_turn_stream_state",
+        lambda *args: calls.append("db") or ("completed", None, 1),
     )
 
     async def broken_read(*args):
@@ -282,7 +288,7 @@ async def test_queue_wait_does_not_expire_running_lease(monkeypatch):
     from app.models.user import User
     from app.models.chat import Conversation
     from app.models.conversation_turn import ConversationTurn
-    from app.services.chat import turn_executor as executor
+    from app.conversation.application import turn_executor as executor
 
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
@@ -341,7 +347,7 @@ def test_expired_outbox_owner_cannot_overwrite_new_owner_success(monkeypatch):
     from app.db.database import Base
     from app.db.types import utc_now
     from app.models.outbox_job import OutboxJob
-    from app.services import outbox
+    from app.platform import outbox
 
     engine = create_engine("sqlite://", poolclass=StaticPool)
     Base.metadata.create_all(engine)

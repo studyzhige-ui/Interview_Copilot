@@ -42,7 +42,7 @@ def refresh_model_catalog_task(self):
     cache is NOT touched and we keep serving whatever was last good.
     """
     from app.core.model_catalog import repopulate_profile_cache
-    from app.services.model_sources.pipeline import refresh_catalog
+    from app.providers.catalog.pipeline import refresh_catalog
 
     async def _run():
         return await refresh_catalog()

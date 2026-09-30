@@ -24,8 +24,8 @@ from app.schemas.offer import (
     OfferRecordRequest,
     OfferView,
 )
-from app.services import offer_service
-from app.services.uploads.file_asset_service import READABLE_UPLOAD_STATUSES
+from app.career.application import offers as offer_service
+from app.files.application.file_asset_service import READABLE_UPLOAD_STATUSES
 
 router = APIRouter(prefix="/career-process/opportunities", tags=["offers"])
 

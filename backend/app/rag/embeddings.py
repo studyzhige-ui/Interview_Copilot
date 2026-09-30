@@ -30,9 +30,8 @@ def init_rag_settings() -> None:
         logger.error("Failed to initialize embedding (fatal): %s", e)
         raise
 
-    # Startup dim guard (plan §4.5.1): fail loud at boot if an existing Milvus
-    # collection's dense dim no longer matches EMBEDDING_DIM (model/dim changed
-    # without a rebuild). Best-effort on connectivity; raises on a real mismatch.
-    from app.rag import milvus_hybrid
+    # Read-only PostgreSQL generation/extension guard. Connectivity is not
+    # silently ignored: configured retrieval must really be available.
+    from app.rag import hybrid_index
 
-    milvus_hybrid.validate_existing_dims(milvus_hybrid.KNOWLEDGE)
+    hybrid_index.validate_index_storage()

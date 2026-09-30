@@ -6,7 +6,7 @@ from app.models.conversation_turn import ConversationTurn
 from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
-from app.services.legacy_attachment_migration import migrate_legacy_attachments
+from app.maintenance.attachment_migration import migrate_legacy_attachments
 
 
 def _asset(db, user: User, asset_id: str) -> FileAsset:

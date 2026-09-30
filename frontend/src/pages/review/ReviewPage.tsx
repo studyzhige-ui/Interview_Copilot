@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { SessionList } from './SessionList';
-import { QAPanel } from './QAPanel';
+import { QAPanel, type ReviewTab } from './QAPanel';
 import { ChatPanel } from './chat/ChatPanel';
 import { UploadCards, applyDraftMetadata } from './UploadCards';
 import { AnalysisRunner, type AnalysisProgress } from './AnalysisRunner';
@@ -73,8 +73,13 @@ export function ReviewPage() {
   const [search, setSearch] = useSearchParams();
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [selectedActiveId, setActiveId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<InterviewRecordDetail | null>(null);
+  const [loadedDetail, setDetail] = useState<InterviewRecordDetail | null>(null);
+  const [detailError, setDetailError] = useState<{ id: string; message: string } | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailRevision, setDetailRevision] = useState(0);
+  // A correction changes the server status and remounts the detail panel. Keep
+  // the selected tab at page scope so a successful edit stays in its workbench.
+  const [reviewTab, setReviewTab] = useState<{ recordId: string | null; tab: ReviewTab }>({ recordId: null, tab: 'report' });
   const [widths, setWidths] = useState(loadWidths);
   const [analyses, setAnalyses] = useState<Record<string, AnalysisEntry>>({});
   const [mobilePane, setMobilePane] = useState<'records' | 'review' | 'chat'>('review');
@@ -114,11 +119,19 @@ export function ReviewPage() {
 
   const defaultActiveId = useMemo(() => {
     if (!isFetchedAfterMount) return null;
-    const wanted = search.get('id');
-    if (wanted && records.some((record) => record.id === wanted)) return wanted;
     return records[0]?.id ?? drafts[0]?.id ?? null;
-  }, [drafts, isFetchedAfterMount, records, search]);
-  const activeId = selectedActiveId ?? defaultActiveId;
+  }, [drafts, isFetchedAfterMount, records]);
+  // A paginated sidebar is not an existence or ownership check. Explicit
+  // saved-record URLs are resolved by the owned detail endpoint, never replaced.
+  const activeId = search.get('id') || (selectedActiveId && isDraft(selectedActiveId)
+    ? selectedActiveId : defaultActiveId);
+  const activeIdRef = useRef(activeId);
+  useLayoutEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+  const detail = loadedDetail?.id === activeId ? loadedDetail : null;
+  const reviewTabProps = {
+    activeTab: reviewTab.recordId === activeId ? reviewTab.tab : 'report' as ReviewTab,
+    onTabChange: (tab: ReviewTab) => setReviewTab({ recordId: activeId, tab }),
+  };
   const selectedQuestionIndexes = questionSelection.recordId === activeId
     ? questionSelection.indexes
     : [];
@@ -163,20 +176,22 @@ export function ReviewPage() {
     // the abandoned response without the abort.
     const controller = new AbortController();
     let alive = true;
+    setDetail(null);
+    setDetailError(null);
     setDetailLoading(true);
     getInterviewRecord(activeId, { signal: controller.signal })
       .then((d) => alive && setDetail(d))
       .catch((e) => {
         // Aborted on switch → benign, no toast.
         if ((e as { code?: string })?.code === 'ERR_CANCELED') return;
-        if (alive) toast.error('记录详情加载失败');
+        if (alive) setDetailError({ id: activeId, message: '无法读取这条面试记录。它可能已删除、不可访问，或连接暂时中断。' });
       })
       .finally(() => alive && setDetailLoading(false));
     return () => {
       alive = false;
       controller.abort();
     };
-  }, [activeId]);
+  }, [activeId, detailRevision]);
 
 
   const onNew = () => {
@@ -214,7 +229,7 @@ export function ReviewPage() {
 
   const isMounted = useIsMounted();
   const onRecordChangedAcRef = useRef<AbortController | null>(null);
-  const onRecordChanged = async () => {
+  const onRecordChanged = async (change?: { deletedId: string }) => {
     // Cancel any in-flight previous invocation so a fast
     // rename → rename → delete sequence doesn't land the
     // SECOND rename's detail while the user has just deleted
@@ -227,28 +242,18 @@ export function ReviewPage() {
       const rows = await listInterviewRecords(0, 50, { signal: ac.signal });
       if (ac.signal.aborted || !isMounted.current) return;
       setRecords(rows);
-      if (activeId && !isDraft(activeId)) {
-        const stillExists = rows.some((r) => r.id === activeId);
-        if (!stillExists) {
-          // Active record was deleted — fall back to first row.
-          const next = rows[0]?.id ?? null;
-          setActiveId(next);
-          setDetail(null);
-          if (next) setSearch({ id: next }, { replace: true });
-          else setSearch({}, { replace: true });
-        } else {
-          // Active record was renamed / re-tagged — re-fetch its detail so
-          // QAPanel's header reflects the new title without the user having
-          // to switch tabs and back.
-          try {
-            const fresh = await getInterviewRecord(activeId, { signal: ac.signal });
-            if (ac.signal.aborted || !isMounted.current) return;
-            setDetail(fresh);
-          } catch {
-            // Non-fatal — the list still shows the new title; the detail
-            // header will catch up on the next id-change useEffect.
-          }
-        }
+      const currentId = activeIdRef.current;
+      if (change?.deletedId === currentId) {
+        // Only a confirmed delete authorizes leaving the selected object.
+        const next = rows[0]?.id ?? null;
+        setActiveId(null);
+        setDetail(null);
+        if (next) setSearch({ id: next }, { replace: true });
+        else setSearch({}, { replace: true });
+      } else if (currentId && !isDraft(currentId)) {
+        // The detail may be older than the first 50 list rows. Refresh through
+        // the single selection-aware loader rather than inferring deletion.
+        setDetailRevision((revision) => revision + 1);
       }
     } catch (e) {
       if ((e as { code?: string })?.code === 'ERR_CANCELED') return;
@@ -356,14 +361,14 @@ export function ReviewPage() {
         try {
           const fresh = await getInterviewRecord(target);
           if (!isMounted.current) return;
-          setDetail(fresh);
+          if (activeIdRef.current === target || activeIdRef.current === forActiveId) setDetail(fresh);
         } catch {
           // ignore — useEffect will retry on next activeId change
         }
         if (!isMounted.current) return;
-        setActiveId((cur) => (cur === forActiveId ? target : cur));
+        setActiveId((cur) => (cur === forActiveId ? null : cur));
         setDrafts((arr) => arr.filter((d) => d.id !== forActiveId));
-        if (activeId === forActiveId) setSearch({ id: target }, { replace: true });
+        if (activeIdRef.current === forActiveId) setSearch({ id: target }, { replace: true });
       }
     } catch {
       if (isMounted.current) toast.error('刷新记录失败');
@@ -390,7 +395,7 @@ export function ReviewPage() {
     void onRecordChanged();
   };
 
-  const activeRecord = combined.find((r) => r.id === activeId) ?? null;
+  const activeRecord = combined.find((r) => r.id === activeId) ?? detail;
 
   // ── Auto-spawn an AnalysisRunner for the active record ──────────────
   // When the user lands on a record whose status is in-flight
@@ -451,6 +456,13 @@ export function ReviewPage() {
 
   const middle = (() => {
     if (!activeId) return <QAPanel detail={null} loading={false} />;
+    if (detailError?.id === activeId) return <div className="p-6" role="alert">
+      <h2 className="text-lg font-semibold">面试记录暂不可用</h2>
+      <p className="mt-2 text-sm text-stone-600">{detailError.message}</p>
+      <button type="button" className="mt-4 rounded-lg border border-stone-300 px-4 py-2 text-sm"
+        onClick={() => setDetailRevision((revision) => revision + 1)}>重新加载这条记录</button>
+    </div>;
+    if (!isDraft(activeId) && (!detail || detailLoading)) return <QAPanel detail={null} loading />;
     const a = analyses[activeId] ?? null;
     if (isDraft(activeId)) {
       const draft = drafts.find((d) => d.id === activeId);
@@ -472,7 +484,7 @@ export function ReviewPage() {
     // A failed mock review must NOT fall into the AnalyzingState spinner
     // below (it would spin forever) — show an explicit retry card wired
     // to the retry-review endpoint.
-    if (detail && status === 'review_failed') {
+    if (detail && status === 'review_failed' && !hasContent) {
       return (
         <ReviewFailedState
           kind="mock"
@@ -488,7 +500,7 @@ export function ReviewPage() {
     // With partial results (transcript/QA rows persisted before the failure)
     // keep them readable and show a slim retry banner instead of hiding
     // everything behind the full-page card.
-    if (detail && status === 'failed' && !isMockSource) {
+    if (detail && ((status === 'failed' && !isMockSource) || status === 'review_failed')) {
       if (hasContent) {
         return (
           <div className="h-full flex flex-col">
@@ -498,7 +510,7 @@ export function ReviewPage() {
               </span>
               <button
                 type="button"
-                onClick={() => { void retryUploadAnalysis(detail.id); }}
+                onClick={() => { if (isMockSource) void retryReview(detail.id); else void retryUploadAnalysis(detail.id); }}
                 disabled={retryingReview === detail.id}
                 className="text-xs text-white px-3 py-1.5 rounded bg-primary-600 hover:bg-primary-700 disabled:opacity-60 shrink-0"
               >
@@ -507,15 +519,14 @@ export function ReviewPage() {
             </div>
             <div className="flex-1 min-h-0">
               <QAPanel
-                key={detail?.id ?? 'empty'}
+                key={`${detail?.id ?? 'empty'}:${detailRevision}`}
+                {...reviewTabProps}
                 detail={detail}
+                onCorrected={() => setDetailRevision((value) => value + 1)}
                 loading={detailLoading}
                 reanalyzing={retryingReview === detail.id}
-                onReanalyze={(mode) => {
-                  void retryUploadAnalysis(
-                    detail.id,
-                    mode === 'report' ? undefined : mode,
-                  );
+                onReanalyze={isMockSource ? undefined : (mode) => {
+                  void retryUploadAnalysis(detail.id, mode === 'report' ? undefined : mode);
                 }}
                 selectedQuestionIndexes={selectedQuestionIndexes}
                 onToggleQuestion={toggleQuestion}
@@ -558,8 +569,10 @@ export function ReviewPage() {
     }
     return (
       <QAPanel
-        key={detail?.id ?? 'empty'}
+        key={`${detail?.id ?? 'empty'}:${detailRevision}`}
+        {...reviewTabProps}
         detail={detail}
+        onCorrected={() => setDetailRevision((value) => value + 1)}
         loading={detailLoading}
         reanalyzing={retryingReview === detail?.id}
         onReanalyze={detail?.source === 'upload' ? (mode) => {
@@ -613,7 +626,7 @@ export function ReviewPage() {
         records={combined}
         activeId={activeId}
         onSelect={(id) => {
-          setActiveId(id);
+          setActiveId(isDraft(id) ? id : null);
           setMobilePane('review');
           if (isDraft(id)) setSearch({}, { replace: true });
           else setSearch({ id }, { replace: true });
@@ -648,7 +661,7 @@ export function ReviewPage() {
         />
       </div>
       <ChatPanel
-        interviewId={!isDraft(activeId ?? '') ? activeId : null}
+        interviewId={detail && !isDraft(activeId ?? '') ? activeId : null}
         sessionTitle={activeRecord?.title ?? null}
         sessionType="debrief"
         width={widths.right}

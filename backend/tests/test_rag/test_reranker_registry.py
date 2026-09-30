@@ -13,6 +13,8 @@ from app.rag.reranker_registry import RemoteAPIRerank, RerankerUnavailableError
 from llama_index.core import QueryBundle
 from llama_index.core.schema import NodeWithScore, TextNode
 
+pytestmark = pytest.mark.usefixtures("usage_scope")
+
 
 def _nodes(*texts: str) -> list[NodeWithScore]:
     return [

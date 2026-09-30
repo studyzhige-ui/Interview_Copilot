@@ -22,7 +22,7 @@ from app.models.knowledge import KnowledgeDocument  # noqa: E402
 from app.models.user import User  # noqa: E402
 from app.rag.embeddings import init_rag_settings  # noqa: E402
 from app.rag.ingest.pipeline import ingest_document, ingest_text  # noqa: E402
-from app.rag.milvus_hybrid import KNOWLEDGE, delete_by_field  # noqa: E402
+from app.rag.hybrid_index import delete_by_field  # noqa: E402
 
 from evaluation.runners import load_dataset  # noqa: E402
 from evaluation.isolation_probe import (  # noqa: E402
@@ -68,7 +68,7 @@ def _ensure_user(username: str) -> int:
 
 
 def _reset_user_corpus(user_pk: int) -> None:
-    delete_by_field(KNOWLEDGE, "user_id", user_pk)
+    delete_by_field("user_id", user_pk, user_pk=user_pk)
     with SessionLocal() as db:
         db.query(DocumentChunk).filter(DocumentChunk.user_id == user_pk).delete(
             synchronize_session=False
@@ -97,7 +97,7 @@ async def _index_file(path: Path, user_pk: int) -> tuple[str, int]:
         ):
             return path.name, int(document.chunk_count)
         if document is not None:
-            delete_by_field(KNOWLEDGE, "document_id", document_id)
+            delete_by_field("document_id", document_id, user_pk=user_pk)
             db.query(DocumentChunk).filter(
                 DocumentChunk.document_id == document_id
             ).delete(synchronize_session=False)

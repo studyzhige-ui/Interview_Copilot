@@ -176,6 +176,32 @@ describe('ClientActionBridge', () => {
     ));
   });
 
+  it('asks before falling back from unavailable microphone to text', async () => {
+    const readiness = action('mock_interview.check_readiness', 'voice', 2);
+    const live = action('mock_interview.enter_live', 'live', 3);
+    mocks.getPending.mockResolvedValueOnce(readiness).mockResolvedValueOnce(live);
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
+    render(<ClientActionBridge />); emit();
+    await screen.findByRole('button', { name: '改用文字面试' });
+    expect(mocks.resolve).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '改用文字面试' }));
+    await waitFor(() => expect(mocks.resolve).toHaveBeenCalledWith(expect.anything(), readiness, 'client-initiating', {
+      outcome: 'acknowledged', readiness: 'ready', fallback_mode: 'text',
+    }));
+    await waitFor(() => expect(mocks.resolve).toHaveBeenCalledTimes(2));
+  });
+  it('subscribes before navigation and handles the generic preparation action', async () => {
+    const preparation: MockClientAction = { ...action('mock_interview.enter_live', 'prepare', 1),
+      action: 'interview.preparation.open', payload: { kind: 'interview_preparation_open', interview_id: 'interview-1',
+        opportunity_id: 'job-1', expected_interview_version: 1, expected_opportunity_version: 1,
+        source_operation_id: 'operation-1', preferred_surface: 'interviews' } };
+    mocks.getPending.mockResolvedValueOnce(preparation);
+    render(<ClientActionBridge />); emit();
+    await waitFor(() => expect(mocks.resolve).toHaveBeenCalledTimes(1));
+    expect(mocks.navigate).toHaveBeenCalledWith('/interviews?interview=interview-1', { state: { mockClientAction: preparation } });
+    expect(mocks.waitForUi.mock.invocationCallOrder[0]).toBeLessThan(mocks.navigate.mock.invocationCallOrder[0]);
+  });
+
   it('replays a retained handoff after the bridge reconnects', async () => {
     const enterLive = action('mock_interview.enter_live', 'action-live', 2);
     const retained = { ...notice, interactionId: enterLive.interaction_id, actionId: enterLive.action_id, version: 2, action: enterLive.action };

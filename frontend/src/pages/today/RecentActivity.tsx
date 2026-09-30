@@ -11,8 +11,8 @@ export function RecentActivity() {
         : activity.data.length === 0 ? <p className="text-sm text-stone-500">暂无进展记录。</p>
           : <ul className="space-y-3">{activity.data.map(event => <li key={event.event_id}>
             <small className="text-stone-500">{event.event_category === 'domain' ? '已确认的进展' : event.event_category === 'harness' ? '执行与确认' : '交互记录'} · {new Date(event.occurred_at).toLocaleString()}</small>
-            <p>{event.payload.title || '进展记录'}</p><p className="text-sm text-stone-600">{event.payload.detail}</p>
-            {event.conversation_id && <Link className="text-sm underline" to={`/chat?session=${encodeURIComponent(event.conversation_id)}`}>查看相关对话</Link>}
+            <p>{typeof event.payload.title === 'string' ? event.payload.title : '进展记录'}</p><p className="text-sm text-stone-600">{typeof event.payload.detail === 'string' ? event.payload.detail : ''}</p>
+            {event.conversation_id && <Link className="text-sm underline" to={`/general-chat?session=${encodeURIComponent(event.conversation_id)}`}>查看相关对话</Link>}
           </li>)}</ul>}
   </section>;
 }

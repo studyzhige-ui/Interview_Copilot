@@ -7,8 +7,8 @@ can accumulate, per the RFC acceptance criterion "巡检脚本能输出可修复
                                  row references, plus stale ``pending_upload``.
   2. Orphan document chunks    — ``document_chunks`` whose ``document_id`` points
                                  at a deleted ``knowledge_documents`` row, plus a
-                                 best-effort node_id-level Postgres<->Milvus check
-                                 (missing_in_milvus / stale_in_milvus /
+                                 best-effort node_id-level Postgres facts/projection check
+                                 (missing_in_index / stale_in_index /
                                  metadata_mismatch / dimension_mismatch).
   3. Subject-less conversations — ``conversations`` with a non-chat ``mode`` but
                                  no ``subject_type`` / ``subject_id`` binding.
@@ -114,7 +114,7 @@ def scan_orphan_chunks(db: Session) -> list[Finding]:
     findings: list[Finding] = []
 
     # Knowledge chunks whose parent knowledge_documents row is gone. These are
-    # also orphan vectors in Milvus (the chunk is the fact source for the index).
+    # also orphan retrieval entries (the chunk is the fact source for the index).
     rows = _rows(
         db,
         """
@@ -135,190 +135,116 @@ def scan_orphan_chunks(db: Session) -> list[Finding]:
         )
     )
 
-    # node_id-level Postgres <-> Milvus consistency (plan §4.6.3) — replaces the
+    # node_id-level Postgres facts/projection consistency (plan §4.6.3) — replaces the
     # old count-only drift so the two scan semantics don't coexist (INGEST-CLEANUP).
-    findings.extend(_milvus_node_consistency(db))
+    findings.extend(_retrieval_node_consistency(db))
     return findings
 
 
-def _diff_pg_milvus(
-    pg_indexed: dict[str, dict],
-    milvus_rows: dict[str, dict],
-    live_doc_ids: set,
-) -> tuple[list[str], list[str], list[str]]:
-    """Pure set/field diff (no I/O, so it's fully unit-testable).
+def _retrieval_node_consistency(db: Session) -> list[Finding]:
+    """Read-only bounded-result checks over canonical facts and projection.
 
-    ``pg_indexed`` = the live *indexed* chunks that SHOULD be in Milvus, and
-    ``milvus_rows`` = what IS in Milvus, both keyed by node_id with
-    ``{document_id, user_id, source_kind}`` values. Returns
-    ``(missing_in_milvus, stale_in_milvus, metadata_mismatch)`` node-id lists:
-      * missing  — a live indexed chunk has no Milvus row.
-      * stale    — a Milvus row whose document_id is no longer a live document.
-      * mismatch — a node_id in both whose scope scalars disagree.
-    A ``pending`` chunk (in the two-phase window / queued upsert) is not counted
-    missing: only ``indexed`` chunks are expected in Milvus; and its Milvus row,
-    if any, points at a live document so it isn't stale either.
+    Counts happen in SQL; only sample IDs cross the process boundary. Other
+    generations are retained deliberately, not labelled orphan merely because
+    a model configuration changed. Unavailable storage raises a diagnostic
+    failure rather than pretending the unexecuted check found zero issues.
     """
-    pg_ids, mv_ids = set(pg_indexed), set(milvus_rows)
-    missing = sorted(pg_ids - mv_ids)
-    # A NULL document_id is intentionally stale (an ownerless vector): live
-    # KNOWLEDGE rows always carry a document_id, so this only flags genuine junk.
-    stale = sorted(
-        mid
-        for mid, r in milvus_rows.items()
-        if r.get("document_id") not in live_doc_ids
-    )
-    mismatch = sorted(
-        nid
-        for nid in (pg_ids & mv_ids)
-        if any(
-            str(pg_indexed[nid].get(k)) != str(milvus_rows[nid].get(k))
-            for k in ("document_id", "user_id", "source_kind")
-        )
-    )
-    return missing, stale, mismatch
-
-
-def _scan_milvus_rows(client) -> dict[str, dict]:
-    """All knowledge Milvus rows keyed by id. Values are the raw pymilvus row
-    objects (accessed via ``.get(...)``, so _diff_pg_milvus treats them and the
-    plain-dict test fixtures the same). Paginates so a large collection is fully
-    covered (not a sampled subset)."""
-    from app.rag import milvus_hybrid
-
-    out: dict[str, dict] = {}
-    iterator = client.query_iterator(
-        collection_name=milvus_hybrid.KNOWLEDGE.name,
-        batch_size=1000,
-        filter="user_id >= 0",  # matches every row (user_id is the int pk scope)
-        output_fields=["id", "document_id", "user_id", "source_kind"],
-    )
-    try:
-        while True:
-            batch = iterator.next()
-            if not batch:
-                break
-            for r in batch:
-                out[str(r.get("id"))] = r
-    finally:
-        iterator.close()
-    return out
-
-
-def _collection_dim_finding(client) -> Finding:
-    """dimension_mismatch: an existing collection's dense dim vs EMBEDDING_DIM."""
-    from app.core.config import settings
-
-    from app.rag import milvus_hybrid
-
-    desc = client.describe_collection(milvus_hybrid.KNOWLEDGE.name)
-    dim = None
-    for f in desc.get("fields", []) if isinstance(desc, dict) else []:
-        if f.get("name") == "dense":
-            dim = (f.get("params") or {}).get("dim")
-            break
-    if dim is not None and int(dim) != settings.EMBEDDING_DIM:
-        return Finding(
-            "dimension_mismatch",
-            1,
-            note=f"milvus dim={int(dim)} != EMBEDDING_DIM={settings.EMBEDDING_DIM} — rebuild required",
-        )
-    return Finding(
-        "dimension_mismatch",
-        0,
-        note=f"dim matches EMBEDDING_DIM={settings.EMBEDDING_DIM}",
-    )
-
-
-def _milvus_node_consistency(db: Session) -> list[Finding]:
-    """node_id-level Postgres<->Milvus checks: missing_in_milvus / stale_in_milvus
-    / metadata_mismatch / dimension_mismatch (plan §4.6.3). Baseline is the live
-    *indexed* chunks under live documents — what Milvus should mirror."""
+    from sqlalchemy import select, func, or_, and_
+    from app.models.document_chunk import DocumentChunk as C
+    from app.models.knowledge import KnowledgeDocument as D
+    from app.models.file_asset import FileAsset as A
+    from app.models.retrieval_index import RetrievalEntry as E
     from app.rag.index.identity import current_index_identity
+    from app.rag.hybrid_index import _limits
 
-    pg_rows = _rows(
-        db,
-        """
-        SELECT dc.node_id, dc.document_id, dc.user_id, dc.source_kind
-        FROM document_chunks dc
-        JOIN knowledge_documents kd ON dc.document_id = kd.id
-        WHERE dc.index_status = 'indexed' AND dc.deleted_at IS NULL
-          AND kd.deleted_at IS NULL AND dc.node_id IS NOT NULL
-    """,
-    )
-    pg_indexed = {
-        str(r[0]): {"document_id": r[1], "user_id": r[2], "source_kind": r[3]}
-        for r in pg_rows
-    }
-    live_doc_ids = {
-        r[0]
-        for r in _rows(
-            db, "SELECT id FROM knowledge_documents WHERE deleted_at IS NULL"
+    if db.bind.dialect.name == "postgresql":
+        _limits(db)
+    fp = current_index_identity().fingerprint
+
+    def finding(name, statement, note):
+        sub = statement.subquery()
+        count = db.scalar(select(func.count()).select_from(sub)) or 0
+        sample = list(db.scalars(select(sub.c[0]).order_by(sub.c[0]).limit(_SAMPLE)))
+        return Finding(name, count, sample, note)
+
+    missing = (
+        select(C.node_id)
+        .join(D, D.id == C.document_id)
+        .where(
+            C.index_status == "indexed",
+            C.deleted_at.is_(None),
+            D.deleted_at.is_(None),
+            D.status == "ready",
+            D.index_fingerprint == fp,
+            D.source_kind != "chat_attachment",
+            D.conversation_id.is_(None),
+            ~select(E.chunk_id).where(E.chunk_id == C.id, E.generation == fp).exists(),
         )
-    }
-    active_fingerprint = current_index_identity().fingerprint
-    stale_generation_ids = [
-        str(row[0])
-        for row in _rows(
-            db,
-            """
-            SELECT id FROM knowledge_documents
-            WHERE deleted_at IS NULL AND status = 'ready'
-              AND (index_fingerprint IS NULL OR index_fingerprint != :fingerprint)
-            """,
-            fingerprint=active_fingerprint,
-        )
-    ]
-
-    names = (
-        "missing_in_milvus",
-        "stale_in_milvus",
-        "metadata_mismatch",
-        "dimension_mismatch",
-        "index_generation",
     )
-    try:
-        from app.rag import milvus_hybrid
-
-        client = milvus_hybrid._get_client()
-        if not client.has_collection(milvus_hybrid.KNOWLEDGE.name):
-            return [
-                Finding(n, 0, note="knowledge collection not created yet")
-                for n in names
-            ]
-        dim_finding = _collection_dim_finding(client)
-        milvus_rows = _scan_milvus_rows(client)
-    except Exception as exc:  # noqa: BLE001 — Milvus optional for the scan
-        return [
-            Finding(n, 0, note=f"skipped (Milvus unreachable: {exc})") for n in names
-        ]
-
-    missing, stale, mismatch = _diff_pg_milvus(pg_indexed, milvus_rows, live_doc_ids)
+    stale = (
+        select(E.node_id)
+        .outerjoin(C, C.id == E.chunk_id)
+        .outerjoin(D, D.id == E.document_id)
+        .where(
+            E.generation == fp,
+            or_(
+                C.id.is_(None),
+                D.id.is_(None),
+                C.deleted_at.is_not(None),
+                D.deleted_at.is_not(None),
+                C.index_status != "indexed",
+                D.status.in_(["deleted", "deleting", "stale"]),
+                D.source_kind == "chat_attachment",
+                D.conversation_id.is_not(None),
+            ),
+        )
+    )
+    mismatch = (
+        select(E.node_id)
+        .join(C, C.id == E.chunk_id)
+        .join(D, D.id == E.document_id)
+        .outerjoin(A, A.id == D.file_asset_id)
+        .where(
+            E.generation == fp,
+            or_(
+                E.user_id != C.user_id,
+                E.user_id != D.user_id,
+                E.node_id != C.node_id,
+                E.document_id != C.document_id,
+                E.source_kind != C.source_kind,
+                E.source_kind != D.source_kind,
+                E.source_hash != C.text_hash,
+                C.text_hash.is_(None),
+                and_(
+                    D.file_asset_id.is_not(None),
+                    or_(A.id.is_(None), A.user_id != D.user_id),
+                ),
+            ),
+        )
+    )
+    generation = select(D.id).where(
+        D.status == "ready",
+        D.deleted_at.is_(None),
+        D.source_kind != "chat_attachment",
+        D.conversation_id.is_(None),
+        or_(D.index_fingerprint.is_(None), D.index_fingerprint != fp),
+    )
     return [
-        Finding(
-            "missing_in_milvus",
-            len(missing),
-            missing[:_SAMPLE],
-            note="live indexed chunk has no Milvus row",
+        finding(
+            "missing_in_index",
+            missing,
+            "published canonical chunk missing current projection",
         ),
-        Finding(
-            "stale_in_milvus",
-            len(stale),
-            stale[:_SAMPLE],
-            note="Milvus row -> non-live document (orphan vector)",
-        ),
-        Finding(
+        finding("stale_in_index", stale, "projection no longer eligible for retrieval"),
+        finding(
             "metadata_mismatch",
-            len(mismatch),
-            mismatch[:_SAMPLE],
-            note="Milvus scope scalar != Postgres chunk",
+            mismatch,
+            "projection/canonical ownership, source or hash mismatch",
         ),
-        dim_finding,
-        Finding(
+        finding(
             "index_generation",
-            len(stale_generation_ids),
-            stale_generation_ids[:_SAMPLE],
-            note=f"active fingerprint={active_fingerprint}",
+            generation,
+            f"active fingerprint={fp}; rebuild from canonical facts",
         ),
     ]
 

@@ -24,13 +24,11 @@ from app.schemas.gmail_integration import (
     GmailIntegrationStatusView,
     GmailOAuthAuthorizationView,
 )
-from app.services import gmail_integration_service
-from app.services.google_gmail_connector import (
-    GmailOAuthCompletion,
-    GmailOAuthFlowError,
-    GoogleGmailConnector,
-    build_configured_google_gmail_connector,
-)
+from app.integrations.gmail import contract as gmail_integration_service
+from app.integrations.gmail.connector import GmailOAuthCompletion
+from app.integrations.gmail.connector import GmailOAuthFlowError
+from app.integrations.gmail.connector import GoogleGmailConnector
+from app.integrations.gmail.connector import build_configured_google_gmail_connector
 
 
 router = APIRouter(prefix="/integrations/gmail", tags=["integrations"])

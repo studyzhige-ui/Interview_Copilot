@@ -38,6 +38,7 @@ class InterviewRecord(Base):
     # Record list ordered by creation time.
     __table_args__ = (
         Index("ix_interview_records_user_created", "user_id", "created_at"),
+        Index("ix_interview_records_user_last_dreamed", "user_id", "last_dreamed_at"),
         CheckConstraint(
             "debrief_guidance_version >= 0",
             name="ck_interview_records_debrief_guidance_version",
@@ -69,6 +70,8 @@ class InterviewRecord(Base):
         index=True,
         nullable=False,
     )
+    # Migration-only legacy metadata; memory_pipeline is the active owner.
+    _legacy_last_dreamed_at = Column("last_dreamed_at", DateTime, nullable=True)
     source = Column(String, nullable=False)  # "upload" | "mock"
 
     # Real interviews usually belong to one concrete hiring process; mocks
@@ -107,6 +110,8 @@ class InterviewRecord(Base):
         nullable=True,
         index=True,
     )
+
+    review_generation = Column(Integer, nullable=False, default=0, server_default="0")
 
     title = Column(String, default="未命名面试")
     # Primary interview category (后端/算法/系统设计…) for list filtering/display.
@@ -160,6 +165,7 @@ class InterviewRecord(Base):
     transcript_id = Column(String, index=True, nullable=True)
 
     # Top-level analysis result (per-question rows in interview_qa)
+    specification_json = Column(JSON, nullable=True)
     analysis_json = Column(Text, nullable=True)
     analysis_schema_version = Column(Integer, nullable=False, default=3)
     ability_signal_generation = Column(Integer, nullable=False, default=0)

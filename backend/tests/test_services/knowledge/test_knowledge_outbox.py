@@ -1,9 +1,9 @@
 """§4.6.3: reliable Milvus knowledge-index ops via the shared outbox.
 
 C1 — delete: a document delete removes the Postgres facts first (read path
-correct at once); a failed Milvus row delete queues a ``milvus_delete_document``
+correct at once); a failed Milvus row delete queues a ``retrieval_delete_document``
 job instead of raising or leaking vectors. C2 — upsert: an ingest-time Milvus
-write failure queues ``milvus_upsert_document`` (facts already pending, doc left
+write failure queues ``retrieval_upsert_document`` (facts already pending, doc left
 ``processing``); the handler rebuilds from facts and flips the doc ``ready``, or
 ``failed`` once retries exhaust. Both handlers are idempotent.
 """
@@ -17,7 +17,8 @@ import pytest
 from app.models.document_chunk import DocumentChunk
 from app.models.knowledge import KnowledgeDocument
 from app.models.outbox_job import OutboxJob
-from app.services.knowledge import index_jobs as ko
+from app.rag.application.library import index_jobs as ko
+from app.rag.index.identity import current_index_identity
 from app.worker.outbox_handlers import knowledge as knowledge_handlers
 
 
@@ -37,7 +38,7 @@ def _upsert_job_row(db, document_id):
         db.query(OutboxJob)
         .filter(
             OutboxJob.aggregate_id == document_id,
-            OutboxJob.job_type == "milvus_upsert_document",
+            OutboxJob.job_type == "retrieval_upsert_document",
         )
         .first()
     )
@@ -58,15 +59,17 @@ def _make_due(db, document_id):
     db.commit()
 
 
-def test_handle_milvus_delete_deletes_by_document_id(monkeypatch):
+def test_handle_retrieval_delete_deletes_by_document_id(monkeypatch):
     calls = []
-    import app.rag.milvus_hybrid as mh
+    import app.rag.hybrid_index as mh
 
     monkeypatch.setattr(
-        mh, "delete_by_field", lambda coll, field, value: calls.append((field, value))
+        mh,
+        "delete_by_field",
+        lambda field, value, **kw: calls.append((field, value)),
     )
 
-    knowledge_handlers.handle_milvus_delete(
+    knowledge_handlers.handle_retrieval_delete(
         None,
         SimpleNamespace(
             id="job1",
@@ -78,14 +81,14 @@ def test_handle_milvus_delete_deletes_by_document_id(monkeypatch):
     assert calls == [("document_id", "kdoc_x")]
 
 
-def test_handle_milvus_delete_noop_without_document_id(monkeypatch):
+def test_handle_retrieval_delete_noop_without_document_id(monkeypatch):
     calls = []
-    import app.rag.milvus_hybrid as mh
+    import app.rag.hybrid_index as mh
 
     monkeypatch.setattr(mh, "delete_by_field", lambda *a, **k: calls.append(a))
 
     with pytest.raises(ValueError, match="has no document id"):
-        knowledge_handlers.handle_milvus_delete(
+        knowledge_handlers.handle_retrieval_delete(
             None,
             SimpleNamespace(
                 id="job2",
@@ -97,25 +100,25 @@ def test_handle_milvus_delete_noop_without_document_id(monkeypatch):
     assert calls == []
 
 
-def test_enqueue_milvus_delete_creates_keyed_job(db_session):
-    ko.enqueue_milvus_delete(db_session, user_pk=1, document_id="kdoc_y")
+def test_enqueue_retrieval_delete_creates_keyed_job(db_session):
+    ko.enqueue_retrieval_delete(db_session, user_pk=1, document_id="kdoc_y")
     db_session.commit()
 
     jobs = (
         db_session.query(OutboxJob)
-        .filter(OutboxJob.job_type == "milvus_delete_document")
+        .filter(OutboxJob.job_type == "retrieval_delete_document")
         .all()
     )
     assert len(jobs) == 1
     assert jobs[0].aggregate_id == "kdoc_y"
     assert jobs[0].aggregate_type == "knowledge_document"
-    assert jobs[0].idempotency_key == "milvus_delete_document:kdoc_y"
+    assert jobs[0].idempotency_key == "retrieval_delete_document:kdoc_y"
 
 
-def test_enqueue_milvus_delete_coalesces_duplicates(db_session):
-    ko.enqueue_milvus_delete(db_session, user_pk=1, document_id="kdoc_z")
+def test_enqueue_retrieval_delete_coalesces_duplicates(db_session):
+    ko.enqueue_retrieval_delete(db_session, user_pk=1, document_id="kdoc_z")
     db_session.commit()
-    ko.enqueue_milvus_delete(db_session, user_pk=1, document_id="kdoc_z")
+    ko.enqueue_retrieval_delete(db_session, user_pk=1, document_id="kdoc_z")
     db_session.commit()
 
     jobs = db_session.query(OutboxJob).filter(OutboxJob.aggregate_id == "kdoc_z").all()
@@ -123,7 +126,7 @@ def test_enqueue_milvus_delete_coalesces_duplicates(db_session):
 
 
 def test_delete_queues_outbox_when_milvus_fails(db_session, monkeypatch):
-    from app.services.knowledge import knowledge_service as ks
+    from app.rag.application.library import knowledge_service as ks
 
     db_session.add(
         KnowledgeDocument(
@@ -146,7 +149,7 @@ def test_delete_queues_outbox_when_milvus_fails(db_session, monkeypatch):
     )
     db_session.commit()
 
-    import app.rag.milvus_hybrid as mh
+    import app.rag.hybrid_index as mh
 
     def _boom(*a, **k):
         raise RuntimeError("milvus down")
@@ -168,7 +171,7 @@ def test_delete_queues_outbox_when_milvus_fails(db_session, monkeypatch):
         == 0
     )
     jobs = db_session.query(OutboxJob).filter(OutboxJob.aggregate_id == "kdoc_f").all()
-    assert len(jobs) == 1 and jobs[0].job_type == "milvus_delete_document"
+    assert len(jobs) == 1 and jobs[0].job_type == "retrieval_delete_document"
 
 
 def test_enqueue_then_drain_runs_registered_handler(db_session, monkeypatch):
@@ -177,16 +180,18 @@ def test_enqueue_then_drain_runs_registered_handler(db_session, monkeypatch):
     called. The direct-handler tests above can't exercise the claim/run/status
     lifecycle this does."""
     import app.worker.outbox_handlers.knowledge  # noqa: F401 — registers handler
-    from app.services.outbox import run_due_outbox_jobs
+    from app.platform.outbox import run_due_outbox_jobs
 
     calls = []
-    import app.rag.milvus_hybrid as mh
+    import app.rag.hybrid_index as mh
 
     monkeypatch.setattr(
-        mh, "delete_by_field", lambda coll, field, value: calls.append((field, value))
+        mh,
+        "delete_by_field",
+        lambda field, value, **kw: calls.append((field, value)),
     )
 
-    ko.enqueue_milvus_delete(db_session, user_pk=1, document_id="kdoc_drain")
+    ko.enqueue_retrieval_delete(db_session, user_pk=1, document_id="kdoc_drain")
     db_session.commit()
 
     processed = run_due_outbox_jobs(db_session)
@@ -202,7 +207,7 @@ def test_enqueue_then_drain_runs_registered_handler(db_session, monkeypatch):
 
 
 def test_delete_always_uses_transactional_outbox(db_session):
-    from app.services.knowledge import knowledge_service as ks
+    from app.rag.application.library import knowledge_service as ks
 
     db_session.add(
         KnowledgeDocument(
@@ -233,10 +238,10 @@ def test_delete_always_uses_transactional_outbox(db_session):
     ks.delete_document_vectors_and_chunks(db_session, doc)
 
     job = db_session.query(OutboxJob).filter(OutboxJob.aggregate_id == "kdoc_ok").one()
-    assert job.job_type == "milvus_delete_document"
+    assert job.job_type == "retrieval_delete_document"
 
 
-# ── C2: milvus_upsert_document — ingest write-failure recovery ───────────────
+# ── C2: retrieval_upsert_document — ingest write-failure recovery ───────────────
 
 
 def _seed_doc(db, doc_id, status="processing"):
@@ -247,6 +252,7 @@ def _seed_doc(db, doc_id, status="processing"):
             title="t",
             source_kind="user_upload",
             status=status,
+            index_fingerprint=current_index_identity().fingerprint,
         )
     )
     db.commit()
@@ -256,9 +262,9 @@ def test_upsert_handler_rebuilds_and_marks_ready(db_session, monkeypatch):
     _seed_doc(db_session, "kdoc_u")
     import app.rag.index.knowledge as ing
 
-    monkeypatch.setattr(ing, "reindex_document", lambda db, doc_id: 3)  # rebuild OK
+    monkeypatch.setattr(ing, "reindex_document", lambda doc_id: 3)  # rebuild OK
 
-    knowledge_handlers.handle_milvus_upsert(db_session, _job("kdoc_u"))
+    knowledge_handlers.handle_retrieval_upsert(db_session, _job("kdoc_u"))
 
     doc = (
         db_session.query(KnowledgeDocument)
@@ -272,13 +278,13 @@ def test_upsert_handler_nonfinal_failure_stays_processing(db_session, monkeypatc
     _seed_doc(db_session, "kdoc_u2")
     import app.rag.index.knowledge as ing
 
-    def _boom(db, doc_id):
+    def _boom(doc_id):
         raise RuntimeError("milvus down")
 
     monkeypatch.setattr(ing, "reindex_document", _boom)
 
     with pytest.raises(RuntimeError):
-        knowledge_handlers.handle_milvus_upsert(
+        knowledge_handlers.handle_retrieval_upsert(
             db_session, _job("kdoc_u2", attempts=0)
         )  # 4 retries left
 
@@ -294,14 +300,16 @@ def test_upsert_handler_final_failure_marks_failed(db_session, monkeypatch):
     _seed_doc(db_session, "kdoc_u3")
     import app.rag.index.knowledge as ing
 
-    def _boom(db, doc_id):
+    def _boom(doc_id):
         raise RuntimeError("milvus down")
 
     monkeypatch.setattr(ing, "reindex_document", _boom)
 
     with pytest.raises(RuntimeError):
         # attempts=4, max=5 → this attempt exhausts the job (4 + 1 >= 5).
-        knowledge_handlers.handle_milvus_upsert(db_session, _job("kdoc_u3", attempts=4))
+        knowledge_handlers.handle_retrieval_upsert(
+            db_session, _job("kdoc_u3", attempts=4)
+        )
 
     doc = (
         db_session.query(KnowledgeDocument)
@@ -317,9 +325,9 @@ def test_upsert_handler_does_not_resurrect_deleting_doc(db_session, monkeypatch)
     _seed_doc(db_session, "kdoc_del", status="deleting")
     import app.rag.index.knowledge as ing
 
-    monkeypatch.setattr(ing, "reindex_document", lambda db, doc_id: 0)  # no live chunks
+    monkeypatch.setattr(ing, "reindex_document", lambda doc_id: 0)  # no live chunks
 
-    knowledge_handlers.handle_milvus_upsert(db_session, _job("kdoc_del"))
+    knowledge_handlers.handle_retrieval_upsert(db_session, _job("kdoc_del"))
 
     doc = (
         db_session.query(KnowledgeDocument)
@@ -329,17 +337,17 @@ def test_upsert_handler_does_not_resurrect_deleting_doc(db_session, monkeypatch)
     assert doc.status == "deleting"  # NOT resurrected to ready
 
 
-def test_enqueue_milvus_upsert_is_repeatable(db_session):
-    ko.enqueue_milvus_upsert(db_session, user_pk=1, document_id="kdoc_up")
+def test_enqueue_retrieval_upsert_is_repeatable(db_session):
+    ko.enqueue_retrieval_upsert(db_session, user_pk=1, document_id="kdoc_up")
     db_session.commit()
-    ko.enqueue_milvus_upsert(db_session, user_pk=1, document_id="kdoc_up")
+    ko.enqueue_retrieval_upsert(db_session, user_pk=1, document_id="kdoc_up")
     db_session.commit()
 
     jobs = (
         db_session.query(OutboxJob)
         .filter(
             OutboxJob.aggregate_id == "kdoc_up",
-            OutboxJob.job_type == "milvus_upsert_document",
+            OutboxJob.job_type == "retrieval_upsert_document",
         )
         .all()
     )
@@ -358,15 +366,15 @@ def test_upsert_drain_persistent_failure_ends_dead_and_doc_failed(
     kept 'processing' on runs 1–4."""
     import app.rag.index.knowledge as ing
     import app.worker.outbox_handlers.knowledge  # noqa: F401 — registers handler
-    from app.services.outbox import run_due_outbox_jobs
+    from app.platform.outbox import run_due_outbox_jobs
 
     _seed_doc(db_session, "kdoc_e2e")  # status=processing
 
-    def _boom(db, doc_id):
+    def _boom(doc_id):
         raise RuntimeError("milvus down")
 
     monkeypatch.setattr(ing, "reindex_document", _boom)
-    ko.enqueue_milvus_upsert(db_session, user_pk=1, document_id="kdoc_e2e")
+    ko.enqueue_retrieval_upsert(db_session, user_pk=1, document_id="kdoc_e2e")
     db_session.commit()
 
     for run in range(1, 6):
@@ -387,19 +395,19 @@ def test_upsert_drain_recovers_to_ready(db_session, monkeypatch):
     through the real runner (the primary recovery path C2 exists for)."""
     import app.rag.index.knowledge as ing
     import app.worker.outbox_handlers.knowledge  # noqa: F401
-    from app.services.outbox import run_due_outbox_jobs
+    from app.platform.outbox import run_due_outbox_jobs
 
     _seed_doc(db_session, "kdoc_rec")
     calls = {"n": 0}
 
-    def _flaky(db, doc_id):
+    def _flaky(doc_id):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("milvus blip")
         return 2
 
     monkeypatch.setattr(ing, "reindex_document", _flaky)
-    ko.enqueue_milvus_upsert(db_session, user_pk=1, document_id="kdoc_rec")
+    ko.enqueue_retrieval_upsert(db_session, user_pk=1, document_id="kdoc_rec")
     db_session.commit()
 
     run_due_outbox_jobs(db_session)  # attempt 1: fails
@@ -417,7 +425,7 @@ def test_upsert_drain_does_not_resurrect_hard_deleted_doc(db_session, monkeypatc
     stays 'deleting' (never resurrected to ready)."""
     import app.worker.outbox_handlers.knowledge  # noqa: F401
     from app.rag.document_chunk_service import delete_document_chunks
-    from app.services.outbox import run_due_outbox_jobs
+    from app.platform.outbox import run_due_outbox_jobs
 
     _seed_doc(db_session, "kdoc_race")  # processing
     db_session.add(
@@ -432,7 +440,7 @@ def test_upsert_drain_does_not_resurrect_hard_deleted_doc(db_session, monkeypatc
         )
     )
     db_session.commit()
-    ko.enqueue_milvus_upsert(db_session, user_pk=1, document_id="kdoc_race")
+    ko.enqueue_retrieval_upsert(db_session, user_pk=1, document_id="kdoc_race")
     db_session.commit()
 
     # The delete happens while the upsert is queued: mark deleting + hard-delete
@@ -444,13 +452,15 @@ def test_upsert_drain_does_not_resurrect_hard_deleted_doc(db_session, monkeypatc
     delete_document_chunks(db_session, "kdoc_race")
 
     deletes: list = []
-    import app.rag.milvus_hybrid as mh
+    import app.rag.hybrid_index as mh
 
     monkeypatch.setattr(
-        mh, "delete_by_field", lambda coll, field, value: deletes.append(value)
+        mh, "delete_by_field", lambda field, value, **kw: deletes.append(value)
     )
 
     run_due_outbox_jobs(db_session)
 
     assert _doc_row(db_session, "kdoc_race").status == "deleting"  # NOT resurrected
-    assert deletes == ["kdoc_race"]  # 0 live chunks → Milvus cleared
+    assert (
+        deletes == []
+    )  # late upsert cannot revive deleting source; delete owns cleanup

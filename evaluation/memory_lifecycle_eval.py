@@ -16,15 +16,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.services.memory_pipeline import (  # noqa: E402
-    model_json,
-    ExtractionOutput,
-    ConsolidationOutput,
-    _validate_consolidation,
-    validate_extraction,
-)
-from app.services.memory_recall import Selection  # noqa: E402
-from app.services.memory_prompts import EXTRACT, CONSOLIDATE, SELECT  # noqa: E402
+from app.memory.consolidation import model_json  # noqa: E402 — CLI package bootstrap above
+from app.memory.consolidation import ExtractionOutput  # noqa: E402 — CLI package bootstrap above
+from app.memory.consolidation import ConsolidationOutput  # noqa: E402 — CLI package bootstrap above
+from app.memory.consolidation import _validate_consolidation  # noqa: E402 — CLI package bootstrap above
+from app.memory.consolidation import validate_extraction  # noqa: E402 — CLI package bootstrap above
+from app.memory.recall import Selection  # noqa: E402 — CLI package bootstrap above
+from app.memory.prompts import EXTRACT  # noqa: E402 — CLI package bootstrap above
+from app.memory.prompts import CONSOLIDATE  # noqa: E402 — CLI package bootstrap above
+from app.memory.prompts import SELECT  # noqa: E402 — CLI package bootstrap above
 
 CASES = [
     (
@@ -166,7 +166,7 @@ async def evaluate():
 
 
 async def integration():
-    """Run the real service seams against disposable in-memory persistence."""
+    """Run the real service seams against a disposable file-backed database."""
     from datetime import timedelta
     from unittest.mock import patch
     from sqlalchemy import create_engine
@@ -179,10 +179,15 @@ async def integration():
     from app.models.conversation_turn import ConversationTurn
     from app.models.long_term_memory import AgentMemorySetting, LongTermAgentMemory
     from app.models.memory_pipeline import MemoryExtraction
-    from app.services import memory_pipeline, memory_recall, agent_memory_service
+    from app.memory import consolidation as memory_pipeline
+    from app.memory import recall as memory_recall
+    from app.memory import lifecycle as agent_memory_service
     from app.schemas.agent_memory import AgentMemoryStatusCommand
 
-    engine = create_engine("sqlite://")
+    from tempfile import TemporaryDirectory
+
+    temporary = TemporaryDirectory(prefix="memory-eval-")
+    engine = create_engine(f"sqlite:///{Path(temporary.name) / 'state.sqlite'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     with factory() as db:
@@ -278,10 +283,11 @@ async def integration():
                 "recall_nonempty": bool(block),
                 "deleted_recall_empty": not after_delete,
                 "deleted_source_not_recreated": reprocess == 0,
-                "database": "disposable in-memory SQLite; no user data accessed",
+                "database": "disposable file-backed SQLite; no user data accessed",
             }
     finally:
         engine.dispose()
+        temporary.cleanup()
 
 
 if __name__ == "__main__":
@@ -290,7 +296,43 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--integration-only", action="store_true")
     args = parser.parse_args()
-    report = asyncio.run(integration() if args.integration_only else evaluate())
+    # An isolated persistent accounting database avoids reading production user
+    # data and keeps actual paid usage/unknown outcomes even when the benchmark
+    # process exits. Only synthetic business data is disposable.
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from unittest.mock import patch
+    from app.db.database import Base
+    from app.models.user import User
+    from app.models.model_budget import UsageAccount
+    from app.usage import runtime
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    ledger = args.output.with_suffix(".usage.sqlite").resolve()
+    accounting = create_engine(f"sqlite:///{ledger}")
+    Base.metadata.create_all(accounting)
+    sessions = sessionmaker(bind=accounting, expire_on_commit=False)
+    with sessions() as db:
+        if db.get(User, 1) is None:
+            db.add(
+                User(
+                    id=1,
+                    username="synthetic-memory-evaluation",
+                    hashed_password="not-a-login",
+                )
+            )
+            db.flush()
+            db.add(UsageAccount(user_id=1))
+            db.commit()
+    try:
+        with (
+            patch.object(runtime, "SessionLocal", sessions),
+            runtime.scope(1, "memory-eval"),
+        ):
+            report = asyncio.run(integration() if args.integration_only else evaluate())
+        report["usage_ledger"] = str(ledger)
+    finally:
+        accounting.dispose()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"

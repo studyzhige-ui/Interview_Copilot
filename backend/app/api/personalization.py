@@ -24,7 +24,8 @@ from app.schemas.personalization import (
     ScopedGuidanceUpdate,
     ScopedGuidanceView,
 )
-from app.services import agent_memory_service, personalization_service
+from app.memory import lifecycle as agent_memory_service
+from app.career.application import personalization as personalization_service
 
 
 router = APIRouter(prefix="/personalization", tags=["personalization"])
@@ -95,7 +96,7 @@ def memory_feedback(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from app.services.memory_recall import set_feedback
+    from app.memory.recall import set_feedback
 
     return _run_memory(
         db,

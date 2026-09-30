@@ -12,9 +12,13 @@ from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
 from app.models.outbox_job import OutboxJob
 from app.models.user import User
-from app.services.uploads.file_asset_deletion_service import (
+from app.files.application.file_asset_deletion_service import (
     FileAssetDeletionConflictError,
+)
+from app.files.application.file_asset_deletion_service import (
     permanently_delete_file_asset,
+)
+from app.files.application.file_asset_deletion_service import (
     preview_file_asset_deletion,
 )
 

@@ -172,29 +172,19 @@ def test_reader_page_labels_become_page_numbers():
     assert [(page.text, page.number) for page in pages] == [("one", 1), ("two", 2)]
 
 
-def test_ocr_requires_configuration_and_runtime(monkeypatch):
-    monkeypatch.setattr(settings, "RAG_OCR_ENABLED", True)
-    monkeypatch.setattr(parsers, "_ocr_available", lambda: True)
-    assert parsers._ocr_enabled() is True
-    monkeypatch.setattr(settings, "RAG_OCR_ENABLED", False)
-    assert parsers._ocr_enabled() is False
-
-
 def test_docling_partial_conversion_fails_into_registry_fallback(monkeypatch):
-    docling_models = pytest.importorskip("docling.datamodel.base_models")
-    ConversionStatus = docling_models.ConversionStatus
+    import sys
+    from app.rag.parsing import docling_worker
 
-    result = SimpleNamespace(
-        status=ConversionStatus.PARTIAL_SUCCESS,
-        errors=[SimpleNamespace(error_message="page failed")],
+    status = SimpleNamespace(SUCCESS=object(), PARTIAL_SUCCESS=object())
+    monkeypatch.setitem(
+        sys.modules,
+        "docling.datamodel.base_models",
+        SimpleNamespace(ConversionStatus=status),
     )
-    monkeypatch.setattr(
-        parsers,
-        "_get_docling_converter",
-        lambda: SimpleNamespace(convert=lambda _path: result),
-    )
-    with pytest.raises(RuntimeError, match="partial_success"):
-        parsers.DoclingParser().parse("fixture.pdf")
+    result = SimpleNamespace(status=status.PARTIAL_SUCCESS)
+    with pytest.raises(RuntimeError, match="incomplete"):
+        docling_worker.export_document(result, {"max_pages": 3, "max_text_bytes": 100})
 
 
 def test_images_and_legacy_office_are_only_claimed_by_capable_parsers():

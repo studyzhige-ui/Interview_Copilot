@@ -35,14 +35,12 @@ from app.schemas.file_assets import (
     UploadUrlRequest,
     UploadUrlResponse,
 )
-from app.services.uploads.file_asset_service import (
-    UPLOAD_STATUS_UPLOADED,
-    UnknownUploadPurpose,
-    UploadTooLarge,
-    confirm_file_asset,
-    create_file_asset,
-    ensure_uploaded,
-)
+from app.files.application.file_asset_service import UPLOAD_STATUS_UPLOADED
+from app.files.application.file_asset_service import UnknownUploadPurpose
+from app.files.application.file_asset_service import UploadTooLarge
+from app.files.application.file_asset_service import confirm_file_asset
+from app.files.application.file_asset_service import create_file_asset
+from app.files.application.file_asset_service import ensure_uploaded
 
 logger = logging.getLogger(__name__)
 
@@ -139,8 +137,10 @@ def confirm_upload(
 
 
 def _file_deletion_http(exc: Exception) -> HTTPException:
-    from app.services.uploads.file_asset_deletion_service import (
+    from app.files.application.file_asset_deletion_service import (
         FileAssetDeletionConflictError,
+    )
+    from app.files.application.file_asset_deletion_service import (
         FileAssetDeletionNotFoundError,
     )
 
@@ -160,8 +160,8 @@ def get_file_asset_deletion_impact(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from app.services.uploads.file_asset_deletion_service import (
-        FileAssetDeletionError,
+    from app.files.application.file_asset_deletion_service import FileAssetDeletionError
+    from app.files.application.file_asset_deletion_service import (
         preview_file_asset_deletion,
     )
 
@@ -185,8 +185,8 @@ def permanently_delete_file_asset(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from app.services.uploads.file_asset_deletion_service import (
-        FileAssetDeletionError,
+    from app.files.application.file_asset_deletion_service import FileAssetDeletionError
+    from app.files.application.file_asset_deletion_service import (
         permanently_delete_file_asset as delete_asset,
     )
 

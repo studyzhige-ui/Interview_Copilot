@@ -7,6 +7,11 @@ import json
 import pytest
 
 import app.conversation.query_planner as planner
+from app.core.execution_errors import (
+    ConsumptionSettlementUnconfirmedError,
+    ModelOutcomeUnknownError,
+)
+from app.usage.service import ModelBudgetExceededError
 
 
 class _Response:
@@ -278,3 +283,22 @@ async def test_prompt_advertises_only_current_schema(monkeypatch):
     assert '"referenced_question_indexes"' in prompt
     assert '"dense_query"' not in prompt
     assert '"sub_queries"' not in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        ConsumptionSettlementUnconfirmedError,
+        ModelOutcomeUnknownError,
+        ModelBudgetExceededError,
+    ],
+)
+async def test_planner_does_not_hide_consumption_errors(monkeypatch, error_type):
+    error = error_type("synthetic consumption boundary")
+    fake = _LLM(error=error)
+    _patch(monkeypatch, fake)
+    with pytest.raises(error_type) as caught:
+        await planner.plan_query(user_message="Explain HNSW", recent_turns=[])
+    assert caught.value is error
+    assert len(fake.calls) == 1

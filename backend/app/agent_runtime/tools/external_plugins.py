@@ -16,12 +16,10 @@ from app.schemas.external_plugin_connection import (
     CanvaSearchDesignsArgs,
     NotionSearchPagesArgs,
 )
-from app.services.oauth_plugin_connector import (
-    ExternalPluginError,
-    OAuthPluginConnector,
-    external_plugin_account_handle,
-    get_external_plugin_account,
-)
+from app.integrations.plugins.connector import ExternalPluginError
+from app.integrations.plugins.connector import OAuthPluginConnector
+from app.integrations.plugins.connector import external_plugin_account_handle
+from app.integrations.plugins.connector import get_external_plugin_account
 
 
 def build_canva_search_designs_tool(connector: OAuthPluginConnector) -> ToolDefinition:

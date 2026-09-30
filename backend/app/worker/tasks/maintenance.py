@@ -15,44 +15,12 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import and_, or_
-
 from app.core.config import settings
 from app.db.database import SessionLocal
 from app.db.types import utc_now
-from app.models.interview_record import InterviewRecord
-from app.services.interview.interview_record_service import (
-    STATUS_ANALYZING,
-    STATUS_EXTRACTING,
-    STATUS_FAILED,
-    STATUS_PENDING,
-    STATUS_PROCESSING_REVIEW,
-    STATUS_REVIEW_FAILED,
-    STATUS_TRANSCRIBING,
-)
 from app.task_queue.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
-
-# Threshold rationale — two tiers, keyed off ``updated_at`` (bumped by every
-# status transition AND every per-question progress increment):
-#
-# * Upload pipeline (pending/transcribing/extracting/analyzing): a legitimate
-#   run can be quiet for a long stretch — transcription writes nothing for up
-#   to one attempt (time_limit=1800s), × up to 3 retries + backoff. 2 hours
-#   comfortably exceeds the worst case.
-# * Mock review (processing_review): no silent stage — the orchestrator bumps
-#   the counter per analyzed batch, so a 30-minute-quiet review is dead.
-#   Sweeping it faster matters because the UI's retry card only appears once
-#   the record reaches review_failed.
-_UPLOAD_SWEEP_STATES = (
-    STATUS_PENDING,
-    STATUS_TRANSCRIBING,
-    STATUS_EXTRACTING,
-    STATUS_ANALYZING,
-)
-_UPLOAD_STALE_AFTER = timedelta(hours=2)
-_REVIEW_STALE_AFTER = timedelta(minutes=30)
 
 
 @celery_app.task(
@@ -62,48 +30,12 @@ _REVIEW_STALE_AFTER = timedelta(minutes=30)
     soft_time_limit=50,
 )
 def sweep_stale_interview_records(self):
-    """Move records stuck in an in-flight state to a terminal one.
+    """Schedule the bounded domain recovery command."""
+    from app.interviews.application.stale_recovery import expire_stale_reviews
 
-    Idempotent and safe against races with a live worker: the analysis
-    task's own status writes will simply overwrite ours if (against all
-    odds) it is still running — the orchestrator writes completed/
-    review_ready unconditionally at the end of a successful run.
-    """
-    now = utc_now()
-    swept = 0
     with SessionLocal() as db:
-        rows = (
-            db.query(InterviewRecord)
-            .filter(
-                or_(
-                    and_(
-                        InterviewRecord.status.in_(_UPLOAD_SWEEP_STATES),
-                        InterviewRecord.updated_at < now - _UPLOAD_STALE_AFTER,
-                    ),
-                    and_(
-                        InterviewRecord.status == STATUS_PROCESSING_REVIEW,
-                        InterviewRecord.updated_at < now - _REVIEW_STALE_AFTER,
-                    ),
-                )
-            )
-            .all()
-        )
-        for rec in rows:
-            terminal = STATUS_REVIEW_FAILED if rec.source == "mock" else STATUS_FAILED
-            logger.warning(
-                "sweeping stale interview record %s: %s (updated %s) -> %s",
-                rec.id,
-                rec.status,
-                rec.updated_at,
-                terminal,
-            )
-            rec.status = terminal
-            rec.error_message = "分析长时间无进展（任务可能已丢失），请重试。"
-            db.add(rec)
-            swept += 1
+        swept = expire_stale_reviews(db, now=utc_now())
         db.commit()
-    if swept:
-        logger.info("sweep_stale_interview_records: swept %d record(s)", swept)
     return {"swept": swept}
 
 
@@ -119,7 +51,7 @@ _AUTOMATION_DISPATCH_REPAIR_AFTER = timedelta(minutes=1)
 def sweep_expired_conversation_deletion_receipts():
     """Purge only expired Conversation-deletion receipt tombstones."""
 
-    from app.services.chat.conversation_deletion_service import (
+    from app.conversation.application.conversation_deletion_service import (
         purge_expired_conversation_deletion_receipts,
     )
 
@@ -141,7 +73,7 @@ def sweep_expired_conversation_deletion_receipts():
 def deliver_due_next_action_reminders():
     """Materialize due in-app deliveries while respecting user quiet hours."""
 
-    from app.services.reminder_service import deliver_due_reminders
+    from app.career.application.reminders import deliver_due_reminders
 
     with SessionLocal() as db:
         result = deliver_due_reminders(db, due_at=utc_now(), limit=200)
@@ -160,10 +92,8 @@ def schedule_due_persistent_tasks():
     from app.agent_runtime.turn_tool_catalog import (
         cloud_sustainable_automation_tool_names,
     )
-    from app.services.persistent_task_service import (
-        due_persistent_task_ids,
-        schedule_due_persistent_task,
-    )
+    from app.automation.application.tasks import due_persistent_task_ids
+    from app.automation.application.tasks import schedule_due_persistent_task
     from app.task_queue.dispatch import dispatch_conversation_turn
 
     due_at = utc_now()
@@ -223,11 +153,9 @@ def schedule_due_persistent_tasks():
 def repair_pending_automation_turns():
     """Boundedly re-dispatch admitted automation Turns after broker loss."""
 
-    from app.services.persistent_task_service import (
-        admit_pending_persistent_task_triggers,
-        repairable_automation_turn_ids,
-        repairable_persistent_task_ids,
-    )
+    from app.automation.application.tasks import admit_pending_persistent_task_triggers
+    from app.automation.application.tasks import repairable_automation_turn_ids
+    from app.automation.application.tasks import repairable_persistent_task_ids
     from app.agent_runtime.turn_tool_catalog import (
         cloud_sustainable_automation_tool_names,
     )
@@ -351,8 +279,11 @@ def sweep_stale_pipeline_records(self):
                     exc,
                 )
                 continue
-            document.task_id = task.id
-            document.updated_at = utc_now()
+            from app.rag.application.document_commands import record_ingestion_dispatch
+
+            record_ingestion_dispatch(
+                db, document_id=document.id, task_id=task.id, now=utc_now()
+            )
             dispatched += 1
 
         for resume in resumes:
@@ -365,8 +296,11 @@ def sweep_stale_pipeline_records(self):
                     exc,
                 )
                 continue
-            resume.parse_error = None
-            resume.updated_at = utc_now()
+            from app.career.application.resumes.resume_dispatch_service import (
+                record_parse_dispatch,
+            )
+
+            record_parse_dispatch(db, artifact_id=resume.artifact_id, now=utc_now())
             dispatched += 1
         db.commit()
     return {
@@ -376,13 +310,6 @@ def sweep_stale_pipeline_records(self):
     }
 
 
-# A pending_upload row whose client never PUT/confirmed is an orphan: nothing
-# will ever look at it again, but its presigned URL may have been used, so an
-# unreferenced blob can sit in MinIO forever. One day is far beyond any
-# legitimate upload-then-confirm window.
-_ORPHAN_ASSET_STALE_AFTER = timedelta(hours=24)
-
-
 @celery_app.task(
     bind=True,
     name="tasks.sweep_orphan_file_assets",
@@ -390,46 +317,12 @@ _ORPHAN_ASSET_STALE_AFTER = timedelta(hours=24)
     soft_time_limit=100,
 )
 def sweep_orphan_file_assets(self):
-    """Daily orphan cleanup for the presigned upload flow (UP-3).
+    """Schedule the owned, bounded orphan cleanup command."""
+    from app.files.application.cleanup import expire_orphan_uploads
 
-    * ``pending_upload`` > 24h: enqueue a blob delete (the client may have
-      PUT bytes without ever confirming) and mark the row ``deleted``.
-    * ``failed`` > 24h: cleanup was already enqueued by ``_fail_asset`` at
-      failure time — just mark the row ``deleted`` for hygiene.
-    """
-    from app.models.file_asset import FileAsset
-    from app.services.uploads.file_asset_service import (
-        UPLOAD_STATUS_DELETED,
-        UPLOAD_STATUS_FAILED,
-        UPLOAD_STATUS_PENDING,
-        enqueue_asset_blob_delete,
-    )
-
-    cutoff = utc_now() - _ORPHAN_ASSET_STALE_AFTER
-    swept = 0
     with SessionLocal() as db:
-        rows = (
-            db.query(FileAsset)
-            .filter(
-                FileAsset.upload_status.in_(
-                    (UPLOAD_STATUS_PENDING, UPLOAD_STATUS_FAILED)
-                ),
-                FileAsset.updated_at < cutoff,
-                FileAsset.deleted_at.is_(None),
-            )
-            .all()
-        )
-        for asset in rows:
-            if asset.upload_status == UPLOAD_STATUS_PENDING:
-                enqueue_asset_blob_delete(db, asset)
-            asset.upload_status = UPLOAD_STATUS_DELETED
-            asset.deleted_at = utc_now()
-            asset.updated_at = utc_now()
-            db.add(asset)
-            swept += 1
+        swept = expire_orphan_uploads(db, now=utc_now())
         db.commit()
-    if swept:
-        logger.info("sweep_orphan_file_assets: swept %d asset(s)", swept)
     return {"swept": swept}
 
 

@@ -174,11 +174,11 @@ if ($envContent -match '(?m)^SECRET_KEY=\s*$') {
 # -----------------------------------------------------------------------------
 # 5. Infrastructure
 # -----------------------------------------------------------------------------
-Step 'Starting Docker infrastructure (postgres, redis, minio, milvus)'
+Step 'Starting Docker infrastructure (postgres/pgvector, redis, minio)'
 Push-Location $projectRoot
 try {
     docker compose up -d --wait --wait-timeout 180 `
-        db redis minio milvus-etcd milvus-minio milvus-standalone | Out-Host
+        db redis minio | Out-Host
     if ($LASTEXITCODE -ne 0) { Fail 'Infrastructure did not become healthy.' }
     docker compose run --rm --no-deps minio-create-bucket | Out-Host
     if ($LASTEXITCODE -ne 0) { Fail 'MinIO bucket initialization failed.' }

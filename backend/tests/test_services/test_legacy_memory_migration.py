@@ -6,7 +6,7 @@ from app.models.memory_ability_state import MemoryAbilityState
 from app.models.memory_audit_logs import MemoryAuditEntry
 from app.models.memory_document import MemoryDocument
 from app.models.user import User
-from app.services.legacy_memory_migration import migrate_legacy_memory
+from app.maintenance.memory_migration import migrate_legacy_memory
 
 
 def _seed(db_session):
@@ -37,8 +37,8 @@ def _seed(db_session):
                 topic="系统设计表达",
                 skill_type="system_design",
                 mastery_level="improving",
-                ability_score=0.42,
-                score_version="legacy-v1",
+                ability_score=4.2,
+                score_version="score10-v1",
                 summary="能识别核心组件，但取舍解释不够清楚。",
                 evidence_refs_json=[
                     {"type": "conversation_message", "id": str(message.id)}
@@ -89,7 +89,8 @@ def test_legacy_migration_is_conservative_and_idempotent(db_session):
     signal = db_session.query(AbilitySignal).one()
     assert signal.user_id == user.id
     assert signal.topic == "系统设计表达"
-    assert signal.confidence == 0.25
+    assert signal.confidence is None
+    assert signal.score == 4.2
     assert signal.rubric_version == "legacy-memory:mas_safe"
     forgotten = db_session.get(MemoryAuditEntry, "aud_forgotten")
     assert forgotten.before_body is None
@@ -102,3 +103,17 @@ def test_legacy_migration_is_conservative_and_idempotent(db_session):
         "already_purged": 1,
     }
     assert db_session.query(AbilitySignal).count() == 1
+
+
+def test_unidentified_legacy_score_is_quarantined_not_guessed(db_session):
+    _seed(db_session)
+    old = db_session.get(MemoryAbilityState, "mas_safe")
+    old.score_version = "legacy-v1"
+    old.ability_score = 0.42
+    db_session.commit()
+    result = migrate_legacy_memory(db_session, apply=True)
+    assert db_session.query(AbilitySignal).count() == 0
+    assert old.ability_score == 0.42
+    item = next(x for x in result["items"] if x["source_id"] == "mas_safe")
+    assert item["classification"] == "quarantined"
+    assert "unit" in item["reason"]

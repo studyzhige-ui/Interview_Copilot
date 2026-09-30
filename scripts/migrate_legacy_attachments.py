@@ -13,9 +13,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "backend"))
 
 from app.db.database import SessionLocal  # noqa: E402
-from app.services.legacy_attachment_migration import (  # noqa: E402
-    migrate_legacy_attachments,
-)
+from app.maintenance.attachment_migration import migrate_legacy_attachments  # noqa: E402
 
 
 def main() -> int:

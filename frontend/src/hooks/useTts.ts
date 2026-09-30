@@ -1,16 +1,4 @@
-/**
- * Minimal TTS hook for the mock-interview interviewer voice.
- *
- * Sends interviewer text to POST /mock-interviews/tts which fronts
- * edge-tts on the backend and returns audio/mpeg bytes. We blob-URL the
- * response and play through a single shared <audio> element so a new utterance
- * cancels the previous one (real interviewers don't talk over themselves).
- *
- * The hook is intentionally not "streaming" — edge-tts can synthesize a 2-3
- * sentence interviewer reply in ~500ms, and the playback latency is bounded by
- * one round-trip plus the audio length. Sentence-level chunking is a future
- * optimization once we move to a streaming TTS provider.
- */
+/** One active playback generation; stopping also invalidates late responses. */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient } from '@/api/client';
 
@@ -25,98 +13,108 @@ interface UseTtsOptions {
   voice?: string;
 }
 
+interface Speech {
+  generation: number;
+  abort: AbortController;
+  audio: HTMLAudioElement;
+  url: string | null;
+}
+
+function dispose(speech: Speech) {
+  speech.abort.abort();
+  speech.audio.onended = null;
+  speech.audio.onerror = null;
+  speech.audio.pause();
+  speech.audio.removeAttribute('src');
+  speech.audio.load();
+  if (speech.url) {
+    URL.revokeObjectURL(speech.url);
+    speech.url = null;
+  }
+}
+
 export function useTts({ enabled, voice }: UseTtsOptions) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const lastUrlRef = useRef<string | null>(null);
+  const active = useRef<Speech | null>(null);
+  const generation = useRef(0);
+  const mounted = useRef(false);
   const [state, setState] = useState<TtsState>({ phase: 'idle' });
 
-  // Lazily create the audio element on first speak() — Safari needs an
-  // element constructed inside a user gesture frame for autoplay to work.
-  const ensureAudio = useCallback((): HTMLAudioElement => {
-    if (audioRef.current) return audioRef.current;
-    const el = new Audio();
-    el.preload = 'auto';
-    el.onended = () => setState({ phase: 'idle' });
-    el.onerror = () => setState({ phase: 'error', message: '音频播放失败' });
-    audioRef.current = el;
-    return el;
+  const invalidate = useCallback(() => {
+    generation.current += 1;
+    const previous = active.current;
+    active.current = null; // Fence callbacks before abort/pause can dispatch them.
+    if (previous) dispose(previous);
   }, []);
 
   const stop = useCallback(() => {
-    const el = audioRef.current;
-    if (el) {
-      el.pause();
-      el.currentTime = 0;
-    }
-    if (lastUrlRef.current) {
-      URL.revokeObjectURL(lastUrlRef.current);
-      lastUrlRef.current = null;
-    }
-    setState({ phase: 'idle' });
-  }, []);
-
-  const speak = useCallback(
-    async (text: string) => {
-      if (!enabled) return;
-      const trimmed = text.trim();
-      if (!trimmed) return;
-
-      stop();
-      const el = ensureAudio();
-      setState({ phase: 'loading' });
-
-      let url: string | null = null;
-      try {
-        const res = await apiClient.post(
-          '/mock-interviews/tts',
-          { text: trimmed, voice },
-          { responseType: 'blob' },
-        );
-        const blob = res.data as Blob;
-        url = URL.createObjectURL(blob);
-        lastUrlRef.current = url;
-        el.src = url;
-        await el.play();
-        setState({ phase: 'playing' });
-      } catch (err) {
-        // ``el.play()`` rejects on browser autoplay policy
-        // (NotAllowedError when the user hasn't interacted) and on
-        // any media decode error. The blob URL was already created,
-        // assigned to ``lastUrlRef``, AND pinned via ``el.src`` —
-        // without explicit revoke + element detach the bytes stay
-        // in memory for the lifetime of the page. Repeated retries
-        // would leak one blob per failed play attempt.
-        if (url) {
-          try { URL.revokeObjectURL(url); } catch { /* ignore */ }
-          if (lastUrlRef.current === url) lastUrlRef.current = null;
-        }
-        el.removeAttribute('src');
-        const msg = err instanceof Error ? err.message : 'TTS 失败';
-        setState({ phase: 'error', message: msg });
-      }
-    },
-    [enabled, voice, ensureAudio, stop],
-  );
+    invalidate();
+    if (mounted.current) setState({ phase: 'idle' });
+  }, [invalidate]);
 
   useEffect(() => {
+    mounted.current = true;
     return () => {
-      if (lastUrlRef.current) {
-        URL.revokeObjectURL(lastUrlRef.current);
-        lastUrlRef.current = null;
-      }
-      const el = audioRef.current;
-      if (el) {
-        el.pause();
-        // Detach the dead blob URL so the audio element doesn't
-        // keep a reference that prevents the underlying buffer from
-        // being released. Belt-and-braces — the element itself
-        // gets GC'd with the component, but removeAttribute makes
-        // the cleanup intent explicit.
-        el.removeAttribute('src');
-        el.load();
-      }
+      mounted.current = false;
+      invalidate();
     };
-  }, []);
+  }, [invalidate]);
+
+  // Muting, changing the selected voice and leaving the page cancel the same
+  // owned request. Re-enabling audio never replays a cancelled generation.
+  useEffect(() => {
+    if (!enabled) stop();
+    return stop;
+  }, [enabled, voice, stop]);
+
+  const speak = useCallback(async (text: string) => {
+    if (!enabled || !mounted.current || !text.trim()) return;
+    stop();
+    if (text.length > 600) {
+      setState({ phase: 'error', message: '本地朗读每次最多 600 字，请阅读完整文字；不会截断内容。' });
+      return;
+    }
+    const speech: Speech = {
+      generation: generation.current,
+      abort: new AbortController(),
+      audio: new Audio(),
+      url: null,
+    };
+    active.current = speech;
+    const isCurrent = () => mounted.current
+      && active.current === speech
+      && generation.current === speech.generation
+      && !speech.abort.signal.aborted;
+    const finish = (next: TtsState) => {
+      if (!isCurrent()) return;
+      active.current = null;
+      dispose(speech);
+      setState(next);
+    };
+    speech.audio.preload = 'auto';
+    speech.audio.onended = () => finish({ phase: 'idle' });
+    speech.audio.onerror = () => finish({ phase: 'error', message: '音频播放失败' });
+    setState({ phase: 'loading' });
+    try {
+      const response = await apiClient.post(
+        '/mock-interviews/tts',
+        { text: text.trim(), voice: voice === 'default' ? undefined : voice },
+        { responseType: 'blob', signal: speech.abort.signal },
+      );
+      // Abort is best effort. A response can already be queued, or an adapter
+      // may ignore it; generation identity is the authoritative playback fence.
+      if (!isCurrent()) return;
+      const blob = response.data;
+      if (!(blob instanceof Blob) || !blob.size || blob.size > 10_000_000) {
+        throw new Error('语音响应为空或超出大小限制');
+      }
+      speech.url = URL.createObjectURL(blob);
+      speech.audio.src = speech.url;
+      await speech.audio.play();
+      if (isCurrent()) setState({ phase: 'playing' });
+    } catch (error) {
+      finish({ phase: 'error', message: error instanceof Error ? error.message : 'TTS 失败' });
+    }
+  }, [enabled, voice, stop]);
 
   return { state, speak, stop };
 }

@@ -129,3 +129,24 @@
 .workspace-recent h3 { font-size:14px; font-weight:600; }
 .chat-recovery-notice { padding:12px 18px; background:#fff5df; border-bottom:1px solid #e8d6ac; color:#725822; font-size:13px; line-height:1.7; }
 .chat-recovery-notice button { text-decoration:underline; font-weight:600; margin-top:5px; }
+
+/* Same Copilot kernel, hosted alongside the user's current product page. */
+.copilot-workspace-drawer {
+  position: fixed;
+  inset: 64px 12px 12px auto;
+  width: min(860px, calc(100vw - 24px));
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border, #e7e5e4);
+  border-radius: 16px;
+  box-shadow: 0 12px 48px rgb(0 0 0 / 16%);
+  overflow: hidden;
+}
+.copilot-workspace-drawer .copilot-embedded { flex: 1; min-height: 0; height: auto; }
+.copilot-workspace-drawer .copilot-session-list { width: 190px; min-width: 150px; }
+@media (max-width: 640px) {
+  .copilot-workspace-drawer .copilot-session-list { width: 125px; min-width: 105px; }
+  .copilot-workspace-drawer header > div > p { display: none; }
+}

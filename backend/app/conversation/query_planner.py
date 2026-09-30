@@ -13,14 +13,14 @@ from app.core.llm_client_factory import get_internal_llm
 from app.core.context_budget import RequestBudget
 from app.core.internal_models import get_internal_model_profile
 from app.core.tokens import token_count
+from app.core.execution_errors import ModelOutcomeUnknownError
+from app.usage.service import ModelBudgetExceededError
 from app.prompts.chat import build_query_planner_system_prompt
 from app.rag.domain.models import SearchIntent
 from app.rag.policy import current_rag_policy
-from app.services.chat.source_requests import (
-    ReadOnlySourceRequest,
-    fallback_source_requests,
-    strip_planner_identities,
-)
+from app.conversation.application.source_requests import ReadOnlySourceRequest
+from app.conversation.application.source_requests import fallback_source_requests
+from app.conversation.application.source_requests import strip_planner_identities
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +191,10 @@ async def plan_query(
             )
         )
         return plan
+    except (ModelBudgetExceededError, ModelOutcomeUnknownError):
+        # A fallback query is not permission to continue after a quota stop or
+        # unconfirmed paid dispatch/settlement. The caller retains the receipt.
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Query planner failed; using original query: %s", type(exc).__name__

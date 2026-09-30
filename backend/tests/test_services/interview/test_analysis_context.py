@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.services.interview.analysis_context import build_analysis_context
+from app.interviews.application.analysis_context import build_analysis_context
 
 
 def test_analysis_context_uses_report_summary_and_compact_question_index():

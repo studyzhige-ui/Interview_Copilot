@@ -7,6 +7,7 @@ import os
 
 from app.core import model_catalog
 from app.core.model_catalog import ModelProfile, get_profile
+from app.core.model_connection_error import ModelConnectionUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -15,15 +16,18 @@ def resolve_api_key(profile: ModelProfile, user_id: str | None = None) -> str:
     """Resolve a user's stored provider key, then the deployment fallback."""
     if user_id:
         try:
-            from app.services.auth.user_api_key_service import (
+            from app.identity.application.user_api_key_service import (
                 get_user_api_key_plaintext,
             )
 
             user_key = get_user_api_key_plaintext(user_id, profile.provider)
             if user_key:
                 return user_key
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("user_api_key lookup failed: %s", exc)
+        except ModelConnectionUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001 — do not change billing identity on failure
+            logger.warning("Credential lookup unavailable (%s)", type(exc).__name__)
+            raise ModelConnectionUnavailable() from exc
     return os.getenv(profile.api_key_env, "")
 
 

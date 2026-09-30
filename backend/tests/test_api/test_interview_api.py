@@ -62,13 +62,13 @@ def db(monkeypatch) -> Iterator[Session]:
     # Several interview endpoints (cancel, list, get, delete) call into
     # ``interview_record_service`` which opens its own ``SessionLocal()``
     # bound to the real configured DB. Redirect that to our test engine.
-    import app.services.interview.interview_record_service as irs_mod
+    import app.interviews.application.interview_record_service as irs_mod
 
     monkeypatch.setattr(irs_mod, "SessionLocal", Session_)
     # The SSE events endpoint opens its own SessionLocal() per tick via
     # record_admin (poll_record_snapshot / record_exists_for_user) — same
     # redirect needed there.
-    import app.services.interview.record_admin as record_admin_mod
+    import app.interviews.application.record_admin as record_admin_mod
 
     monkeypatch.setattr(record_admin_mod, "SessionLocal", Session_)
 
@@ -141,14 +141,19 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
     fake_task.id = "celery-abc"
     with (
         patch(
-            "app.services.interview.analysis_intake.dispatch_interview_analysis"
+            "app.interviews.application.analysis_intake.dispatch_interview_analysis"
         ) as mock_proc,
         patch(
-            "app.services.interview.analysis_intake.extract_text_snapshot",
+            "app.interviews.application.analysis_intake.extract_text_snapshot",
             return_value="resume txt",
         ),
     ):
-        mock_proc.return_value = fake_task
+
+        def accepted_task(record_id, *, task_id, review_generation, language):
+            fake_task.id = task_id
+            return fake_task
+
+        mock_proc.side_effect = accepted_task
         resp = client.post(
             "/api/v1/analyze",
             json={
@@ -161,11 +166,13 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "processing"
-    assert body["task_id"] == "celery-abc"
+    assert body["task_id"] == fake_task.id
     assert body["record_id"].startswith("ir_")
     # Default language is "zh"; the task receives it as a kwarg so a
     # re-run can override it without breaking idempotency.
-    mock_proc.assert_called_once_with(body["record_id"], language="zh")
+    mock_proc.assert_called_once_with(
+        body["record_id"], language="zh", task_id=body["task_id"], review_generation=1
+    )
 
     record = (
         db.query(InterviewRecord)
@@ -176,7 +183,7 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
     # Route resolves the caller's username → users.id and stores the pk.
     assert record.user_id == _uid(db, "alice")
     assert record.job_opportunity_id == "jo_analyze"
-    assert record.celery_task_id == "celery-abc"
+    assert record.celery_task_id == body["task_id"]
 
 
 def test_analyze_rejects_other_users_opportunity_before_dispatch(
@@ -208,7 +215,7 @@ def test_analyze_rejects_other_users_opportunity_before_dispatch(
     db.commit()
 
     with patch(
-        "app.services.interview.analysis_intake.dispatch_interview_analysis"
+        "app.interviews.application.analysis_intake.dispatch_interview_analysis"
     ) as dispatch:
         response = client.post(
             "/api/v1/analyze",
@@ -293,7 +300,7 @@ def test_cancel_analysis_revokes_celery_task(client, db: Session):
     db.add(record)
     db.commit()
 
-    with patch("app.services.interview.record_admin.revoke_task") as revoke_task:
+    with patch("app.interviews.application.record_admin.revoke_task") as revoke_task:
         resp = client.post("/api/v1/analyze/ir_1/cancel")
     assert resp.status_code == 200
     body = resp.json()
@@ -340,7 +347,7 @@ def test_analytics_report_delegates_to_service(client):
     mock_gen.assert_awaited_once_with(
         10,
         user_id="alice",
-        scale_version="evidence-v2",
+        scale_version="score10-v1",
     )
 
 
@@ -696,7 +703,7 @@ def test_events_stream_emits_error_for_failed_record(client, db: Session):
 def test_poll_record_snapshot_returns_none_for_missing_id(db: Session):
     """The poll helper must return None when the row disappears
     (the SSE loop maps None → 'record disappeared' error event)."""
-    from app.services.interview.record_admin import (
+    from app.interviews.application.record_admin import (
         poll_record_snapshot as _poll_record_snapshot,
     )
 
@@ -722,7 +729,7 @@ def test_poll_record_snapshot_returns_plain_dict_not_orm_row(db: Session):
     )
     db.commit()
 
-    from app.services.interview.record_admin import (
+    from app.interviews.application.record_admin import (
         poll_record_snapshot as _poll_record_snapshot,
     )
 

@@ -140,3 +140,19 @@ Recall、Answer Relevancy 和 Factual Correctness，因此供应商请求数通�
 
 最终实测数字只写入本次发布报告和最新的 `docs/reports/rag-evaluation-*.md`，不在本
 说明中长期复制，避免代码、数据和旧基线互相矛盾。
+
+
+## 工程故障与研究质量不能合并计分
+
+容量保护返回 `capacity_exhausted`；部分检索渠道失败且其余没有命中返回
+`retrieval_incomplete`；权威资料/权限数据库不可用返回 `canonical_unavailable`。
+它们不是“资料没有答案”的负样本。部分成功仍携带 degraded 状态，不能把缺失分支当成
+已查遍语料。记录这些故障与延迟/成本，但不要用空结果奖励 hard-negative 正确率。
+
+本分支CI另运行真实PostgreSQL/Redis/Celery进程退出与Chromium恢复测试，模拟面试模型
+使用离线固定响应和故障。`python -m evaluation.career_agent_os_eval --report <path>`
+执行VS-01的后端与前端绑定测试并读取新建JUnit；`--static-only`只校验登记，不是发布
+通过。缺少必需PostgreSQL、Redis或浏览器时不应伪报真实验收。
+
+这些机制测试不修改上述RAG金标、阈值或分数，也不等于真实模型面试评价质量、长期记忆
+收益或“准备→练习→复盘→新题”学习效果。后者仍使用原有模型评测入口及独立人工核验。

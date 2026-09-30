@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
-from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 from app.schemas.attachment_source import (
     AttachmentArtifactPromotionRequest,
@@ -25,25 +24,48 @@ from app.schemas.attachment_source import (
     DebriefSourcePromotionView,
 )
 from app.schemas.artifact import ArtifactVersionView, ArtifactView
-from app.services import artifact_service
-from app.services.chat.attachment_artifact_promotion_service import (
+from app.career.application import artifacts as artifact_service
+from app.conversation.application.attachment_artifact_promotion_service import (
     promote_conversation_attachment_to_artifact,
 )
-from app.services.chat.attachment_source_service import (
+from app.conversation.application.attachment_source_service import (
     AttachmentSourceCommandError,
+)
+from app.conversation.application.attachment_source_service import (
     AttachmentSourceNotFoundError,
+)
+from app.conversation.application.attachment_source_service import (
     get_attachment_source_state,
+)
+from app.conversation.application.attachment_source_service import (
     list_claimed_attachment_sources,
+)
+from app.conversation.application.attachment_source_service import (
     list_debrief_project_sources,
+)
+from app.conversation.application.attachment_source_service import (
     list_pending_submission_sources,
+)
+from app.conversation.application.attachment_source_service import (
     mark_attachment_retry_dispatch_failed,
+)
+from app.conversation.application.attachment_source_service import (
     prepare_attachment_projection_retry,
+)
+from app.conversation.application.attachment_source_service import (
     promote_attachment_to_debrief,
+)
+from app.conversation.application.attachment_source_service import (
     remove_conversation_attachment_from_scope,
+)
+from app.conversation.application.attachment_source_service import (
     remove_debrief_project_source,
 )
-from app.services.resume import resume_artifact_service
-from app.services.resume.resume_dispatch_service import dispatch_parse_after_commit
+from app.career.application.resumes import resume_artifact_service
+from app.career.application.resumes.resume_dispatch_service import (
+    dispatch_parse_after_commit,
+)
+from app.conversation.application.turn_executor import attachment_resume_actions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["attachment-sources"])
@@ -145,10 +167,12 @@ def retry_attachment_source(
 
         try:
             task = dispatch_document_ingestion(retry.state.document_id or "")
-            document = db.get(KnowledgeDocument, retry.state.document_id)
-            if document is not None and document.status == "processing":
-                document.task_id = task.id
-                db.commit()
+            from app.rag.application.document_commands import record_ingestion_dispatch
+
+            record_ingestion_dispatch(
+                db, document_id=retry.state.document_id, task_id=task.id
+            )
+            db.commit()
         except Exception:  # noqa: BLE001
             db.rollback()
             logger.exception(
@@ -197,13 +221,15 @@ def remove_conversation_source_from_scope(
         db.rollback()
         raise _translate_error(exc) from exc
 
-    from app.services.chat.attachment_waiting_service import (
+    from app.conversation.application.attachment_waiting_service import (
         wake_attachment_turn_if_terminal,
     )
 
     return ConversationAttachmentRemovalView(
         source_id=ref.id,
-        resumed_turn=wake_attachment_turn_if_terminal(turn_id),
+        resumed_turn=wake_attachment_turn_if_terminal(
+            turn_id, actions=attachment_resume_actions()
+        ),
     )
 
 

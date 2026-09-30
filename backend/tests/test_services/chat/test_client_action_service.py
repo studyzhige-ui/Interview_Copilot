@@ -14,16 +14,18 @@ from app.schemas.client_action import (
     MockPrefillPayload,
     MockReadinessPayload,
 )
-from app.services.chat.client_action_service import (
-    ClientActionConflictError,
+from app.conversation.application.client_action_service import ClientActionConflictError
+from app.conversation.application.client_action_service import (
     ClientActionUnavailableError,
-    create_mock_client_action,
-    latest_handoff_client,
-    pending_action_for_client,
-    resolve_pending_action,
-    sanitized_interaction_request,
-    takeover_pending_action,
 )
+from app.conversation.application.client_action_service import create_mock_client_action
+from app.conversation.application.client_action_service import latest_handoff_client
+from app.conversation.application.client_action_service import pending_action_for_client
+from app.conversation.application.client_action_service import resolve_pending_action
+from app.conversation.application.client_action_service import (
+    sanitized_interaction_request,
+)
+from app.conversation.application.client_action_service import takeover_pending_action
 
 
 def _seed(db_session, *, source_client_id: str | None = "client-a"):

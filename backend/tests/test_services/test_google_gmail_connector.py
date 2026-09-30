@@ -17,17 +17,15 @@ from app.core.secrets import decrypt_secret
 from app.db.types import utc_now
 from app.models.gmail_integration import GmailOAuthState
 from app.models.user import User
-from app.services.gmail_integration_service import (
-    GMAIL_READONLY_SCOPE,
-    GmailProviderAdapterError,
-)
-from app.services.gmail_credential_store import InMemoryGmailCredentialStore
-from app.services.google_gmail_connector import (
-    GmailOAuthFlowError,
-    GoogleGmailConnector,
-    build_configured_google_gmail_connector,
-)
+from app.integrations.gmail.contract import GMAIL_READONLY_SCOPE
+from app.integrations.gmail.contract import GmailProviderAdapterError
+from app.integrations.gmail.credentials import InMemoryGmailCredentialStore
+from app.integrations.gmail.connector import GmailOAuthFlowError
+from app.integrations.gmail.connector import GoogleGmailConnector
+from app.integrations.gmail.connector import build_configured_google_gmail_connector
 from tests.conftest import NoCloseSession
+
+pytestmark = pytest.mark.usefixtures("usage_database")
 
 
 CLIENT_ID = "google-client-id.apps.googleusercontent.com"
@@ -1019,7 +1017,7 @@ def test_default_http_client_disables_environment_proxy_and_redirects(
             return httpx.Response(200, json={})
 
     monkeypatch.setattr(
-        "app.services.google_gmail_connector.httpx.AsyncClient",
+        "app.integrations.gmail.connector.httpx.AsyncClient",
         FakeClient,
     )
     connector = GoogleGmailConnector(

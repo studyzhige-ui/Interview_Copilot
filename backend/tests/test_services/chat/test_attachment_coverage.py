@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 
-from app.services.chat.attachment_coverage import (
+from app.conversation.application.attachment_coverage import (
     attachment_execution_requirements,
+)
+from app.conversation.application.attachment_coverage import (
     attachment_requirement_block_reason,
 )
 

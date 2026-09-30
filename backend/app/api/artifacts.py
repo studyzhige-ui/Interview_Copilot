@@ -28,9 +28,11 @@ from app.schemas.artifact import (
     ArtifactView,
     ArtifactVersionView,
 )
-from app.services import artifact_service
-from app.services.resume import resume_artifact_service
-from app.services.resume.resume_dispatch_service import dispatch_parse_after_commit
+from app.career.application import artifacts as artifact_service
+from app.career.application.resumes import resume_artifact_service
+from app.career.application.resumes.resume_dispatch_service import (
+    dispatch_parse_after_commit,
+)
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 

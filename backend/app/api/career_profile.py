@@ -31,7 +31,8 @@ from app.schemas.career_profile import (
     PersonalFactMutationInput,
     PersonalFactRemovalInput,
 )
-from app.services import ability_signal_service, career_profile_service
+from app.career.application import signals as ability_signal_service
+from app.career.application import profile as career_profile_service
 
 router = APIRouter(tags=["career-profile"])
 

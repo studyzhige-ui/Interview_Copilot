@@ -94,6 +94,10 @@ class Conversation(Base):
     memory_control_version = Column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    # Historical data retained for rollback, not a second memory cursor.
+    _legacy_memory_extraction_cursor = Column(
+        "memory_extraction_cursor", Integer, nullable=True
+    )
     active_turn_id = Column(String, nullable=True)
     # Explicit guidance for this Conversation only. The original user message
     # remains the exact Interaction Record; this is a small, rebuildable read

@@ -240,7 +240,7 @@ def _generation_contract_sha256() -> str:
     import app.prompts.chat as chat_prompts_module
     import app.rag.application.service as rag_service_module
     import app.rag.grounding.builder as grounding_module
-    import app.services.chat.context_assembly_pipeline as context_module
+    import app.conversation.application.context_assembly_pipeline as context_module
     from evaluation.runners import _run_generation, run_generation
 
     source = "".join(

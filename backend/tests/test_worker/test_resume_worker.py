@@ -2,7 +2,8 @@
 
 
 def test_legacy_resume_reindex_job_is_outside_every_production_lane():
-    from app.services.outbox import CLEANUP_JOB_TYPES, INDEX_JOB_TYPES
+    from app.platform.outbox import CLEANUP_JOB_TYPES
+    from app.platform.outbox import INDEX_JOB_TYPES
 
     retired = "milvus_reindex_resume"
     assert retired not in INDEX_JOB_TYPES

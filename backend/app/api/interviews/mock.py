@@ -2,7 +2,7 @@
 
 Thin router: auth, request/response mapping, and commit/rollback control.
 The run lifecycle (create/answer/finish/abandon) lives in
-``services.interview.mock_flow``; LLM planning in ``mock_interview_service``;
+``interviews.application.mock_flow``; LLM planning in ``mock_interview_service``;
 runtime rows in ``mock_runtime_service``.
 
   start         -> create record + conversation + runtime + opening message
@@ -15,10 +15,10 @@ runtime rows in ``mock_runtime_service``.
   live-state    -> authoritative user-facing transcript for resume/recovery
 """
 
-import asyncio
 import io
 import logging
 import os
+from uuid import UUID
 
 from fastapi import (
     APIRouter,
@@ -45,6 +45,7 @@ from app.schemas.chat import (
     MockAbandonResp,
     MockAnswerAudioResp,
     MockAnswerRequest,
+    MockAnswerReceipt,
     MockAnswerResp,
     MockFinishResp,
     MockInProgressResp,
@@ -56,22 +57,19 @@ from app.schemas.chat import (
     MockStartResp,
     TTSRequest,
 )
-from app.services.interview import (
-    mock_flow,
-    mock_interview_service,
-    mock_runtime_service,
-)
-from app.services.interview.interview_record_service import (
+from app.interviews.application.mock_sources import MockJobDescriptionUnavailable
+from app.interviews.application.preparation import PreparationSourceChanged
+from app.interviews.application import mock_answer_receipts
+from app.interviews.application import mock_flow
+from app.interviews.application import mock_interview_service
+from app.interviews.application import mock_runtime_service
+from app.interviews.application.interview_record_service import (
     InterviewOpportunityNotFoundError,
-    STATUS_MOCK_IN_PROGRESS,
-    STATUS_PROCESSING_REVIEW,
-    STATUS_REVIEW_FAILED,
 )
-from app.services.uploads.file_asset_service import (
-    get_owned_file_asset,
-    mark_file_asset_consumed,
-    store_validated_file_asset,
-)
+from app.interviews.application.interview_record_service import STATUS_MOCK_IN_PROGRESS
+from app.files.application.file_asset_service import get_owned_file_asset
+from app.files.application.file_asset_service import mark_file_asset_consumed
+from app.files.application.file_asset_service import store_validated_file_asset
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +77,11 @@ router = APIRouter(tags=["mock"])
 
 
 def _owned_mock_record_or_404(
-    db: Session, record_id: str, username: str
+    db: Session, record_id: str, username: str, *, for_update: bool = False
 ) -> InterviewRecord:
-    record = mock_flow.get_owned_mock_record(db, record_id, username)
+    record = mock_flow.get_owned_mock_record(
+        db, record_id, username, for_update=for_update
+    )
     if record is None:
         raise HTTPException(status_code=404, detail="Mock interview not found")
     return record
@@ -120,8 +120,21 @@ def start_mock_interview(
             interviewer_style=body.interviewer_style,
             target_question_count=body.target_question_count,
             job_opportunity_id=body.job_opportunity_id,
+            jd_snapshot_id=body.jd_snapshot_id,
+            jd_snapshot_version=body.jd_snapshot_version,
+            purpose=body.purpose,
+            focus=body.focus,
+            resume_version_id=body.resume_version_id,
+            resume_sha256=body.resume_sha256,
+            jd_sha256=body.jd_sha256,
         )
         db.commit()
+    except PreparationSourceChanged as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except MockJobDescriptionUnavailable as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except mock_flow.ResumeNotFoundError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -167,6 +180,26 @@ def start_mock_interview(
     )
 
 
+@router.get(
+    "/mock-interviews/{record_id}/answer-receipts/{request_id}",
+    response_model=MockAnswerReceipt,
+)
+@limiter.limit(RATE_DEFAULT)
+def get_mock_answer_receipt(
+    request: Request,
+    response: Response,
+    record_id: str,
+    request_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    record = _owned_mock_record_or_404(db, record_id, current_user.username)
+    receipt = mock_answer_receipts.read_receipt(db, record.id, str(request_id))
+    if receipt is None:
+        raise HTTPException(404, "回答请求收据尚不存在")
+    return receipt
+
+
 # ── /answer ────────────────────────────────────────────────────────────────
 
 
@@ -183,6 +216,17 @@ async def submit_mock_answer(
     """One turn: persist the candidate's answer, generate the next interviewer
     line from the plan + stage + recent messages, persist it, advance runtime."""
     record = _owned_mock_record_or_404(db, record_id, current_user.username)
+    # Shared read-only fast path before mutable clip validation or runtime lookup.
+    try:
+        replay = mock_answer_receipts.replay(db, record.id, body)
+    except mock_answer_receipts.AnswerRequestConflict as exc:
+        raise HTTPException(409, "请求编号已用于不同回答，请先核对收据。") from exc
+    except mock_answer_receipts.AnswerRequestUnresolved as exc:
+        raise HTTPException(
+            409, "该请求仍在执行或结果未确认，请读取收据，不要自动重新生成。"
+        ) from exc
+    if replay is not None:
+        return replay
     runtime = mock_runtime_service.get_runtime_for_record(
         db, interview_record_id=record_id
     )
@@ -217,10 +261,19 @@ async def submit_mock_answer(
             answer_audio_file_asset_id=body.answer_audio_file_asset_id,
             user_id=current_user.username,
             question_message_id=body.question_message_id,
+            request_id=body.request_id,
         )
+    except (
+        mock_answer_receipts.AnswerRequestConflict,
+        mock_answer_receipts.AnswerRequestUnresolved,
+    ) as exc:
+        db.rollback()
+        raise HTTPException(
+            409, "请求已登记，请核对收据；重新生成需要明确发起新请求。"
+        ) from exc
     except mock_flow.StaleQuestionError as exc:
-        # Raised before any write — rollback only clears the (uncommitted)
-        # clip consumption from above.
+        # May also be a late model result fenced after Phase A committed. Only
+        # the current transaction is rolled back; the saved answer survives.
         db.rollback()
         raise HTTPException(
             status_code=409,
@@ -231,6 +284,12 @@ async def submit_mock_answer(
         raise HTTPException(
             status_code=409,
             detail="正在生成下一道问题，请勿重复提交",
+        ) from exc
+    except mock_flow.PendingAnswerConflictError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="上一次回答已保存，请先核实或重试生成下一题，不能替换已保存的回答。",
         ) from exc
     except mock_interview_service.NextTurnGenerationError as exc:
         db.rollback()
@@ -262,87 +321,40 @@ async def submit_mock_answer(
 
 @router.post("/mock-interviews/{record_id}/finish", response_model=MockFinishResp)
 @limiter.limit(RATE_EXPENSIVE)
-async def finish_mock_interview(
+def finish_mock_interview(
     request: Request,
     response: Response,
     record_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Move the record into processing_review and dispatch the review task,
-    which parses structured QA from the conversation messages and scores it."""
-    record = _owned_mock_record_or_404(db, record_id, current_user.username)
-    # MOCK-3: only an in-progress run can finish — a double-click or a stale
-    # tab must not re-dispatch a review that is already running/done.
-    if record.status != STATUS_MOCK_IN_PROGRESS:
-        raise HTTPException(
-            status_code=409,
-            detail="该面试不在进行中（复盘可能已在生成或已完成）",
+    from app.api.command_errors import command_errors
+
+    with command_errors():
+        result = mock_flow.finish_for_review(
+            db, record_id=record_id, username=current_user.username
         )
-    runtime = mock_runtime_service.get_runtime_for_record(
-        db, interview_record_id=record_id
-    )
-
-    if runtime is None:
-        raise HTTPException(status_code=409, detail="该模拟面试不在进行中")
-
-    # Require at least one answered turn — an interview with no candidate
-    # answers has nothing to review (the FE also gates this, defense in depth).
-    if mock_flow.count_answered_turns(db, runtime.conversation_id) == 0:
-        raise HTTPException(status_code=400, detail="至少回答一题才能生成复盘")
-    record.status = STATUS_PROCESSING_REVIEW
-    await asyncio.to_thread(db.commit)
-
-    try:
-        await asyncio.to_thread(
-            mock_flow.dispatch_review,
-            db,
-            record_id,
-            delete_live_runtime=True,
-        )
-    except Exception as exc:  # noqa: BLE001 — dispatch_review already rolled back
-        raise HTTPException(
-            status_code=503,
-            detail="复盘任务派发失败（任务队列暂不可用），面试内容已保留，请稍后再点一次「结束面试」。",
-        ) from exc
-
-    return MockFinishResp(status="processing_review", record_id=record_id)
+    return MockFinishResp(**result)
 
 
 @router.post(
     "/mock-interviews/{record_id}/retry-review", response_model=MockRetryReviewResp
 )
 @limiter.limit(RATE_EXPENSIVE)
-async def retry_mock_review(
+def retry_mock_review(
     request: Request,
     response: Response,
     record_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Re-run review generation from the preserved conversation messages after
-    a review_failed (or stuck processing_review)."""
-    record = _owned_mock_record_or_404(db, record_id, current_user.username)
-    if record.status not in (STATUS_REVIEW_FAILED, STATUS_PROCESSING_REVIEW):
-        raise HTTPException(status_code=400, detail="当前状态不可重试复盘")
+    from app.api.command_errors import command_errors
 
-    record.status = STATUS_PROCESSING_REVIEW
-    await asyncio.to_thread(db.commit)
-
-    try:
-        await asyncio.to_thread(
-            mock_flow.dispatch_review,
-            db,
-            record_id,
-            rollback_status=STATUS_REVIEW_FAILED,
+    with command_errors():
+        result = mock_flow.finish_for_review(
+            db, record_id=record_id, username=current_user.username, retry=True
         )
-    except Exception as exc:  # noqa: BLE001 — dispatch_review already rolled back
-        raise HTTPException(
-            status_code=503,
-            detail="复盘任务派发失败（任务队列暂不可用），请稍后重试。",
-        ) from exc
-
-    return MockRetryReviewResp(status="processing_review", record_id=record_id)
+    return MockRetryReviewResp(**result)
 
 
 # ── DELETE (abandon) ───────────────────────────────────────────────────────
@@ -350,7 +362,7 @@ async def retry_mock_review(
 
 @router.delete("/mock-interviews/{record_id}", response_model=MockAbandonResp)
 @limiter.limit(RATE_DEFAULT)
-async def abandon_mock_interview(
+def abandon_mock_interview(
     request: Request,
     response: Response,
     record_id: str,
@@ -360,7 +372,9 @@ async def abandon_mock_interview(
     """Actively abandon an unfinished mock: delete its conversation + messages,
     runtime, mock audio assets and the draft record (abandon = this never
     happened)."""
-    record = _owned_mock_record_or_404(db, record_id, current_user.username)
+    record = _owned_mock_record_or_404(
+        db, record_id, current_user.username, for_update=True
+    )
     if record.status != STATUS_MOCK_IN_PROGRESS:
         raise HTTPException(status_code=400, detail="只能放弃进行中的模拟面试")
 
@@ -370,7 +384,7 @@ async def abandon_mock_interview(
 
     try:
         mock_flow.abandon_mock(db, record, runtime)
-        await asyncio.to_thread(db.commit)
+        db.commit()
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         logger.exception("abandon mock failed for %s: %s", record_id, exc)
@@ -454,8 +468,8 @@ async def parse_jd_for_mock(
     _current_user: User = Depends(get_current_user),
 ):
     """Parse a JD file inline and return its plain text. Does NOT persist."""
-    from app.services.interview.document_text import extract_document_text
-    from app.services.uploads.file_validation import read_validated_upload
+    from app.interviews.application.document_text import extract_document_text
+    from app.files.application.file_validation import read_validated_upload
 
     if file.size is not None and file.size > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="JD 文件过大（限制 10MB）")
@@ -501,11 +515,10 @@ async def prepare_answer_audio(
     db: Session = Depends(get_db),
 ):
     """Transcribe and keep one recording without a second client upload."""
-    from app.services.uploads.file_validation import read_validated_upload
-    from app.services.voice.short_clip_transcription import (
-        TranscriptionUnavailable,
-        transcribe_short_clip,
-    )
+    from app.files.application.file_validation import read_validated_upload
+    from app.core.execution_errors import ModelOutcomeUnknownError
+    from app.media.application.short_clip_transcription import TranscriptionUnavailable
+    from app.media.application.short_clip_transcription import transcribe_short_clip
 
     record = _owned_mock_record_or_404(db, record_id, current_user.username)
     runtime = mock_runtime_service.get_runtime_for_record(
@@ -527,6 +540,11 @@ async def prepare_answer_audio(
             stream.write(contents)
         try:
             text = (await transcribe_short_clip(local_path, language="zh")).strip()
+        except ModelOutcomeUnknownError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="转写执行或结算结果未确认，未自动重试。录音仍在当前页面，可以改用文字回答。",
+            ) from exc
         except TranscriptionUnavailable as exc:
             logger.error("Short-clip transcription unavailable: %s", exc)
             raise HTTPException(
@@ -589,19 +607,41 @@ async def synthesize_speech(
     response: Response,
     body: TTSRequest,
     _current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Convert text to speech using edge-tts. Returns an mp3 audio stream."""
-    from app.services.voice.tts_service import tts_service
+    """Generate explicitly selected speech; audio format follows the provider."""
+    from app.media.application.tts_service import tts_service
 
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="Text is empty")
 
-    audio_bytes = await tts_service.synthesize(text=body.text, voice=body.voice)
-    if not audio_bytes:
+    from app.core.model_policy import LocalModelPolicyError
+    from app.local_inference.client import LocalInferenceNotStarted
+    from app.core.execution_errors import ModelOutcomeUnknownError
+
+    # Authentication is complete; retain no database connection during speech.
+    db.close()
+    try:
+        audio = await tts_service.synthesize(text=body.text, voice=body.voice)
+    except (LocalModelPolicyError, LocalInferenceNotStarted) as exc:
+        raise HTTPException(
+            503, "本地语音尚未就绪，请检查模型与推理服务；未切换云端。"
+        ) from exc
+    except ModelOutcomeUnknownError as exc:
+        raise HTTPException(
+            503, "语音生成结果未确认，请使用文字继续；不会自动重试。"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(422, "语音文本、音色或输出超出允许范围。") from exc
+    if not audio.data:
         raise HTTPException(status_code=500, detail="TTS synthesis failed")
 
     return StreamingResponse(
-        iter([audio_bytes]),
-        media_type="audio/mpeg",
-        headers={"Content-Length": str(len(audio_bytes))},
+        iter([audio.data]),
+        media_type=audio.media_type,
+        headers={
+            "Content-Length": str(len(audio.data)),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )

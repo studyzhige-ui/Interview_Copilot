@@ -36,7 +36,7 @@ describe('CareerProfilePage', () => {
       created_at: '2026-08-13T10:00:00Z', resolved_at: null,
     }]);
     vi.mocked(listAbilitySignals).mockResolvedValue([{
-      id: 'signal-1', user_id: 1, topic: '结构化表达', signal_type: 'communication', level: '稳定', score: 80,
+      id: 'signal-1', user_id: 1, topic: '结构化表达', signal_type: 'communication', level: '稳定', score: 8,
       summary: '能够先给结论，再给依据。', confidence: 0.8, limitations: null, scope_kind: 'general', scope_ref_id: null,
       formed_at: '2026-08-13T10:00:00Z', rubric_version: 'v1', status: 'active', status_reason: null,
       supersedes_signal_id: null, version: 1, created_at: '2026-08-13T10:00:00Z', updated_at: '2026-08-13T10:00:00Z',

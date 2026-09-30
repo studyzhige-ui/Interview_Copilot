@@ -19,7 +19,7 @@ from unittest.mock import patch
 import pytest
 from app.api import model_runtime as model_runtime_mod
 from app.core.security import get_current_user
-from app.services.model_sources.providers import PROVIDERS
+from app.providers.catalog.providers import PROVIDERS
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -44,7 +44,7 @@ def client():
 def test_list_providers_returns_every_provider(client, monkeypatch):
     """Frontend renders both enabled + opt-in cards from this one call."""
     # Stub the resolver to avoid hitting the real DB.
-    from app.services.auth.user_provider_settings_service import (
+    from app.identity.application.user_provider_settings_service import (
         ResolvedProviderSettings,
     )
 
@@ -67,7 +67,7 @@ def test_list_providers_returns_every_provider(client, monkeypatch):
         ]
 
     monkeypatch.setattr(
-        "app.services.auth.user_provider_settings_service.resolve_all_provider_settings",
+        "app.identity.application.user_provider_settings_service.resolve_all_provider_settings",
         fake_resolve_all,
     )
     resp = client.get("/api/v1/models/providers")
@@ -91,7 +91,7 @@ def test_get_single_provider_404_when_unknown(client):
 
 
 def test_get_single_provider_returns_shape(client, monkeypatch):
-    from app.services.auth.user_provider_settings_service import (
+    from app.identity.application.user_provider_settings_service import (
         ResolvedProviderSettings,
     )
 
@@ -114,7 +114,7 @@ def test_get_single_provider_returns_shape(client, monkeypatch):
         )
 
     monkeypatch.setattr(
-        "app.services.auth.user_provider_settings_service.resolve_provider_settings",
+        "app.identity.application.user_provider_settings_service.resolve_provider_settings",
         fake_resolve,
     )
     resp = client.get("/api/v1/models/providers/openai")
@@ -233,7 +233,7 @@ def test_patch_returns_404_on_unknown_provider(client, monkeypatch):
 
 def test_patch_happy_path_saves_and_invalidates(client, monkeypatch):
     """Valid override persists; LLM client cache + 60s wrapper get cleared."""
-    from app.services.auth.user_provider_settings_service import (
+    from app.identity.application.user_provider_settings_service import (
         ResolvedProviderSettings,
     )
 
@@ -269,7 +269,7 @@ def test_patch_happy_path_saves_and_invalidates(client, monkeypatch):
         return None
 
     monkeypatch.setattr(
-        "app.services.auth.user_provider_settings_service.upsert_settings",
+        "app.identity.application.user_provider_settings_service.upsert_settings",
         fake_upsert,
     )
     monkeypatch.setattr(
@@ -300,7 +300,7 @@ def test_patch_happy_path_saves_and_invalidates(client, monkeypatch):
 
 def test_patch_clear_via_empty_string(client, monkeypatch):
     """Sending ``api_base_override=""`` clears the override — not a validation error."""
-    from app.services.auth.user_provider_settings_service import (
+    from app.identity.application.user_provider_settings_service import (
         ResolvedProviderSettings,
     )
 
@@ -327,7 +327,7 @@ def test_patch_clear_via_empty_string(client, monkeypatch):
         return None
 
     monkeypatch.setattr(
-        "app.services.auth.user_provider_settings_service.upsert_settings",
+        "app.identity.application.user_provider_settings_service.upsert_settings",
         fake_upsert,
     )
     monkeypatch.setattr(
@@ -348,7 +348,7 @@ def test_patch_clear_via_empty_string(client, monkeypatch):
 def test_delete_provider_settings_clears_cache(client, monkeypatch):
     clear_calls = {"n": 0}
     monkeypatch.setattr(
-        "app.services.auth.user_provider_settings_service.delete_settings",
+        "app.identity.application.user_provider_settings_service.delete_settings",
         lambda *_a, **_kw: True,
     )
     monkeypatch.setattr(
@@ -368,7 +368,7 @@ def test_delete_provider_settings_clears_cache(client, monkeypatch):
 
 def test_delete_provider_settings_noop_when_no_row(client, monkeypatch):
     monkeypatch.setattr(
-        "app.services.auth.user_provider_settings_service.delete_settings",
+        "app.identity.application.user_provider_settings_service.delete_settings",
         lambda *_a, **_kw: False,
     )
     monkeypatch.setattr(

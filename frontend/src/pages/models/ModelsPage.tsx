@@ -15,6 +15,7 @@ import type { ModelProfile } from '@/types/api';
 import { ROLE_DESC, ROLES } from './constants';
 import { useModelsData } from './useModelsData';
 import { VendorCard } from './VendorCard';
+import { ModelUsagePanel } from './ModelUsagePanel';
 import { ShowMoreProvidersModal } from './ShowMoreProvidersModal';
 
 export function ModelsPage() {
@@ -60,6 +61,7 @@ export function ModelsPage() {
 
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto">
+      <ModelUsagePanel />
       <div className="flex flex-wrap items-start gap-3 mb-4">
         <div>
           <h2 className="text-2xl font-semibold text-stone-800">

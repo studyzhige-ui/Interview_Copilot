@@ -79,6 +79,7 @@ class AbilitySignal(Base):
     signal_type = Column(String(64), nullable=False)
     level = Column(String(64), nullable=True)
     score = Column(Float, nullable=True)
+    score_scale_version = Column(String(40), nullable=True, default="score10-v1")
     summary = Column(Text, nullable=False)
     confidence = Column(Float, nullable=True)
     limitations = Column(Text, nullable=True)

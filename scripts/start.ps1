@@ -140,7 +140,7 @@ if (-not $SkipBackend) {
     Push-Location $projectRoot
     try {
         $dockerOutput = @(docker compose up -d --wait --wait-timeout 180 `
-            db redis minio milvus-etcd milvus-minio milvus-standalone 2>&1)
+            db redis minio 2>&1)
         $dockerExit = $LASTEXITCODE
         Save-CommandOutput 'Docker' $dockerOutput
         if ($dockerExit -ne 0) {

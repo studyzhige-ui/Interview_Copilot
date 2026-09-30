@@ -105,7 +105,7 @@ def resolve_threshold(tool_name: str) -> int | float:
     try:
         # Lazy import: registry ← tools ← (this module, via read_file) —
         # importing at module level would risk a cycle through file_tool.
-        from app.agent_runtime.tool_registry import registry
+        from app.agent_runtime.builtin_tools import registry
 
         entry = registry.get(tool_name)
         if entry is not None and entry.max_result_chars > 0:

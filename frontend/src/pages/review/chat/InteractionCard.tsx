@@ -1,3 +1,4 @@
+import { FactConfirmationCard } from '@/pages/interviews/FactConfirmationCard';
 import { useMemo, useState } from 'react';
 import { Link2, MessageCircleQuestion, MonitorCheck, ShieldCheck, X } from 'lucide-react';
 import { resolveAgentInteraction } from '@/api/chat';
@@ -71,6 +72,19 @@ export function InteractionCard({
       setSubmitting(false);
     }
   };
+
+  if (interaction.schema_version !== undefined && interaction.schema_version !== 1) {
+    return <InteractionShell icon={ShieldCheck} title="确认协议需要更新"><p role="alert">该事实确认协议暂不兼容，没有批准任何操作。</p></InteractionShell>;
+  }
+  if (interaction.kind === 'fact_confirmation') {
+    return <FactConfirmationCard key={`${interaction.id}:${interaction.version}`} sessionId={sessionId} turnId={turnId} interaction={interaction} onResolved={onResolved} />;
+  }
+  if (interaction.kind === 'profile_update_confirmation') {
+    return <InteractionShell icon={ShieldCheck} title="档案变更需要核对">
+      <p>请前往求职档案核对具体变更。本入口不将未知的档案协议当作普通工具批准。</p>
+      <a href="/career-profile">查看求职档案</a>
+    </InteractionShell>;
+  }
 
   if (interaction.kind === 'clarification') {
     const question = String(
@@ -168,6 +182,11 @@ export function InteractionCard({
     );
   }
 
+  if (interaction.kind === 'client_readiness'
+    && ['mock_handoff.v1', 'client_action.v1'].includes(String(interaction.request.protocol))) {
+    return <InteractionShell icon={MonitorCheck} title="等待页面交接"><p>请在当前页面完成设备或表单操作。只有绑定客户端的实际回执会继续任务。</p></InteractionShell>;
+  }
+
   if (interaction.kind === 'client_readiness') {
     const requirement = String(
       interaction.request.requirement ?? interaction.request.action ?? '需要当前设备和页面准备就绪。',
@@ -194,6 +213,10 @@ export function InteractionCard({
         </Actions>
       </InteractionShell>
     );
+  }
+
+  if (interaction.kind !== 'approval') {
+    return <InteractionShell icon={ShieldCheck} title="暂不支持的确认请求"><p>请刷新应用后重试，没有批准任何操作。</p></InteractionShell>;
   }
 
   const toolName = String(interaction.request.tool_name ?? interaction.request.action ?? '当前操作');

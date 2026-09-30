@@ -5,7 +5,7 @@ and lives under ``@pytest.mark.slow``. These unit tests cover the pure
 helpers that gate scope, dedup and scoring:
 
   * candidate scope checks — tenant (+ optional source_kind) defence-in-depth.
-  * ``milvus_hybrid._scope_expr`` — the Milvus server-side tenant filter expr.
+  * ``hybrid_index._scope_expr`` — the Milvus server-side tenant filter expr.
   * RRF fusion / normalized text hashing — deterministic dedup.
   * ``RetrievalState`` / ``RetrievalResult`` — the structured-state contract
     that replaced the ``[SYSTEM_EMPTY_WARNING]`` sentinel protocol.
@@ -76,61 +76,39 @@ def test_hit_in_scope_blocks_cross_user_leak():
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_scope_expr_filters_by_user_pk():
-    from app.rag import milvus_hybrid
+def test_sql_scope_uses_canonical_owners_before_ranking():
+    from app.rag.hybrid_index import _scope
+    from sqlalchemy.dialects import postgresql
 
-    # Scope key is the stable users.id pk; no source_kind -> user filter only.
-    assert milvus_hybrid._scope_expr(7, None) == "user_id == 7"
-
-
-def test_scope_expr_adds_source_kind():
-    from app.rag import milvus_hybrid
-
-    expr = milvus_hybrid._scope_expr(7, {"source_kind": "interview_qa"})
-    assert expr == 'user_id == 7 && source_kind == "interview_qa"'
-
-
-def test_scope_expr_supports_document_membership():
-    from app.rag import milvus_hybrid
-
-    expr = milvus_hybrid._scope_expr(7, {"document_id": ["a", "b"]})
-    assert expr == ('user_id == 7 && (document_id == "a" || document_id == "b")')
-
-
-def test_eq_rejects_injection():
-    from app.rag import milvus_hybrid
-
-    with pytest.raises(ValueError):
-        milvus_hybrid._eq("source_kind", 'x" or user_id == 1 or "')
-
-
-def test_hybrid_search_uses_strong_read_after_write_consistency(monkeypatch):
-    from app.rag import milvus_hybrid
-
-    class Client:
-        kwargs = None
-
-        def has_collection(self, _name):
-            return True
-
-        def hybrid_search(self, *_args, **kwargs):
-            self.kwargs = kwargs
-            return [[]]
-
-    client = Client()
-    monkeypatch.setattr(milvus_hybrid, "_get_client", lambda: client)
-
+    query = _scope(
+        7, {"document_id": ["a", "b"], "source_kind": "manual_text"}
+    ).compile(dialect=postgresql.dialect())
+    sql = str(query)
     assert (
-        milvus_hybrid.hybrid_search(
-            milvus_hybrid.KNOWLEDGE,
-            query_text="redis",
-            query_dense=[0.1] * 4,
-            user_pk=7,
-            top_k=3,
-        )
-        == []
+        "knowledge_documents" in sql
+        and "document_chunks" in sql
+        and "file_assets" in sql
     )
-    assert client.kwargs["consistency_level"] == "Strong"
+    assert (
+        "retrieval_entries.user_id =" in sql and "knowledge_documents.user_id =" in sql
+    )
+    assert "document_chunks.user_id =" in sql
+    assert ["a", "b"] in query.params.values() and 7 in query.params.values()
+
+
+def test_filter_injection_is_data_not_sql():
+    from app.rag.hybrid_index import _scope
+
+    malicious = "x' OR 1=1 --"
+    compiled = _scope(7, {"document_id": [malicious]}).compile()
+    assert malicious not in str(compiled) and [malicious] in compiled.params.values()
+
+
+def test_explicit_empty_scope_cannot_become_a_global_search():
+    from app.rag.hybrid_index import _scope
+
+    compiled = _scope(7, {"document_id": []}).compile()
+    assert [] in compiled.params.values()
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -198,9 +176,12 @@ def test_empty_reason_enum_is_frozen():
         "no_candidates",
         "all_below_threshold",
         "all_filtered_live_check",
-        "milvus_unavailable",
+        "index_unavailable",
         "reranker_unavailable",
         "principal_unresolved",
+        "capacity_exhausted",
+        "retrieval_incomplete",
+        "canonical_unavailable",
     }
 
 
@@ -227,10 +208,12 @@ def test_retrieval_result_hit_property():
 
 
 @pytest.mark.slow
-def test_retrieval_pipeline_requires_live_milvus():
+def test_retrieval_pipeline_requires_real_local_models():
     """Marker test — the full integration is exercised in slow CI only.
 
     Kept here so ``pytest -m slow`` discovers it; the body is intentionally
     a noop because the unit suite cannot rely on a live Milvus / reranker.
     """
-    pytest.skip("Requires live Milvus + reranker; covered in nightly CI.")
+    pytest.skip(
+        "Requires actual local embedding/reranker models; not executed by unit or database-only CI."
+    )

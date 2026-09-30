@@ -13,6 +13,8 @@ const api = vi.hoisted(() => ({
   retractGmailObservation: vi.fn(),
 }));
 vi.mock('@/api/gmailObservations', () => api);
+const notice = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock('@/store/uiStore', () => ({ toast: notice }));
 vi.mock('@/api/careerProcess', () => ({ listJobOpportunities: vi.fn().mockResolvedValue([]) }));
 
 import { GmailObservationCards } from './GmailObservationCards';
@@ -88,13 +90,23 @@ describe('GmailObservationCards', () => {
     renderCards();
     expect(await screen.findByText('Interview invitation')).toBeInTheDocument();
     expect(screen.getByText('公司相同，但岗位无法唯一匹配。')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '批准并记录' }));
+    fireEvent.click(screen.getByRole('button', { name: '转入面试事实确认' }));
     await waitFor(() => expect(api.resolveGmailReviewCard).toHaveBeenCalledWith(expect.objectContaining({
       taskId: task.id,
       card,
       decision: 'approve',
       eventKind: 'interview_scheduled',
     })));
+  });
+
+  it('does not claim an invitation was applied when the legacy card is handed off', async () => {
+    api.resolveGmailReviewCard.mockResolvedValue({ outcome: 'pending_confirmation',
+      invitation_handoff: { candidate_id: 'candidate-1', canonical_write: false },
+      process_event_id: null });
+    renderCards();
+    fireEvent.click(await screen.findByRole('button', { name: '转入面试事实确认' }));
+    await waitFor(() => expect(notice.success).toHaveBeenCalledWith(expect.stringContaining('尚未写入正式面试安排')));
+    expect(notice.success).not.toHaveBeenCalledWith('已写入岗位事实时间线');
   });
 
   it('shows an explicit append-only retraction path for automatic applications', async () => {

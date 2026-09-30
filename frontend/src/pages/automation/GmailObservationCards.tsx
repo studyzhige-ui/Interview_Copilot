@@ -72,11 +72,14 @@ export function GmailObservationCards({
   const observationSet = new Set(observationIds);
   const reports = (observationsQuery.data ?? []).filter(
     (observation) => observationSet.has(observation.id)
+      && !observation.invitation_handoff
       && ['applied', 'retracted'].includes(observation.status),
   );
 
   const refresh = async () => {
     await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['workspace'] }),
+      queryClient.invalidateQueries({ queryKey: ['pending-interactions'] }),
       queryClient.invalidateQueries({ queryKey: cardsKey }),
       queryClient.invalidateQueries({ queryKey: observationsKey }),
       queryClient.invalidateQueries({ queryKey: ['persistent-task', task.id, 'triggers'] }),
@@ -113,7 +116,7 @@ export function GmailObservationCards({
           <Inbox size={17} className="mt-0.5 shrink-0 text-primary-600" />
           <div>
             <h3 className="text-sm font-medium text-stone-800">Gmail Observation 待处理合集</h3>
-            <p className="mt-0.5 text-xs text-stone-500">模糊匹配只停留在本任务；批准后才进入岗位事实时间线。高置信自动记录可在下方撤销。</p>
+            <p className="mt-0.5 text-xs text-stone-500">面试邀请始终转入工作台的事实确认，不会因高置信度直接写入安排。其他已授权的自动记录可在下方撤销。</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -142,6 +145,23 @@ export function GmailObservationCards({
             />
           ))}
         </div>
+      )}
+
+      {(observationsQuery.data ?? []).some((observation) => observationSet.has(observation.id)
+        && observation.candidate_event_kind === 'interview_scheduled'
+        && (observation.invitation_handoff
+          ? ['needs_clarification', 'pending_confirmation'].includes(observation.invitation_handoff.candidate_status)
+          : observation.status === 'pending_confirmation')) && (
+        <p role="status" className="mt-3 text-sm text-stone-600">
+          面试邀请正在等待核对；<a href="/today" className="underline">到工作台确认时间与岗位</a>。尚未写入正式面试安排。
+        </p>
+      )}
+
+      {(observationsQuery.data ?? []).some((observation) => observationSet.has(observation.id)
+        && observation.invitation_handoff?.candidate_status === 'confirmed') && (
+        <p role="status" className="mt-3 text-sm text-stone-600">
+          已确认的邀请由面试记录保存；<a href="/interviews" className="underline">查看正式安排</a>。
+        </p>
       )}
 
       {reports.length > 0 && (
@@ -214,7 +234,7 @@ function ReviewCardItem({
   const resolve = async (decision: 'approve' | 'reject' | 'skip') => {
     setBusy(true);
     try {
-      await resolveGmailReviewCard({
+      const result = await resolveGmailReviewCard({
         taskId: task.id,
         card,
         decision,
@@ -225,7 +245,12 @@ function ReviewCardItem({
         resolutionNote: decision === 'approve' ? '用户确认或修正候选后批准' : undefined,
       });
       await onResolved();
-      toast.success(decision === 'approve' ? '已写入岗位事实时间线' : decision === 'reject' ? '已拒绝候选' : '已跳过候选');
+      toast.success(result.invitation_handoff
+        ? '已转入工作台的面试邀请事实确认；尚未写入正式面试安排'
+        : decision === 'approve' && result.outcome === 'applied' && result.process_event_id
+          ? '已写入岗位事实时间线'
+          : decision === 'reject' ? '已拒绝候选'
+            : decision === 'skip' ? '已跳过候选' : '请求已受理，请核对最新状态');
     } catch (error) {
       toast.error(extractErr(error));
     } finally {
@@ -261,7 +286,7 @@ function ReviewCardItem({
       <div className="mt-3 flex flex-wrap justify-end gap-2">
         <Btn kind="ghost" size="sm" icon={<SkipForward size={13} />} disabled={busy} onClick={() => { void resolve('skip'); }}>跳过</Btn>
         <Btn kind="outline" size="sm" icon={<X size={13} />} disabled={busy} onClick={() => { void resolve('reject'); }}>拒绝</Btn>
-        <Btn size="sm" icon={<Check size={13} />} loading={busy} disabled={!canApprove || !description.trim()} onClick={() => { void resolve('approve'); }}>批准并记录</Btn>
+        <Btn size="sm" icon={<Check size={13} />} loading={busy} disabled={!canApprove || !description.trim()} onClick={() => { void resolve('approve'); }}>{eventKind === 'interview_scheduled' ? '转入面试事实确认' : '批准并记录'}</Btn>
       </div>
     </article>
   );

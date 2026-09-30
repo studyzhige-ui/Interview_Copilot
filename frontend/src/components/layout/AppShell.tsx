@@ -2,6 +2,7 @@ import { ReactNode, useLayoutEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { SideNav } from './SideNav';
 import { TopBar } from './TopBar';
+import { CopilotWorkspace } from './CopilotWorkspace';
 import { ClientActionBridge } from './ClientActionBridge';
 import { workspaceFor } from './navigation';
 
@@ -36,14 +37,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   )?.[1];
 
   return (
-    <div className="workspace-shell">
+    <CopilotWorkspace>{(openCopilot) => <div className="workspace-shell">
       <a className="skip-to-content" href="#workspace-content">跳到主要内容</a>
       <SideNav />
       <div className="flex-1 min-w-0 min-h-0 flex flex-col">
-        <TopBar pageTitle={title} />
+        <TopBar pageTitle={title} onOpenCopilot={loc.pathname === '/general-chat' ? undefined : openCopilot} />
         <main ref={contentRef} id="workspace-content" tabIndex={-1} className="workspace-content flex-1 min-h-0 overflow-auto">{children}</main>
         <ClientActionBridge />
       </div>
-    </div>
+    </div>}</CopilotWorkspace>
   );
 }

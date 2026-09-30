@@ -1,3 +1,4 @@
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -75,10 +76,17 @@ async function microphoneReadiness(): Promise<MockClientUiResult> {
   }
 }
 
-/** Stable AppShell consumer for the one fixed Mock Client Action contract. */
+/** Stable AppShell consumer for versioned product-owned Client Actions. */
 export function ClientActionBridge() {
   const navigate = useNavigate();
   const processing = useRef(new Set<string>());
+  const [voiceFallback, setVoiceFallback] = useState<{
+    reason: string; resolve: (result: MockClientUiResult) => void;
+  } | null>(null);
+  const fallbackRef = useRef<((result: MockClientUiResult) => void) | null>(null);
+  useEffect(() => () => {
+    fallbackRef.current?.({ outcome: 'failed', reason: '客户端在选择回答方式之前已关闭' });
+  }, []);
   const [stranded, setStranded] = useState<MockClientActionNotice | null>(null);
 
   const pollNext = useCallback(async (notice: MockClientActionNotice) => {
@@ -107,13 +115,30 @@ export function ClientActionBridge() {
         let result: MockClientUiResult;
         if (action.action === 'mock_interview.check_readiness') {
           result = await microphoneReadiness();
+          if (result.outcome !== 'acknowledged') {
+            const reason = result.reason ?? '麦克风不可用';
+            result = await new Promise<MockClientUiResult>((resolve) => {
+              fallbackRef.current = resolve;
+              setVoiceFallback({ reason, resolve });
+            });
+            fallbackRef.current = null;
+            setVoiceFallback(null);
+          }
         } else if (!clientGuardAllows(action)) {
           result = { outcome: 'refused', reason: '当前页面有未保存内容，用户取消了跳转' };
+        } else if (action.action === 'interview.preparation.open' && action.payload.kind === 'interview_preparation_open') {
+          // Subscribe before navigation so a quickly mounted page cannot race its ACK.
+          const receipt = waitForMockClientActionUiResult(action.action_id);
+          navigate(`/interviews?interview=${encodeURIComponent(action.payload.interview_id)}`, {
+            state: { mockClientAction: action } satisfies MockRouteActionState,
+          });
+          result = await receipt;
         } else {
+          const receipt = waitForMockClientActionUiResult(action.action_id, action.action === 'mock_interview.prefill' ? 15 * 60_000 : 30_000);
           navigate('/mock', {
             state: { mockClientAction: action } satisfies MockRouteActionState,
           });
-          result = await waitForMockClientActionUiResult(action.action_id);
+          result = await receipt;
         }
         await resolveMockClientAction(
           effectiveNotice,
@@ -121,7 +146,7 @@ export function ClientActionBridge() {
           getSourceClientId(),
           result,
         );
-        if (action.action === 'mock_interview.enter_live') {
+        if (action.action === 'mock_interview.enter_live' || action.action === 'interview.preparation.open' || result.outcome !== 'acknowledged') {
           saveActiveHandoff(null);
           return;
         }
@@ -177,6 +202,12 @@ export function ClientActionBridge() {
     }
   };
 
+  if (voiceFallback) return (
+    <ConfirmDialog open title="语音不可用"
+      description={`${voiceFallback.reason}。可以继续文字面试，不会重复创建面试。`}
+      confirmText="改用文字面试" onCancel={() => voiceFallback.resolve({ outcome: 'refused', reason: '用户取消语音面试' })}
+      onConfirm={() => voiceFallback.resolve({ outcome: 'acknowledged', readiness: 'ready', fallback_mode: 'text' })} />
+  );
   if (!stranded) return null;
   return (
     <div className="fixed bottom-5 right-5 z-50 max-w-sm rounded-xl border border-amber-200 bg-white p-4 shadow-xl">

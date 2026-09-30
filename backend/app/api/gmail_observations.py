@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import logging
 
+from app.career.application.interview_invitation_operations import (
+    InterviewInvitationOperationError,
+)
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -20,12 +24,10 @@ from app.schemas.gmail_observation import (
     GmailObservationSyncView,
     GmailObservationView,
 )
-from app.services import (
-    gmail_integration_service,
-    gmail_observation_service,
-    gmail_observation_sync_service,
-)
-from app.services.career_process_service import CareerProcessError
+from app.integrations.gmail import contract as gmail_integration_service
+from app.integrations.gmail import observations as gmail_observation_service
+from app.integrations.gmail import sync as gmail_observation_sync_service
+from app.career.application.process import CareerProcessError
 
 
 router = APIRouter(tags=["gmail-observations"])
@@ -239,6 +241,7 @@ def resolve_gmail_review_card(
         db.commit()
         return GmailObservationResolutionView(
             outcome=result.outcome,
+            invitation_handoff=result.invitation_handoff,
             observation=gmail_observation_service.get_observation(
                 db,
                 user_pk=current_user.id,
@@ -255,6 +258,7 @@ def resolve_gmail_review_card(
     except (
         gmail_observation_service.GmailObservationError,
         CareerProcessError,
+        InterviewInvitationOperationError,
     ) as exc:
         db.rollback()
         if isinstance(exc, gmail_observation_service.GmailObservationError):

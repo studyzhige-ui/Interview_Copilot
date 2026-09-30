@@ -144,9 +144,9 @@ fi
 # -----------------------------------------------------------------------------
 # 5. Infrastructure
 # -----------------------------------------------------------------------------
-step "Starting Docker infrastructure (postgres, redis, minio, milvus)"
+step "Starting Docker infrastructure (postgres/pgvector, redis, minio)"
 ( cd "$PROJECT_ROOT" && docker compose up -d --wait --wait-timeout 180 \
-    db redis minio milvus-etcd milvus-minio milvus-standalone ) \
+    db redis minio ) \
     || fail "Infrastructure did not become healthy."
 ( cd "$PROJECT_ROOT" && docker compose run --rm --no-deps minio-create-bucket ) \
     || fail "MinIO bucket initialization failed."

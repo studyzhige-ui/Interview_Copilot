@@ -22,6 +22,7 @@ from threading import Lock
 from app.core import model_catalog
 from app.core.model_catalog import ROLE_DEFAULTS, USER_SELECTABLE_ROLES, ModelProfile
 from app.core.model_readiness import ready_profile_ids
+from app.core.model_connection_error import ModelConnectionUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +79,8 @@ def _load_user_selection(user_id: str) -> dict[str, str]:
             )
         return {str(role): str(pid) for role, pid in rows}
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Failed to load model selection for user=%s: %s",
-            user_id,
-            exc,
-        )
-        return dict(ROLE_DEFAULTS)
+        logger.warning("Model selection lookup unavailable (%s)", type(exc).__name__)
+        raise ModelConnectionUnavailable() from exc
 
 
 def _save_user_selection(user_id: str, selection: dict[str, str]) -> None:
@@ -117,8 +114,8 @@ def get_runtime_selection(user_id: str | None = None) -> dict[str, str]:
     """Return the active model selection for ``user_id``.
 
     Without ``user_id`` (startup contexts) returns ROLE_DEFAULTS. With
-    it, reads the user's ``user_model_selections`` rows and falls back to
-    defaults on any error.
+    it, reads the user's ``user_model_selections`` rows. Only absent selections
+    use defaults; storage failure must not silently change the chosen model.
     """
     with _selection_lock:
         if user_id is None:

@@ -2,7 +2,7 @@
 
 One row per (user, provider) when the user has customised ANYTHING about how
 they talk to that vendor. Missing row = the user is happy with the defaults in
-``app/services/model_sources/providers.py``.
+``app/providers/catalog/providers.py``.
 
 Stored separately from ``user_model_credentials`` (the encrypted key) because
 this table holds NON-SENSITIVE config (api_base, organization id, headers);

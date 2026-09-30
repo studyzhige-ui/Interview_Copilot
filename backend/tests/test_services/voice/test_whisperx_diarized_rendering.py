@@ -3,8 +3,8 @@
 import os
 from types import SimpleNamespace
 
-from app.services.voice import whisperx_engine
-from app.services.voice.whisperx_engine import _segments_to_markdown
+from app.media.application import whisperx_engine
+from app.media.application.whisperx_engine import _segments_to_markdown
 
 
 def test_ffmpeg_resolver_uses_conda_library_bin(monkeypatch, tmp_path):

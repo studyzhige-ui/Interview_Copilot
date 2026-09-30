@@ -8,8 +8,8 @@ import pytest
 
 from app.models.resume import Resume
 from app.models.user import User
-from app.services.interview import analysis_intake
-from app.services.resume import resume_artifact_service
+from app.interviews.application import analysis_intake
+from app.career.application.resumes import resume_artifact_service
 
 
 def _user(db_session) -> User:

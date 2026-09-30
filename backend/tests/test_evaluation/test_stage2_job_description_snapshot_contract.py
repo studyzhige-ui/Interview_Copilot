@@ -22,7 +22,7 @@ def test_snapshot_is_opportunity_owned_append_only_state() -> None:
 
 
 def test_snapshot_intake_has_concrete_owned_sources_only() -> None:
-    service = _read("backend/app/services/job_description_snapshot_service.py")
+    service = _read("backend/app/career/application/job_descriptions.py")
 
     assert '{"read_url", "search_jobs"}' in service
     assert 'AgentToolCall.status == "completed"' in service
@@ -34,7 +34,7 @@ def test_snapshot_intake_has_concrete_owned_sources_only() -> None:
 
 
 def test_application_event_freezes_snapshot_at_event_time() -> None:
-    service = _read("backend/app/services/career_process_service.py")
+    service = _read("backend/app/career/application/process.py")
 
     assert "at_or_before=command.occurred_at" in service
     assert (
@@ -49,7 +49,7 @@ def test_application_event_freezes_snapshot_at_event_time() -> None:
 
 
 def test_analysis_context_verifies_the_frozen_database_row() -> None:
-    service = _read("backend/app/services/career_process_service.py")
+    service = _read("backend/app/career/application/process.py")
 
     assert "JobDescriptionSnapshot.id == snapshot_id" in service
     assert "JobDescriptionSnapshot.version == snapshot_version" in service

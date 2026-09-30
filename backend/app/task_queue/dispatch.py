@@ -9,16 +9,26 @@ def dispatch_conversation_turn(turn_id: str) -> AsyncResult:
     return celery_app.send_task("tasks.process_conversation_turn", args=[turn_id])
 
 
-def dispatch_interview_analysis(record_id: str, **kwargs) -> AsyncResult:
+def dispatch_interview_analysis(
+    record_id: str, *, task_id: str | None = None, **kwargs
+) -> AsyncResult:
     return celery_app.send_task(
         "tasks.process_interview_analysis",
         args=[record_id],
         kwargs=kwargs,
+        task_id=task_id,
     )
 
 
-def dispatch_mock_interview_review(record_id: str) -> AsyncResult:
-    return celery_app.send_task("tasks.process_mock_interview_review", args=[record_id])
+def dispatch_mock_interview_review(
+    record_id: str, *, task_id: str | None = None, review_generation: int = 0
+) -> AsyncResult:
+    return celery_app.send_task(
+        "tasks.process_mock_interview_review",
+        args=[record_id],
+        kwargs={"review_generation": review_generation},
+        task_id=task_id,
+    )
 
 
 def dispatch_document_ingestion(document_id: str) -> AsyncResult:

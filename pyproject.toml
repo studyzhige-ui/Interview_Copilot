@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "interview-copilot"
 version = "0.1.0"
-description = "Cloud-first career copilot for job search, interviews, artifacts, and agent workflows"
+description = "Local-first career copilot for job search, interviews, artifacts, and agent workflows"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -21,8 +21,8 @@ dependencies = [
     "redis==8.1.0",
     "celery==5.6.3",
     "boto3==1.43.67",
-    # Match the deployed Milvus 2.6 server line; PyMilvus 3.x targets Milvus 3.
-    "pymilvus==2.6.17",
+    # PostgreSQL vector projection; local ML libraries stay in their own environment.
+    "pgvector==0.5.0",
     # Configuration and security
     "python-dotenv==1.2.2",
     "pydantic[email]==2.13.4",
@@ -46,14 +46,17 @@ dependencies = [
     "llama-index-readers-file==0.6.0",
     "pypdf==6.15.0",
     "pymupdf==1.28.2",
-    "llama-parse==0.6.94",
     "python-docx==1.2.0",
     "python-pptx==1.0.2",
     "openpyxl==3.1.5",
     "beautifulsoup4==4.15.0",
     "charset-normalizer==3.4.9",
     "tree-sitter==0.26.0",
-    "tree-sitter-language-pack==1.14.3",
+    # Installed native grammars: no lazy network download during code ingestion.
+    "tree-sitter-python==0.25.0",
+    "tree-sitter-java==0.23.5",
+    "tree-sitter-cpp==0.23.4",
+    "tree-sitter-c==0.24.1",
     # Agent capabilities
     "httpx==0.28.1",
     "markdownify==1.2.3",
@@ -110,6 +113,10 @@ evaluation = [
 [tool.setuptools]
 package-dir = {"" = "backend"}
 
+[tool.setuptools.package-data]
+"app.providers.catalog" = ["seed_catalog.json"]
+"app.conversation" = ["context_templates/*.md", "context_templates/LICENSE.*", "context_templates/NOTICE.*"]
+
 [tool.setuptools.packages.find]
 where = ["backend"]
 include = ["app*"]
@@ -123,7 +130,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "slow: marks tests that require significant time (e.g. model loading)",
-    "integration: marks tests that require external services (DB, Milvus, Redis)",
+    "integration: marks tests that require external services (PostgreSQL, Redis)",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning:sqlalchemy",

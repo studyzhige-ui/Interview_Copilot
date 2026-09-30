@@ -62,6 +62,24 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        from sqlalchemy import inspect, text
+
+        tables = set(inspect(connection).get_table_names())
+        if "alembic_version" in tables:
+            versions = set(
+                connection.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalars()
+            )
+            legacy_private = (
+                bool(versions & {f"{n:04}" for n in range(47, 60)})
+                and "token_revocations" not in tables
+            )
+            if legacy_private:
+                raise RuntimeError(
+                    "Unpublished PR2 migration baseline detected. Back up and stop writers, then use scripts/upgrade_legacy_pr2.py; never stamp or overwrite revision history"
+                )
+            connection.rollback()
         context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():

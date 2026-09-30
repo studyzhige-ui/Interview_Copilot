@@ -117,6 +117,7 @@ describe('CareerProcessPage', () => {
     expect(screen.getByText('Backend / Agent')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '关联求职方向' }));
     expect(screen.getByRole('checkbox', { name: /Backend \/ Agent/ })).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(screen.getByText('整理一面复盘')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Offer 条款/ })).toHaveAttribute('href', '/career-process/job-1/offer');
     const handoffs = screen.getAllByRole('link', { name: /询问 Copilot/ });

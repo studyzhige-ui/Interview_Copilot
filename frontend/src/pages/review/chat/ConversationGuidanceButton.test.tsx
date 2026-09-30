@@ -41,7 +41,7 @@ describe('ConversationGuidanceButton', () => {
   it('defaults to the latest persisted user message id, never its sequence', async () => {
     renderControl();
     fireEvent.click(screen.getByRole('button', { name: '对话规则' }));
-    fireEvent.change(await screen.findByLabelText('当前对话规则'), { target: { value: '先给结论' } });
+    fireEvent.change(await screen.findByRole('textbox', { name: '当前对话规则' }), { target: { value: '先给结论' } });
     expect(screen.getByLabelText('对话规则来源消息')).toHaveValue('19');
     fireEvent.click(screen.getByRole('button', { name: '保存到当前对话' }));
     await waitFor(() => expect(api.updateConversationGuidance).toHaveBeenCalledWith(
@@ -56,7 +56,7 @@ describe('ConversationGuidanceButton', () => {
     });
     renderControl();
     fireEvent.click(screen.getByRole('button', { name: '对话规则' }));
-    fireEvent.change(await screen.findByLabelText('当前对话规则'), { target: { value: '先给结论' } });
+    fireEvent.change(await screen.findByRole('textbox', { name: '当前对话规则' }), { target: { value: '先给结论' } });
     expect(screen.getByRole('button', { name: '保存到当前对话' })).toBeDisabled();
     expect(screen.getByText(/没有已持久化的用户消息/)).toBeInTheDocument();
   });

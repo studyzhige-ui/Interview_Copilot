@@ -31,6 +31,8 @@ def test_all_prompt_templates_render() -> None:
             resume="resume",
             jd="jd",
             style="style",
+            specification="full",
+            stage_contract="self introduction, project, technical, questions",
         ),
         MOCK_INTERVIEW_NEXT_TURN_PROMPT.format(
             prefix="prefix",
@@ -44,7 +46,9 @@ def test_all_prompt_templates_render() -> None:
             stage_keys_hint="technical | candidate_questions",
         ),
         RESUME_PARSE_PROMPT.format(resume_text="resume"),
-        SPEAKER_ROLE_PROMPT.format(turns="turns", required_speakers="speakers"),
+        SPEAKER_ROLE_PROMPT.format(
+            required_speakers="SPEAKER_00, SPEAKER_01", turns="turns"
+        ),
         UTTERANCE_STRUCTURE_PROMPT.format(roles="roles", window="window"),
         QA_EPISODE_PROMPT.format(utterances="utterances"),
         QUESTION_ANALYSIS_PROMPT.format(

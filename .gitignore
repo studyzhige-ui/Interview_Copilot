@@ -3,6 +3,7 @@
 .env.*
 !.env.cloud.example
 !.env.community.example
+!.env.local-first.example
 
 # User-local prompt scratchpad (not project content)
 docs/prompts/
@@ -24,6 +25,9 @@ build/
 dist/
 *.egg-info/
 *.egg
+
+# Node development dependencies (including isolated contract tooling)
+node_modules/
 
 # Runtime data
 data/
@@ -62,3 +66,5 @@ Thumbs.db
 
 # Exports
 exports/
+
+/scripts/contract_codegen/node_modules

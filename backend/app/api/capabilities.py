@@ -12,7 +12,8 @@ from app.schemas.capabilities import (
     SkillResourcesReplaceRequest,
     SkillUpdateRequest,
 )
-from app.services.capabilities import mcp_server_service, skill_service
+from app.capabilities.application import mcp_server_service
+from app.capabilities.application import skill_service
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
 

@@ -13,8 +13,8 @@ from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
 from app.schemas.ability_signal import AbilitySignalCreateInput
-from app.services import ability_signal_service
-from app.services.resume import resume_artifact_service
+from app.career.application import signals as ability_signal_service
+from app.career.application.resumes import resume_artifact_service
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

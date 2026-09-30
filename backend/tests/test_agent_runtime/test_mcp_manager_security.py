@@ -13,7 +13,7 @@ from app.agent_runtime.mcp.manager import (
     _validated_stdio_config_env,
 )
 from app.core.config import settings
-from app.services.capabilities.mcp_server_service import MCPServerConfig
+from app.capabilities.application.mcp_server_service import MCPServerConfig
 
 manager_module = import_module("app.agent_runtime.mcp.manager")
 

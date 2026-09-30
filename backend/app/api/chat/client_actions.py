@@ -18,13 +18,11 @@ from app.schemas.client_action import (
     MockClientActionTakeoverRequest,
     MockClientActionView,
 )
-from app.services.chat.client_action_service import (
-    ClientActionConflictError,
-    ClientActionNotFoundError,
-    pending_action_for_client,
-    resolve_pending_action,
-    takeover_pending_action,
-)
+from app.conversation.application.client_action_service import ClientActionConflictError
+from app.conversation.application.client_action_service import ClientActionNotFoundError
+from app.conversation.application.client_action_service import pending_action_for_client
+from app.conversation.application.client_action_service import resolve_pending_action
+from app.conversation.application.client_action_service import takeover_pending_action
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["client-actions"])
@@ -117,12 +115,10 @@ async def resolve_client_action(
 ):
     """Persist ack/refusal/failure and resume the same Turn/Tool Call once."""
 
-    from app.services.chat.turn_event_buffer import turn_event_buffer
-    from app.services.chat.turn_executor import (
-        fail_pending_turn,
-        resume_waiting_turn,
-        schedule_turn,
-    )
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_executor import fail_pending_turn
+    from app.conversation.application.turn_executor import resume_waiting_turn
+    from app.conversation.application.turn_executor import schedule_turn
 
     user_pk = resolve_user_pk(db, current_user.username)
     try:

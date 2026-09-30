@@ -20,20 +20,18 @@ from app.schemas.career_profile import (
     FactDraftChange,
     SkillFactInput,
 )
-from app.services.career_profile_service import (
-    CareerProfileConflictError,
-    CareerProfileSourceError,
-    accept_profile_draft_change,
-    create_profile_draft_change,
-    ensure_career_profile,
-    get_career_profile,
-    profile_draft_view,
-    reject_profile_draft_change,
-    resolve_profile_candidate_items,
-    upsert_personal_fact,
-    upsert_profile_direction,
-)
-from app.services.resume import resume_artifact_service
+from app.career.application.profile import CareerProfileConflictError
+from app.career.application.profile import CareerProfileSourceError
+from app.career.application.profile import accept_profile_draft_change
+from app.career.application.profile import create_profile_draft_change
+from app.career.application.profile import ensure_career_profile
+from app.career.application.profile import get_career_profile
+from app.career.application.profile import profile_draft_view
+from app.career.application.profile import reject_profile_draft_change
+from app.career.application.profile import resolve_profile_candidate_items
+from app.career.application.profile import upsert_personal_fact
+from app.career.application.profile import upsert_profile_direction
+from app.career.application.resumes import resume_artifact_service
 
 
 def _user(db_session, prefix: str = "profile") -> User:

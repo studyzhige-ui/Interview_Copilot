@@ -34,18 +34,18 @@ from app.schemas.interview_invitation import (
     OpportunityResolution,
     RejectInterviewInvitationCandidate,
 )
-from app.services.chat.current_turn_source import (
-    CurrentTurnSourceError,
+from app.conversation.application.current_turn_source import CurrentTurnSourceError
+from app.conversation.application.current_turn_source import (
     require_current_turn_user_message,
 )
-from app.services.chat.client_action_service import (
-    ClientActionConflictError,
+from app.conversation.application.client_action_service import ClientActionConflictError
+from app.conversation.application.client_action_service import (
     ClientActionUnavailableError,
-    action_resolution,
-    create_client_action,
-    find_client_action,
-    latest_handoff_client,
 )
+from app.conversation.application.client_action_service import action_resolution
+from app.conversation.application.client_action_service import create_client_action
+from app.conversation.application.client_action_service import find_client_action
+from app.conversation.application.client_action_service import latest_handoff_client
 
 
 class ConfirmAssertedInterviewInvitationArgs(BaseModel):
