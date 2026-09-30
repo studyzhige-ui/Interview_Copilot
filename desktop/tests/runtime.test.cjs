@@ -31,13 +31,13 @@ test('foreign container ownership rejects before any mutating command', async ()
   await assert.rejects(runtime.inspectOwned(state), /标识冲突/);
   assert.deepEqual(calls.map(args => args[2]), ['ps', 'inspect']);
 });
-test('stop is scoped to the owned project and never removes containers or data volumes', async () => {
+for (const [platform, endpoint] of [['linux', 'unix:///var/run/docker.sock'], ['win32', 'npipe:////./pipe/docker_engine']]) test(`stop on ${platform} is scoped to the owned project and never removes containers or data volumes`, async () => {
   const calls = [];
-  const runtime = new ComposeRuntime({ root: '/unused', resources: '/unused', bundle: state.bundle, auth, run: async (_exe, args) => { calls.push(args); return ''; } });
+  const runtime = new ComposeRuntime({ root: '/unused', resources: '/unused', bundle: state.bundle, auth, platform, run: async (_exe, args) => { calls.push(args); return ''; } });
   runtime.check = async () => {}; runtime.load = async options => { assert.deepEqual(options, { create: false, allowBundleMismatch: true }); return state; };
   runtime.inspectOwned = async () => [{ Id: 'a'.repeat(64) }];
   assert.deepEqual(await runtime.stop(), { stopped: true, dataRetained: true });
-  assert.deepEqual(calls, [['--host', 'unix:///var/run/docker.sock', 'stop', '--time', '30', 'a'.repeat(64)]]);
+  assert.deepEqual(calls, [['--host', endpoint, 'stop', '--time', '30', 'a'.repeat(64)]]);
 });
 test('Windows container mode is rejected and no start is attempted', async () => {
   const calls = [];
@@ -56,4 +56,13 @@ test('Windows checks always pin the official local named pipe irrespective of se
   const runtime = new ComposeRuntime({ root: '/unused', resources: '/unused', bundle: state.bundle, auth, platform: 'win32', run: async (_exe, args) => { calls.push(args); return args.includes('info') ? JSON.stringify({ OSType: 'linux', OperatingSystem: 'Docker Desktop' }) : '2.40.0'; } });
   await runtime.check();
   assert.ok(calls.every(args => args[0] === '--host' && args[1] === 'npipe:////./pipe/docker_engine'));
+});
+
+test('CLI failures keep diagnostics out of user-visible errors and opt in only through the observer', async () => {
+  const { command } = require('../runtime/compose.cjs');
+  const args = ['-e', "process.stderr.write('synthetic-private-cli-value'); process.exit(2)"];
+  let observed;
+  await assert.rejects(command(process.execPath, args), error => !error.message.includes('synthetic-private-cli-value') && error.message.includes('退出码 2'));
+  await assert.rejects(command(process.execPath, args, { onFailureDiagnostic: value => { observed = value; throw new Error('observer-failed'); } }), /退出码 2/);
+  assert.equal(observed, 'synthetic-private-cli-value');
 });

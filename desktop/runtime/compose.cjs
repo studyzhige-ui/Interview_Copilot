@@ -57,7 +57,7 @@ function childEnvironment(source = process.env) {
   const allowed = new Set(['PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMDATA', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'TEMP', 'TMP', 'HOME']);
   return { ...Object.fromEntries(Object.entries(source).filter(([key]) => allowed.has(key.toUpperCase()))), DOCKER_CLI_HINTS: 'false' };
 }
-function command(executable, args, { cwd, timeout = 30000, signal } = {}) {
+function command(executable, args, { cwd, timeout = 30000, signal, onFailureDiagnostic } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { cwd, windowsHide: true, shell: false, env: childEnvironment() });
     let output = '', errors = '', done = false;
@@ -68,7 +68,13 @@ function command(executable, args, { cwd, timeout = 30000, signal } = {}) {
     child.stdout.on('data', chunk => { output += chunk; if (output.length > 8 * 1024 * 1024) { child.kill(); finish(new Error('Docker 返回的数据过大')); } });
     child.stderr.on('data', chunk => { errors = (errors + chunk).slice(-16000); });
     child.on('error', () => finish(new Error('未找到可运行的 Docker Desktop，请先安装并启动它')));
-    child.on('exit', code => code === 0 ? finish(null, output) : finish(new Error(`Docker 操作失败（退出码 ${code ?? 'unknown'}），请查看 Docker Desktop；本地数据仍保留`)));
+    child.on('exit', code => {
+      if (code === 0) return finish(null, output);
+      // Diagnostics are opt-in for the disposable acceptance harness. Renderer
+      // errors never include CLI output, which can contain interpolated secrets.
+      if (typeof onFailureDiagnostic === 'function') { try { onFailureDiagnostic(errors); } catch { /* Never replace the original failure. */ } }
+      finish(new Error(`Docker 操作失败（退出码 ${code ?? 'unknown'}），请查看 Docker Desktop；本地数据仍保留`));
+    });
     if (signal?.aborted) abort();
   });
 }

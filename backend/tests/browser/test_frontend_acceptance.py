@@ -121,7 +121,7 @@ def test_opportunity_modal_keyboard_repeated_open_and_account_isolation(browser_
     page = context.new_page()
     login(page, address)
     page.goto(address + "/career-process")
-    opener = page.get_by_role("button", name="添加求职机会", exact=True).first
+    opener = page.get_by_role("button", name="添加机会", exact=True)
     opener.click()
     modal = page.get_by_role("dialog", name="添加求职机会")
     expect(modal.get_by_label("公司", exact=True)).to_be_focused()
@@ -209,6 +209,7 @@ def test_deleted_conversation_and_older_review_deep_link_regressions(browser_app
     from app.db.types import utc_now
     from app.models.chat import Conversation
     from app.models.interview_record import InterviewRecord
+    from app.models.interview_transcript import InterviewTranscript
 
     address, context, factory = browser_app
     with factory() as db:
@@ -229,10 +230,22 @@ def test_deleted_conversation_and_older_review_deep_link_regressions(browser_app
                     source="upload",
                     title=f"Synthetic review {index:03d}",
                     status="completed",
-                    transcript="Synthetic interview transcript for navigation acceptance.",
+                    transcript_id=f"it_browser_{index:03d}",
                     created_at=now - timedelta(days=index),
                 )
             )
+        db.flush()
+        db.add_all(
+            InterviewTranscript(
+                id=f"it_browser_{index:03d}",
+                record_id=f"ir_browser_{index:03d}",
+                user_id=owner.id,
+                provider="synthetic_acceptance",
+                text="Synthetic interview transcript for navigation acceptance.",
+                status="ready",
+            )
+            for index in range(51)
+        )
         db.commit()
         first_id, second_id = first.id, second.id
     page = context.new_page()

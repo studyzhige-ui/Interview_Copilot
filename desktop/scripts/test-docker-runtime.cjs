@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const assert = require('node:assert/strict');
-const { ComposeRuntime, projectName } = require('../runtime/compose.cjs');
+const { ComposeRuntime, projectName, command } = require('../runtime/compose.cjs');
 async function main() {
   assert.equal(process.env.CI, 'true', 'Only a disposable CI host may run this campaign');
   assert.equal(process.env.IC_DESKTOP_ACCEPTANCE, '1');
@@ -13,7 +13,15 @@ async function main() {
   assert.equal(manifest.auth.url, 'https://fixture.supabase.co');
   assert.equal(manifest.auth.publishableKey, 'sb_publishable_synthetic_fixture');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'copilot-disposable-desktop-'));
-  const runtime = new ComposeRuntime({ root, resources, bundle: manifest.bundle, auth: manifest.auth, encode: value => Buffer.from(value), decode: value => value.toString() });
+  const redact = value => {
+    for (const secret of Object.values(runtime.state || {}).filter(item => typeof item === 'string' && item.length >= 24)) value = value.replaceAll(secret, '[redacted]');
+    return value;
+  };
+  const runtime = new ComposeRuntime({ root, resources, bundle: manifest.bundle, auth: manifest.auth, encode: value => Buffer.from(value), decode: value => value.toString(), run: (executable, args, options) => command(executable, args, { ...options, onFailureDiagnostic: value => {
+    const phase = args.includes('compose') ? `compose ${['version', 'config', 'up'].find(value => args.includes(value)) || 'other'}` : args[2];
+    report.failure_stage ||= phase;
+    console.error('Synthetic runtime diagnostic:', phase, redact(value));
+  } }) });
   // Poison only this process. The production command boundary must drop these;
   // no contact with a remote daemon or external database is permitted.
   Object.assign(process.env, { DOCKER_HOST: 'ssh://must-not-be-used.invalid', DOCKER_CONTEXT: 'must-not-be-used', COMPOSE_FILE: '/must-not-be-used', POSTGRES_PASSWORD: 'ambient-not-workspace', AWS_ACCESS_KEY_ID: 'ambient-not-workspace', AWS_SECRET_ACCESS_KEY: 'ambient-not-workspace' });
