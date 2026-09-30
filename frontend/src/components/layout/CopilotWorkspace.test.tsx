@@ -19,6 +19,19 @@ describe('product-hosted Copilot', () => {
     expect(screen.queryByTestId('shared-conversation')).not.toBeInTheDocument();
     expect(screen.getByText('/career-process?opportunity=job-1&filter=active')).toBeInTheDocument();
   });
+  it('moves keyboard focus into the drawer so Escape closes it and restores its opener', async () => {
+    render(<MemoryRouter initialEntries={['/today']}><Host /></MemoryRouter>);
+    const opener = screen.getByRole('button', { name: '打开页面助手' });
+    opener.focus();
+    fireEvent.click(opener);
+    const close = screen.getByRole('button', { name: '关闭 Copilot' });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(screen.queryByRole('region', { name: '页面 Copilot' })).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+    fireEvent.click(opener);
+    expect(screen.getByRole('button', { name: '关闭 Copilot' })).toHaveFocus();
+  });
   it('never scrapes pages or admits oversized route references', () => {
     expect(referenceForPage('/library', '?private=text')).toBeNull();
     expect(referenceForPage('/career-process', '?opportunity=' + 'x'.repeat(129))).toBeNull();

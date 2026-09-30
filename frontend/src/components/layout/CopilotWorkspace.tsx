@@ -1,5 +1,5 @@
 /** Product-hosted Copilot: same durable conversation kernel, no duplicate business writes. */
-import { lazy, Suspense, useCallback, useState } from 'react';
+import { lazy, Suspense, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import type { ProductObjectReference } from '@/types/api';
 
@@ -26,6 +26,10 @@ export function CopilotWorkspace({ children }: {
   const location = useLocation();
   const [open, setOpen] = useState(false);
   const [reference, setReference] = useState<ProductObjectReference | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (open) closeButtonRef.current?.focus();
+  }, [open]);
   const [origin, setOrigin] = useState<HTMLElement | null>(null);
   const close = () => {
     setOpen(false);
@@ -46,7 +50,7 @@ export function CopilotWorkspace({ children }: {
           <div><h2 className="font-semibold">一起处理当前工作</h2>
             <p className="text-xs text-stone-500">引用会显示在输入框中；关闭面板不会取消已提交的任务。</p></div>
           <div className="flex gap-3"><Link to="/general-chat" onClick={close}>完整工作区</Link>
-            <button type="button" onClick={close} aria-label="关闭 Copilot">关闭</button></div>
+            <button ref={closeButtonRef} type="button" onClick={close} aria-label="关闭 Copilot">关闭</button></div>
         </header>
         <Suspense fallback={<p role="status">正在打开 Copilot…</p>}>
           <ConversationWorkspace embedded objectReference={reference} onObjectReferenceConsumed={() => setReference(null)} />
