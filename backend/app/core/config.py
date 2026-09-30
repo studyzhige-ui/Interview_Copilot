@@ -30,6 +30,33 @@ class Settings(BaseSettings):
 
     PROJECT_NAME: str = "Interview Copilot API"
     APP_EDITION: Literal["cloud", "community"] = "community"
+    AUTH_PROVIDER: Literal["local", "supabase"] = "local"
+    SUPABASE_URL: str = ""
+    SUPABASE_PUBLISHABLE_KEY: str = ""
+    SUPABASE_EMAIL_DELIVERY: Literal["team_only", "custom_smtp"] = "team_only"
+
+    @model_validator(mode="after")
+    def validate_supabase_auth(self):
+        if self.AUTH_PROVIDER == "supabase":
+            from urllib.parse import urlsplit
+
+            url = urlsplit(self.SUPABASE_URL)
+            if (
+                url.scheme != "https"
+                or not url.hostname
+                or url.username
+                or url.password
+                or url.query
+                or url.fragment
+                or url.path.rstrip("/")
+            ):
+                raise ValueError("SUPABASE_URL must be the HTTPS project origin")
+            if not self.SUPABASE_PUBLISHABLE_KEY.startswith("sb_publishable_"):
+                raise ValueError(
+                    "Use a Supabase publishable key, never service_role, a secret key, or a JWT signing secret"
+                )
+        return self
+
     DATABASE_URL: str = (
         "postgresql://postgres:postgres@localhost:5432/interview_copilot"
     )

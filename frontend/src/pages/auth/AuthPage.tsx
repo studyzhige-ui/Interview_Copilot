@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { isSupabaseAuth } from '@/lib/supabaseAuth';
+import { SupabaseAuthPanel } from './SupabaseAuthPanel';
 import { Logo } from '@/components/ui/Logo';
 import { LoginForm } from './LoginForm';
 import { RegisterForm } from './RegisterForm';
@@ -20,6 +22,7 @@ export function AuthPage() {
           </div>
         </div>
 
+        {isSupabaseAuth() ? <SupabaseAuthPanel /> : <>
         {tab === 'reset' ? (
           <div className="mb-6 pb-3 border-b border-stone-200 text-base font-medium text-stone-800">
             重置密码
@@ -39,6 +42,7 @@ export function AuthPage() {
         )}
         {tab === 'register' && <RegisterForm onSwitchToLogin={() => setTab('login')} />}
         {tab === 'reset' && <ResetPasswordForm onBackToLogin={() => setTab('login')} />}
+        </>}
       </div>
     </div>
   );

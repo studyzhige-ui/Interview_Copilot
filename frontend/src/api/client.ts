@@ -1,3 +1,4 @@
+import { isSupabaseAuth, refreshCloudAccess } from '@/lib/supabaseAuth';
 import axios, { AxiosError, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
 import { tokenStore } from '@/lib/token';
 import { toast } from '@/store/uiStore';
@@ -17,7 +18,7 @@ export const apiClient = axios.create({
 
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = tokenStore.getAccess();
-  if (token) {
+  if (token && !config.headers.has('Authorization')) {
     config.headers.set('Authorization', `Bearer ${token}`);
   }
   return config;
@@ -44,6 +45,10 @@ let refreshInFlight: Promise<string | null> | null = null;
  */
 async function refreshAccessToken(rejectedAccess: string | null): Promise<string | null> {
   if (refreshInFlight) return refreshInFlight;
+  if (isSupabaseAuth()) {
+    refreshInFlight = refreshCloudAccess(rejectedAccess).finally(() => { refreshInFlight = null; });
+    return refreshInFlight;
+  }
   const refresh = tokenStore.getRefresh();
   if (!refresh) return null;
 
@@ -133,10 +138,19 @@ export async function authedFetch(
 
 apiClient.interceptors.response.use(
   (r) => r,
-  async (error: AxiosError<{ detail?: string }>) => {
+  async (error: AxiosError<{ detail?: string | { code?: string; message?: string } }>) => {
     const status = error.response?.status;
     const original = (error.config ?? {}) as RetryConfig;
+    const detail = error.response?.data?.detail;
+    if (status === 409 && detail && typeof detail === 'object' && 'code' in detail && detail.code === 'LOCAL_PROFILE_REQUIRED') {
+      if (window.location.pathname !== '/auth') window.location.href = '/auth';
+      return Promise.reject(error);
+    }
 
+    // Wrong passwords/enrollment failures are not refresh requests. Replaying
+    // these can consume lockout attempts or turn a rejected action into success.
+    const credentialOperation = /\/auth\/(?:login|register|local-unlock(?:\/setup)?|supabase\/session|logout)$/.test(original.url ?? '');
+    if (status === 401 && credentialOperation) return Promise.reject(error);
     if (status === 401 && !original._retry) {
       original._retry = true;
       const authorization = String(original.headers?.Authorization ?? '');

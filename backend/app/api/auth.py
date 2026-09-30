@@ -136,6 +136,11 @@ def send_verification_code(
     accepted only for the register link. The high-value enumeration targets —
     LOGIN and password reset — keep generic responses elsewhere.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     account = user_account_service.get_by_email(db, str(payload.email))
     if payload.purpose == "register":
         if account is not None:
@@ -182,6 +187,11 @@ def reset_password(
     bumps ``token_version``, immediately invalidating every old access and
     refresh token for the account.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     generic_err = _generic_400("重置失败，请检查验证码或重新获取")
     client_ip = request.client.host if request.client else None
 
@@ -226,6 +236,11 @@ def register_user(
     NOT consume the IP verification-failure budget — a returning user fat-
     fingering their own email shouldn't get the IP locked out.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     generic_err = _generic_400("注册失败，请检查输入或重试")
     client_ip = request.client.host if request.client else None
 
@@ -273,6 +288,11 @@ def login_access_token(
     db: Session = Depends(get_db),
     form_data: OAuth2PasswordRequestForm = Depends(),
 ):
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     user = user_account_service.authenticate(db, form_data.username, form_data.password)
     if user is None:
         raise HTTPException(status_code=400, detail="用户名或密码错误")
@@ -309,6 +329,11 @@ def refresh_access_token(
     A leaked refresh token therefore burns out the moment the legitimate
     holder refreshes — limiting the attacker to a single rotation window.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     credentials_exception = HTTPException(
         status_code=401,
         detail="Invalid or expired refresh token",
@@ -378,6 +403,26 @@ def logout(
     Idempotent: revoking an already-revoked / already-expired token is a no-op.
     The endpoint never reveals whether the tokens were valid.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        from app.identity.application import local_unlock, supabase_auth
+
+        try:
+            hint = __import__("jwt").decode(
+                access_token, options={"verify_signature": False}
+            )
+            if hint.get("iss") == local_unlock.LOCAL_ISSUER:
+                claims = local_unlock.decode_local_token(access_token)
+                revoke(db, claims["jti"], exp=claims["exp"])
+            else:
+                claims = supabase_auth.verify_cloud_token(access_token)
+                revoke(
+                    db, supabase_auth.token_identity(access_token), exp=claims["exp"]
+                )
+            db.commit()
+            return {"status": "ok"}
+        except JWTError:
+            # Expired/malformed local tokens are already unusable.
+            return {"status": "ok"}
     _revoke_token_if_present(db, access_token)
     if body and body.refresh_token:
         _revoke_token_if_present(db, body.refresh_token)
@@ -407,6 +452,11 @@ def change_password(
     to /auth on their next call, since the old refresh token now fails the
     token-version check too.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     valid, _ = verify_and_maybe_rehash(body.old_password, current_user.hashed_password)
     if not valid:
         raise HTTPException(status_code=400, detail="当前密码不正确")

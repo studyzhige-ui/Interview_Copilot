@@ -1,5 +1,6 @@
 const ACCESS = 'access_token';
 const REFRESH = 'refresh_token';
+export const SESSION_SYNC_KEY = 'interview_copilot_auth_session';
 
 export const tokenStore = {
   getAccess: () => localStorage.getItem(ACCESS),
@@ -7,10 +8,12 @@ export const tokenStore = {
   set: (access: string, refresh: string) => {
     localStorage.setItem(ACCESS, access);
     localStorage.setItem(REFRESH, refresh);
+    localStorage.setItem(SESSION_SYNC_KEY, JSON.stringify({ access, refresh }));
   },
   clear: () => {
     localStorage.removeItem(ACCESS);
     localStorage.removeItem(REFRESH);
+    localStorage.removeItem(SESSION_SYNC_KEY);
   },
 };
 

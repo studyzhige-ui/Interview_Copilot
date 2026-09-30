@@ -1,3 +1,4 @@
+import { isSupabaseAuth } from '@/lib/supabaseAuth';
 import { Suspense, lazy } from 'react';
 import { Navigate, Outlet, createBrowserRouter } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
@@ -99,7 +100,7 @@ function AuthGuard() {
 
 function GuestGuard() {
   const isAuthed = useAuthStore((s) => s.isAuthed);
-  if (isAuthed) return <Navigate to="/today" replace />;
+  if (isAuthed && !isSupabaseAuth()) return <Navigate to="/today" replace />;
   return <LazyOutlet />;
 }
 

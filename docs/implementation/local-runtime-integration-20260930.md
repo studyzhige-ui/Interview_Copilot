@@ -37,7 +37,9 @@ Alembic refuses that baseline. For exact PR #2 `0059`, the supported adoption is
    change in one transaction, retaining data and local owner IDs
 4. Run `alembic upgrade head` and `alembic check`, then restart processes
 
-Earlier/unrecognized/customized PR #2 schemas fail closed. Finish the original
+Earlier revisions or a column/type/nullability fingerprint mismatch fail closed.
+This fingerprint is not a complete constraint/index audit; `alembic check` remains
+required after adoption. Finish the original
 PR #2 migration chain using its original checkout first, or review a dedicated
 migration; never manually stamp a database to bypass a mismatch. A schema match
 is not a backup verification. Previous local sessions must sign in again after

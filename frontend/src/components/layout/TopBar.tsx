@@ -1,3 +1,4 @@
+import { isSupabaseAuth, isLocalUnlockSession } from '@/lib/supabaseAuth';
 import { useEffect, useRef, useState } from 'react';
 import { LogOut, ChevronDown, UserRound } from 'lucide-react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
@@ -40,6 +41,7 @@ export function TopBar({ pageTitle, onOpenCopilot }: { pageTitle?: string; onOpe
       {pathname !== '/general-chat' && (onOpenCopilot
         ? <button type="button" onClick={onOpenCopilot} className="workspace-copilot-shortcut">打开 Copilot</button>
         : <Link to="/general-chat" className="workspace-copilot-shortcut">打开 Copilot</Link>)}
+      {isSupabaseAuth() && <Link to="/auth" className="text-xs text-stone-500">{isLocalUnlockSession() ? '本地已解锁 · 账号登录' : '账号与本地解锁'}</Link>}
       <div className="ml-auto relative" ref={ref}>
         <button
           aria-expanded={open}

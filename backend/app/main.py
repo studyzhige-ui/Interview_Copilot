@@ -404,6 +404,9 @@ app.include_router(agent_tasks.router, prefix="/api/v1")
 app.include_router(attachment_sources.router, prefix="/api/v1")
 app.include_router(artifacts.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
+from app.api import unified_auth
+
+app.include_router(unified_auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(capabilities.router, prefix="/api/v1")
 app.include_router(career_process.router, prefix="/api/v1")
 app.include_router(workspace.router, prefix="/api/v1")
