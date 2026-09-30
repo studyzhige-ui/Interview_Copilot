@@ -34,7 +34,7 @@ a dependency deprecation. No private recording or paid provider was used.
 | Complete web interaction/visual journeys | Existing focused real-browser campaign | Expanded route, form, keyboard, narrow-screen, interruption and account-isolation campaign with screenshots |
 | Hosted email/password Auth | Signup and confirmation enabled; exact four development callbacks saved; custom SMTP configured | User-authorized real test account, email receipt, confirmation, login, recovery, logout, and offline-unlock continuation |
 | Existing Cloudflare preview | Bot reports failed build; no working preview URL | Obtain actual build logs and identify cause; a static Pages preview alone cannot implement the local FastAPI `/api/v1` service |
-| Installed desktop | Existing Electron prototype only | Windows desktop and no Docker are selected; decide native versus WSL2 backend delivery, implement actual product loading/runtime lifecycle, installer and callback flow, then execute installed-app acceptance |
+| Installed desktop | New Windows Electron launcher and package sources; focused boundary review and unpacked source-integrity checks | Run staged Windows installer/OS dispatch and Linux Docker jobs, then actual Windows Docker Desktop, live email return and microphone acceptance |
 
 These outstanding areas must not be described as passed or ready to merge.
 Hosted security settings, credentials, and password entry still follow their
@@ -42,17 +42,41 @@ separate approval/secure-entry requirements.
 
 ## Desktop boundary
 
-`desktop/main.cjs` currently opens static prototypes under `career://pages/`.
-Its smoke checks a throwaway HTTP page and browser view disposal. The two desktop
-policy tests pass, but neither loads the production React app or FastAPI. There
-is no package/installer script, dependency lockfile, real stack lifecycle or
-Supabase native callback integration. The existing Compose stack keeps
+The original `desktop/main.cjs` opened static prototypes under `career://pages/`.
+That prototype remains available through `npm run prototype`; its smoke did not
+load the production React app or FastAPI. The new launcher, pinned dependency
+lockfile, NSIS configuration, owned stack lifecycle and pending-flow native bridge
+now load the real product after readiness checks. The existing Compose stack keeps
 PostgreSQL/pgvector, Redis, MinIO and workers and exposes the product on loopback.
-The user selected Windows desktop without Docker. The existing Linux runtime
-requires a decision between a managed WSL2 distribution and a substantial native
-Windows port; WSL2 is not assumed approved. Celery lacks official Windows support,
-and local inference explicitly relies on Linux peer credentials, flock and
-process-death/cancellation primitives. An installer alone does not port them.
+The user selected Windows desktop and then accepted Docker Desktop for the first
+version. The Linux runtime remains inside Docker; the Windows shell must not try
+to run Celery or Linux peer-credential/process primitives natively. Docker
+installation and Windows feature changes remain user-controlled actions. A draft
+launcher and packaging implementation is under acceptance; it has not been
+installed or exercised with Docker Desktop on a Windows host.
+
+At the independently reviewed local desktop snapshot `41a9ef8`:
+
+- 362 frontend tests, typecheck, lint and production build passed
+- 17 desktop boundary tests and the independent callback, permission, environment
+  isolation and partial-start/old-bundle stop probes passed
+- A Windows unpacked fixture contains matching application files and all 876
+  hashed runtime sources; it uses synthetic public Auth configuration and cannot
+  be used for real login
+- A Linux NSIS attempt required Wine and was stopped; its partial installer is
+  not an acceptance artifact. The staged Windows CI job builds the actual NSIS
+  fixture, inspects it, then tests installed OS dispatch and cleans up
+- The hosted GoTrue `v2.197.0` health response and matching official source support
+  exact native allowlist entries with fragment state; real email delivery and
+  browser-to-Windows preservation are not yet observed
+
+The staged Windows fixture and Linux Docker acceptance campaigns are unrun until
+publication is approved and exact-head CI finishes. The OS probe uses synthetic
+pending metadata and proves no Supabase account or password operation. The Linux
+campaign tests real service readiness, Celery control traffic, database/object/file
+retention and unrelated-container isolation, with synthetic data only. Windows
+Docker Desktop startup, DPAPI across restart, microphone and user mail flows remain
+separate installed-host requirements.
 
 Any desktop implementation must:
 

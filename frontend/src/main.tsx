@@ -1,3 +1,4 @@
+import { onNativeAuthCallback, takeNativeAuthCallback } from './lib/desktopAuth';
 import { SESSION_SYNC_KEY } from './lib/token';
 import { initializeAuth, synchronizeStoredSession } from './lib/supabaseAuth';
 import { useAuthStore } from './store/authStore';
@@ -21,13 +22,17 @@ window.addEventListener('storage', event => {
 });
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
-void initializeAuth(session => {
+onNativeAuthCallback(() => {
+  useAuthStore.getState().clearSession();
+  window.location.assign('/auth');
+});
+void takeNativeAuthCallback().then(nativeCallback => initializeAuth(session => {
   if (session) {
     useAuthStore.getState().setSession(session.access_token, session.refresh_token);
     void useAuthStore.getState().fetchMe();
   }
   else useAuthStore.getState().clearSession();
-}).then(() => root.render(
+}, nativeCallback)).then(() => root.render(
   <React.StrictMode>
     {/* ErrorBoundary wraps the whole router so a render-time throw in any
         page surfaces as a recoverable banner instead of a blank screen. */}

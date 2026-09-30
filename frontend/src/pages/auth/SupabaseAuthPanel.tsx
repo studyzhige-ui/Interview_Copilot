@@ -1,3 +1,4 @@
+import { authRedirect, cancelNativeAuthFlow } from '@/lib/desktopAuth';
 import { FormEvent, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Btn } from '@/components/ui/Btn';
@@ -5,7 +6,7 @@ import { Field } from '@/components/ui/Field';
 import { apiClient, extractErr } from '@/api/client';
 import { type MeResponse } from '@/api/auth';
 import { useAuthStore } from '@/store/authStore';
-import { cloudAuth, finishPasswordRecovery, isLocalUnlockSession, isPasswordRecovery, beginAuthAttempt, isCurrentAuthAttempt, acceptCloudSession, discardUnacceptedSession, completePasswordRecovery, getRecoveryState, subscribeRecovery, runCloudAuthOperation, invalidateAuthAttempts, isPublicEmailDeliveryReady } from '@/lib/supabaseAuth';
+import { cloudAuth, finishPasswordRecovery, isLocalUnlockSession, isPasswordRecovery, beginAuthAttempt, isCurrentAuthAttempt, acceptCloudSession, discardUnacceptedSession, completePasswordRecovery, getRecoveryState, subscribeRecovery, runCloudAuthOperation, invalidateAuthAttempts, isPublicEmailDeliveryReady, getAuthCallbackNotice } from '@/lib/supabaseAuth';
 
 type Mode = 'login' | 'register' | 'reset' | 'recover' | 'unlock' | 'setup';
 
@@ -19,7 +20,7 @@ export function SupabaseAuthPanel() {
   const [legacyUsername, setLegacyUsername] = useState('');
   const [legacyPassword, setLegacyPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(getAuthCallbackNotice);
   const [error, setError] = useState('');
   const inFlight = useRef(false);
   const alive = useRef(true);
@@ -45,26 +46,29 @@ export function SupabaseAuthPanel() {
     if (mode === 'login' || mode === 'unlock') useAuthStore.getState().clearSession();
     const attempt = beginAuthAttempt(mode === 'login' || mode === 'unlock' || mode === 'recover');
     inFlight.current = true; setBusy(true); setError(''); setMessage('');
+    let nativeFlowId: string | undefined;
     let pendingSession: import('@supabase/supabase-js').Session | null = null;
     try {
       const auth = cloudAuth().auth;
-      const redirect = `${window.location.origin}/auth`;
+      if (mode === 'login' || mode === 'unlock') await cancelNativeAuthFlow();
       if (mode === 'unlock') {
         const response = await apiClient.post('/auth/local-unlock', { email: email.trim(), password });
         if (!isCurrentAuthAttempt(attempt)) return;
         useAuthStore.getState().setSession(response.data.access_token, '');
         finish();
       } else if (mode === 'register') {
-        const { error: failure } = await runCloudAuthOperation(() => auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: redirect } }));
+        const redirect = await authRedirect('signup'); nativeFlowId = redirect.id;
+        const { error: failure } = await runCloudAuthOperation(() => auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: redirect.url } }));
         if (failure) throw failure;
         if (!isCurrentAuthAttempt(attempt)) return;
         setPassword(''); setConfirm('');
         setMessage('请查看邮箱中的确认邮件，完成验证后回到这里登录。已有账号可直接登录');
       } else if (mode === 'reset') {
-        const { error: failure } = await runCloudAuthOperation(() => auth.resetPasswordForEmail(email.trim(), { redirectTo: `${redirect}?flow=recovery` }));
+        const redirect = await authRedirect('recovery'); nativeFlowId = redirect.id;
+        const { error: failure } = await runCloudAuthOperation(() => auth.resetPasswordForEmail(email.trim(), { redirectTo: redirect.url }));
         if (failure) throw failure;
         if (!isCurrentAuthAttempt(attempt)) return;
-        setMessage('如果该邮箱可以重置密码，你将收到邮件。请在发起请求的同一浏览器中打开链接');
+        setMessage(window.copilotDesktopAuth ? '如果该邮箱可以重置密码，你将收到邮件。点击链接后选择回到这台电脑的 Interview Copilot' : '如果该邮箱可以重置密码，你将收到邮件。请在发起请求的同一浏览器中打开链接');
       } else if (mode === 'recover') {
         const completed = await completePasswordRecovery(password);
         if (completed && alive.current) {
@@ -97,6 +101,7 @@ export function SupabaseAuthPanel() {
         } else finish();
       }
     } catch (failure) {
+      if (nativeFlowId) await cancelNativeAuthFlow(nativeFlowId).catch(() => undefined);
       if (alive.current && isCurrentAuthAttempt(attempt)) setError(extractErr(failure, '暂时无法完成，请重试'));
     } finally {
       if (pendingSession) await discardUnacceptedSession(pendingSession).catch(() => undefined);

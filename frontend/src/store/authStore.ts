@@ -1,3 +1,4 @@
+import { cancelNativeAuthFlow } from '@/lib/desktopAuth';
 import { invalidateAuthAttempts } from '@/lib/supabaseAuth';
 import { queryClient } from '@/lib/queryClient';
 import { create } from 'zustand';
@@ -53,6 +54,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: async () => {
     // Capture/revoke the old credentials in apiLogout before clearing. Local
     // privacy is immediate even if cloud Auth or the local API is unreachable.
+    void cancelNativeAuthFlow().catch(() => undefined);
     const revocation = apiLogout();
     get().clearSession();
     void revocation.catch(() => undefined);

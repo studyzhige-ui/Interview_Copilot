@@ -10,6 +10,7 @@ const fixture = vi.hoisted(() => {
 vi.mock('@/api/client', () => ({ apiClient: { post: fixture.post }, extractErr: (e: Error) => e.message }));
 vi.mock('@/store/authStore', () => ({ useAuthStore: Object.assign((select: (s: typeof fixture.state) => unknown) => select(fixture.state), { getState: () => fixture.state }) }));
 vi.mock('@/lib/supabaseAuth', () => ({
+  getAuthCallbackNotice: () => '',
   cloudAuth: () => ({ auth: fixture.auth }), isLocalUnlockSession: () => false,
   isPasswordRecovery: () => fixture.recovery, getRecoveryState: () => fixture.recoveryStates[fixture.recovery ? 'ready' : 'none'], subscribeRecovery: () => () => {}, completePasswordRecovery: fixture.completeRecovery, discardUnacceptedSession: vi.fn().mockResolvedValue(undefined), isPublicEmailDeliveryReady: () => false, finishPasswordRecovery: vi.fn(),
   beginAuthAttempt: () => ++fixture.generation, isCurrentAuthAttempt: (g: number) => g === fixture.generation, acceptCloudSession: (session: { access_token: string; refresh_token: string }) => { fixture.state.setSession(session.access_token, session.refresh_token); return true; }, invalidateAuthAttempts: () => { fixture.generation += 1; }, runCloudAuthOperation: (fn: () => Promise<unknown>) => fn(),
@@ -73,7 +74,7 @@ it('keeps repeated login clicks within a single pending attempt', async () => {
   fixture.auth.signInWithPassword.mockReturnValue(new Promise(r => { resolve = r; }));
   show(); credentials(); const button = screen.getByRole('button', { name: '统一账号登录' });
   fireEvent.click(button); fireEvent.click(button);
-  expect(fixture.auth.signInWithPassword).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(fixture.auth.signInWithPassword).toHaveBeenCalledTimes(1));
   await act(async () => resolve({ data: { session: null }, error: new Error('network unavailable') }));
   expect(await screen.findByRole('alert')).toHaveTextContent('network unavailable');
   expect(fixture.post).not.toHaveBeenCalled();

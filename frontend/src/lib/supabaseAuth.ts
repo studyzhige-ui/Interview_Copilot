@@ -1,4 +1,5 @@
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
+import type { NativeAuthCallback } from './desktopAuth';
 import { apiUrl } from '@/api/apiUrl';
 import { decodeJwtPayload, tokenStore } from './token';
 
@@ -7,6 +8,8 @@ interface AuthConfig { provider: 'local' | 'supabase'; supabase_url?: string; pu
 interface CloudIdentity { iss: string; sub: string; session_id: string }
 export interface RecoveryState { status: 'none' | 'pending' | 'ready' | 'failed'; email?: string; message?: string }
 interface RecoveryProof { session: Session; identity: CloudIdentity; expiresAt: number }
+let callbackNotice = '';
+export const getAuthCallbackNotice = () => callbackNotice;
 let config: AuthConfig = { provider: 'local' };
 let client: SupabaseClient | null = null;
 let sink: ((session: AppSession | null) => void) | null = null;
@@ -94,7 +97,7 @@ export function finishPasswordRecovery() {
 }
 
 /** A query parameter requests a recovery screen; only an SDK recovery exchange grants proof. */
-export async function initializeAuth(onSession: (session: AppSession | null) => void) {
+export async function initializeAuth(onSession: (session: AppSession | null) => void, nativeCallback?: NativeAuthCallback | null) {
   sink = onSession;
   const response = await fetch(apiUrl('/auth/config'));
   if (!response.ok) throw new Error('无法读取本地账号配置，请检查本地服务是否已启动');
@@ -102,11 +105,13 @@ export async function initializeAuth(onSession: (session: AppSession | null) => 
   if (config.provider !== 'local' && config.provider !== 'supabase') throw new Error('账号配置无效');
   if (!isSupabaseAuth()) return;
   if (!config.supabase_url || !config.publishable_key?.startsWith('sb_publishable_')) throw new Error('统一账号配置不完整');
-  const recoveryRequested = new URLSearchParams(window.location.search).get('flow') === 'recovery';
+  const recoveryRequested = nativeCallback?.purpose === 'recovery' || new URLSearchParams(window.location.search).get('flow') === 'recovery';
   if (recoveryRequested) {
     invalidateAuthAttempts();
     publish(null); // Quarantine any old account before processing this link.
     setRecovery({ status: 'pending', message: '正在验证重置链接…' });
+  } else if (nativeCallback) {
+    invalidateAuthAttempts(); publish(null);
   } else {
     const current = tokenStore.getAccess();
     if (current && !isLocalUnlockSession() && !identity(current)) publish(null);
@@ -114,7 +119,7 @@ export async function initializeAuth(onSession: (session: AppSession | null) => 
   }
   client = createClient(config.supabase_url, config.publishable_key, {
     global: { fetch: boundedAuthFetch },
-    auth: { flowType: 'pkce', persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    auth: { flowType: 'pkce', persistSession: true, autoRefreshToken: true, detectSessionInUrl: !nativeCallback },
   });
   client.auth.onAuthStateChange((event, session) => {
     if (event === 'PASSWORD_RECOVERY') {
@@ -145,6 +150,25 @@ export async function initializeAuth(onSession: (session: AppSession | null) => 
       }); });
     }
   });
+  if (nativeCallback) {
+    // The OS handler and local intent only route this code. The SDK exchanges
+    // it using the verifier in this persistent Electron partition; only its
+    // PASSWORD_RECOVERY event can unlock the password submission screen.
+    const { data, error } = await client.auth.exchangeCodeForSession(nativeCallback.code!);
+    if (error || !data.session || !identity(data.session.access_token) || data.session.user.id !== identity(data.session.access_token)?.sub) {
+      if (recoveryRequested) setRecovery({ status: 'failed', message: '链接无效、已过期或来自其他应用，请重新发送邮件' });
+      else throw new Error('邮箱链接无法验证，请重新发送确认邮件');
+      return;
+    }
+    if (recoveryRequested) {
+      if (recoveryState.status !== 'ready') setRecovery({ status: 'failed', message: '此链接不是有效的密码重置操作，请重新发送邮件' });
+    } else {
+      if (recoveryState.status === 'ready') { finishPasswordRecovery(); throw new Error('邮件类型与当前操作不一致，请重新发送'); }
+      await client.auth.signOut({ scope: 'local' });
+      callbackNotice = '邮箱验证已完成，请使用统一账号登录';
+    }
+    return;
+  }
   if (!recoveryRequested && tokenStore.isLocked()) {
     void runCloudAuthOperation(() => cloudAuth().auth.signOut({ scope: 'local' })).catch(() => undefined);
   }
