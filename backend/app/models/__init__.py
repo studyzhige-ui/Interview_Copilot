@@ -47,6 +47,7 @@ from app.models.gmail_observation import (
     GmailObservationSnapshot,
 )
 from app.models.interview_qa import InterviewQA
+from app.models.interview_qa_revision import InterviewQARevision
 from app.models.interview_invitation import (
     InterviewInvitationCandidate,
     InterviewInvitationEvidenceRef,
@@ -95,6 +96,7 @@ from app.models.user_model_selections import UserModelSelection
 from app.models.user_skill import UserSkill, UserSkillResource
 
 __all__ = [
+    "ContextCheckpoint",
     "ConversationMessage",
     "Conversation",
     "ContextCheckpoint",
@@ -134,6 +136,7 @@ __all__ = [
     "GmailObservationReviewCard",
     "GmailObservationSnapshot",
     "InterviewQA",
+    "InterviewQARevision",
     "InterviewInvitationCandidate",
     "InterviewInvitationEvidenceRef",
     "InterviewInvitationObservation",
@@ -174,3 +177,21 @@ __all__ = [
     "UserSkill",
     "UserSkillResource",
 ]
+
+from app.models.model_budget import ModelBudgetReservation, ModelBudgetWindow  # noqa: F401
+
+from app.models.invitation_submission import InvitationSubmission  # noqa: F401
+
+from app.models.model_budget import UsageAccount as UsageAccount
+
+from app.models.model_budget import UsageAdjustment as UsageAdjustment
+
+from .retrieval_index import RetrievalEntry, RetrievalGeneration  # noqa: F401
+
+from .transcript_correction import TranscriptCorrection  # noqa: F401
+
+from .mock_answer_submission import MockAnswerSubmission  # noqa: F401
+
+from .mock_media import MockMediaLease, MockMediaPlayback  # noqa: F401
+
+from .external_identity import ExternalIdentity, LocalUnlockCredential  # noqa: F401

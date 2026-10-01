@@ -7,6 +7,7 @@ those rendered bytes through the user's current primary model transport.
 """
 
 from __future__ import annotations
+from dataclasses import replace
 
 import asyncio
 import base64
@@ -226,8 +227,10 @@ def _load_and_render_pages(
     from app.core.user_identity import resolve_user_pk
     from app.db.database import SessionLocal
     from app.models.file_asset import FileAsset
-    from app.services.chat.attachment_source_service import (
+    from app.conversation.application.attachment_source_service import (
         AttachmentSourceCommandError,
+    )
+    from app.conversation.application.attachment_source_service import (
         get_attachment_source_state,
     )
 
@@ -308,42 +311,20 @@ def _read_bounded_asset(storage_uri: str, declared_size: int | None) -> bytes:
 
     from app.core import storage
 
-    if storage.is_local_uri(storage_uri):
-        try:
-            path = storage.parse_local_uri(storage_uri)
-        except ValueError as exc:
-            raise _VisionBlocked("attachment_storage_boundary_invalid") from exc
-        if not path.is_file() or path.stat().st_size > _MAX_SOURCE_BYTES:
+    try:
+        meta = storage.head_object(storage_uri)
+        if meta is None or meta["size_bytes"] > _MAX_SOURCE_BYTES:
             raise _VisionBlocked(
-                "attachment_source_too_large",
-                max_source_bytes=_MAX_SOURCE_BYTES,
+                "attachment_source_too_large", max_source_bytes=_MAX_SOURCE_BYTES
             )
-        data = path.read_bytes()
-    elif storage_uri.startswith("s3://"):
-        from app.core.config import settings
-
-        try:
-            bucket, key = storage.parse_s3_uri(storage_uri)
-            if bucket != settings.S3_BUCKET_NAME:
-                raise ValueError("outside controlled bucket")
-            response = storage.s3_client.get_object(Bucket=bucket, Key=key)
-            content_length = response.get("ContentLength")
-            if content_length is not None and int(content_length) > _MAX_SOURCE_BYTES:
-                raise _VisionBlocked(
-                    "attachment_source_too_large",
-                    max_source_bytes=_MAX_SOURCE_BYTES,
-                )
-            body = response["Body"]
-            try:
-                data = body.read(_MAX_SOURCE_BYTES + 1)
-            finally:
-                body.close()
-        except _VisionBlocked:
-            raise
-        except Exception as exc:  # noqa: BLE001 - storage details stay private
-            raise _VisionBlocked("attachment_storage_unavailable") from exc
-    else:
-        raise _VisionBlocked("attachment_storage_boundary_invalid")
+        with storage.open_object(storage_uri) as body:
+            data = body.read(_MAX_SOURCE_BYTES + 1)
+    except _VisionBlocked:
+        raise
+    except ValueError as exc:
+        raise _VisionBlocked("attachment_storage_boundary_invalid") from exc
+    except Exception as exc:
+        raise _VisionBlocked("attachment_storage_unavailable") from exc
 
     if len(data) > _MAX_SOURCE_BYTES:
         raise _VisionBlocked(
@@ -510,7 +491,7 @@ async def _run_vision_request(
         max_tokens=min(1_500, int(current_profile.max_output_tokens)),
         temperature=0.0,
     )
-    stream = await adapter.start_stream(request)
+    stream = await adapter.start_stream(replace(request, usage_meter="vision"))
     text_parts: list[str] = []
     prompt_tokens = 0
     completion_tokens = 0

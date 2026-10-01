@@ -1,9 +1,67 @@
 {
-  "name": "career-os-desktop",
+  "name": "interview-copilot-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Career OS desktop development foundation",
+  "description": "Interview Copilot Windows desktop with an owned local Docker runtime",
   "main": "main.cjs",
-  "scripts": {"start": "node launch.cjs", "test": "node --test tests/*.test.cjs", "smoke": "node launch.cjs --smoke"},
-  "devDependencies": {"electron": "44.3.0"}
+  "scripts": {
+    "start": "node launch.cjs",
+    "prototype": "node launch.cjs --prototype",
+    "test": "node --test tests/*.test.cjs",
+    "prepare-runtime": "node scripts/prepare-runtime.cjs",
+    "package:win": "npm run prepare-runtime && electron-builder --win nsis --x64 --publish never",
+    "package:dir": "npm run prepare-runtime && electron-builder --dir --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3"
+  },
+  "productName": "Interview Copilot",
+  "author": "Interview Copilot contributors",
+  "build": {
+    "appId": "io.interview-copilot.desktop",
+    "productName": "Interview Copilot",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "*.cjs",
+      "runtime/**",
+      "setup/**",
+      "ui/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".runtime",
+        "to": "runtime"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "Interview Copilot account callback",
+        "schemes": [
+          "interview-copilot"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "include": "installer.nsh",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    }
+  }
 }

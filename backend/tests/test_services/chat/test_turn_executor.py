@@ -9,10 +9,12 @@ from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
 from app.models.pending_submission import PendingSubmission
 from app.models.user import User
-from app.services.chat import chat_history_service, turn_executor
-from app.services.chat.attachment_ingress_service import (
+from app.conversation.application import chat_history_service
+from app.conversation.application import turn_executor
+from app.conversation.application.attachment_ingress_service import (
     AttachmentDraftUnavailableError,
 )
+from app.conversation.application import turn_admission
 
 
 class _NonClosingSession:
@@ -120,7 +122,8 @@ async def test_fail_orphaned_turns_keeps_live_heartbeat(db_session, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_execute_turn_marks_error_event_failed(monkeypatch):
-    import app.conversation as conversation_module
+    import app.conversation.engine as conversation_module
+    import app.conversation.factory as factory_module
     from app.conversation.events import HarnessEvent
 
     turn = turn_executor.TurnExecution(
@@ -129,13 +132,19 @@ async def test_execute_turn_marks_error_event_failed(monkeypatch):
         conversation_id="session",
         message="work",
         username="alice",
+        user_pk=1,
     )
     monkeypatch.setattr(turn_executor, "_claim", lambda _turn_id: turn)
+    monkeypatch.setattr(
+        turn_executor, "_cancellation_requested", lambda _turn_id: False
+    )
     marks: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
         turn_executor,
         "_finish",
-        lambda _turn_id, status, error=None: marks.append((status, error)) or True,
+        lambda _turn_id, status, error=None, **_fence: (
+            marks.append((status, error)) or True
+        ),
     )
 
     class FakeEngine:
@@ -153,7 +162,7 @@ async def test_execute_turn_marks_error_event_failed(monkeypatch):
         return "1-0"
 
     monkeypatch.setattr(conversation_module, "ConversationEngine", FakeEngine)
-    monkeypatch.setattr(conversation_module, "make_agent_strategy", lambda: object())
+    monkeypatch.setattr(factory_module, "make_agent_strategy", lambda: object())
     monkeypatch.setattr(turn_executor.turn_event_buffer, "append", append)
 
     await turn_executor.execute_turn("turn-error")
@@ -162,7 +171,8 @@ async def test_execute_turn_marks_error_event_failed(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_execute_turn_preserves_authoritative_blocked_outcome(monkeypatch):
-    import app.conversation as conversation_module
+    import app.conversation.engine as conversation_module
+    import app.conversation.factory as factory_module
     from app.conversation.events import HarnessEvent
 
     turn = turn_executor.TurnExecution(
@@ -171,14 +181,20 @@ async def test_execute_turn_preserves_authoritative_blocked_outcome(monkeypatch)
         conversation_id="session",
         message="complex work",
         username="alice",
+        user_pk=1,
     )
     monkeypatch.setattr(turn_executor, "_claim", lambda _turn_id: turn)
+    monkeypatch.setattr(
+        turn_executor, "_cancellation_requested", lambda _turn_id: False
+    )
     monkeypatch.setattr(turn_executor, "_has_assistant", lambda _turn_id: True)
     marks: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
         turn_executor,
         "_finish",
-        lambda _turn_id, status, error=None: marks.append((status, error)) or True,
+        lambda _turn_id, status, error=None, **_fence: (
+            marks.append((status, error)) or True
+        ),
     )
 
     class FakeEngine:
@@ -201,7 +217,7 @@ async def test_execute_turn_preserves_authoritative_blocked_outcome(monkeypatch)
         events.append(json.loads(event_json))
 
     monkeypatch.setattr(conversation_module, "ConversationEngine", FakeEngine)
-    monkeypatch.setattr(conversation_module, "make_agent_strategy", lambda: object())
+    monkeypatch.setattr(factory_module, "make_agent_strategy", lambda: object())
     monkeypatch.setattr(turn_executor.turn_event_buffer, "append", append)
 
     await turn_executor.execute_turn(turn.id)
@@ -214,7 +230,8 @@ async def test_execute_turn_preserves_authoritative_blocked_outcome(monkeypatch)
 async def test_execute_automation_reuses_engine_with_frozen_builtin_allowlist(
     monkeypatch,
 ):
-    import app.conversation as conversation_module
+    import app.conversation.engine as conversation_module
+    import app.conversation.factory as factory_module
     from app.conversation.events import HarnessEvent
 
     turn = turn_executor.TurnExecution(
@@ -223,6 +240,7 @@ async def test_execute_automation_reuses_engine_with_frozen_builtin_allowlist(
         conversation_id="automation-conversation",
         message='{"kind":"persistent_task_automation"}',
         username="alice",
+        user_pk=1,
         automation_task_id="pt_automation",
         automation_user_id=7,
         automation_definition_version=3,
@@ -230,6 +248,9 @@ async def test_execute_automation_reuses_engine_with_frozen_builtin_allowlist(
         execution_mode="auto",
     )
     monkeypatch.setattr(turn_executor, "_claim", lambda _turn_id: turn)
+    monkeypatch.setattr(
+        turn_executor, "_cancellation_requested", lambda _turn_id: False
+    )
     monkeypatch.setattr(turn_executor, "_has_assistant", lambda _turn_id: True)
     settled: list[tuple[str, str, str | None]] = []
     monkeypatch.setattr(
@@ -257,7 +278,7 @@ async def test_execute_automation_reuses_engine_with_frozen_builtin_allowlist(
         return "1-0"
 
     monkeypatch.setattr(conversation_module, "ConversationEngine", FakeEngine)
-    monkeypatch.setattr(conversation_module, "make_agent_strategy", lambda: object())
+    monkeypatch.setattr(factory_module, "make_agent_strategy", lambda: object())
     monkeypatch.setattr(turn_executor.turn_event_buffer, "append", append)
 
     await turn_executor.execute_turn(turn.id)
@@ -276,7 +297,8 @@ async def test_execute_automation_reuses_engine_with_frozen_builtin_allowlist(
 
 @pytest.mark.asyncio
 async def test_execute_turn_waits_for_attachment_without_failing(monkeypatch):
-    import app.conversation as conversation_module
+    import app.conversation.engine as conversation_module
+    import app.conversation.factory as factory_module
     from app.rag.application.attachment_sources import AttachmentParsingPendingError
 
     turn = turn_executor.TurnExecution(
@@ -285,20 +307,26 @@ async def test_execute_turn_waits_for_attachment_without_failing(monkeypatch):
         conversation_id="session",
         message="review the file",
         username="alice",
+        user_pk=1,
         attachments=({"attachment_ref_id": "ref-1"},),
     )
     monkeypatch.setattr(turn_executor, "_claim", lambda _turn_id: turn)
+    monkeypatch.setattr(
+        turn_executor, "_cancellation_requested", lambda _turn_id: False
+    )
     waits: list[tuple[str, str]] = []
     finishes: list[str] = []
     monkeypatch.setattr(
         turn_executor,
         "_wait",
-        lambda turn_id, reason="interaction": waits.append((turn_id, reason)) or True,
+        lambda turn_id, reason="interaction", **_fence: (
+            waits.append((turn_id, reason)) or True
+        ),
     )
     monkeypatch.setattr(
         turn_executor,
         "_finish",
-        lambda _turn_id, status, error=None: finishes.append(status) or True,
+        lambda _turn_id, status, error=None, **_fence: finishes.append(status) or True,
     )
 
     class FakeEngine:
@@ -322,7 +350,7 @@ async def test_execute_turn_waits_for_attachment_without_failing(monkeypatch):
         events.append(json.loads(event_json))
 
     monkeypatch.setattr(conversation_module, "ConversationEngine", FakeEngine)
-    monkeypatch.setattr(conversation_module, "make_agent_strategy", lambda: object())
+    monkeypatch.setattr(factory_module, "make_agent_strategy", lambda: object())
     monkeypatch.setattr(turn_executor.turn_event_buffer, "append", append)
 
     await turn_executor.execute_turn(turn.id)
@@ -376,7 +404,7 @@ def test_terminalization_freezes_agent_task_in_same_transaction(
     monkeypatch,
 ):
     from app.schemas.agent_task import CreateAgentTaskRequest
-    from app.services.chat.agent_task_service import create_agent_task
+    from app.conversation.application.agent_task_service import create_agent_task
 
     user = User(username="task-freeze-owner", hashed_password="x")
     db_session.add(user)
@@ -637,14 +665,14 @@ def test_claim_failure_retains_hold_and_never_falls_back(db_session, monkeypatch
     db_session.add_all([conversation, active, first, second])
     db_session.commit()
 
-    original = turn_executor.preflight_attachment_drafts
+    original = turn_admission.preflight_attachment_drafts
 
     def reject_first(db, **kwargs):
         if kwargs["submission_id"] == first.id:
             raise AttachmentDraftUnavailableError("private parser details")
         return original(db, **kwargs)
 
-    monkeypatch.setattr(turn_executor, "preflight_attachment_drafts", reject_first)
+    monkeypatch.setattr(turn_admission, "preflight_attachment_drafts", reject_first)
     changed, next_turn_id = turn_executor._terminalize(
         db_session,
         active.id,
@@ -905,7 +933,7 @@ def test_interrupt_selected_failure_never_falls_back(db_session, monkeypatch):
     )
 
     monkeypatch.setattr(
-        turn_executor,
+        turn_admission,
         "preflight_attachment_drafts",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AttachmentDraftUnavailableError("no")

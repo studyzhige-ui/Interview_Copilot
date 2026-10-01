@@ -7,7 +7,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from app.agent_runtime.tool_policy import ToolEffect
-from app.agent_runtime.tool_registry import AgentToolContext, registry
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.builtin_tools import registry
 from app.agent_runtime.tools import interview_invitation as tool_module
 from app.agent_runtime.tools.interview_invitation import (
     ConfirmAssertedInterviewInvitationArgs,
@@ -26,8 +27,8 @@ from app.models.user import User
 from app.schemas.agent_interaction import InteractionPayload
 from app.schemas.client_action import MockClientActionResultRequest
 from app.schemas.interview_invitation import InterviewInvitationFacts
-from app.services.chat.interaction_service import resolve_interaction
-from app.services.chat.client_action_service import resolve_pending_action
+from app.conversation.application.interaction_service import resolve_interaction
+from app.conversation.application.client_action_service import resolve_pending_action
 
 
 NOW = datetime(2026, 8, 26, 9, 0, tzinfo=UTC)

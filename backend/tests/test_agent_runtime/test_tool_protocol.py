@@ -21,7 +21,9 @@ from app.agent_runtime.tool_registry import (
     parse_tool_arguments,
 )
 from app.core.config import settings
-from app.services.capabilities.mcp_server_service import MCPServerConfig
+from app.capabilities.application.mcp_server_service import MCPServerConfig
+
+pytestmark = pytest.mark.usefixtures("usage_database")
 
 
 def event(*, index=0, call_id="c1", name="lookup", arguments="{}", stop=None):
@@ -65,7 +67,7 @@ def test_incomplete_stream_never_publishes_calls(stop):
 
 
 def test_stream_bounded_before_arguments_are_accumulated(monkeypatch):
-    monkeypatch.setattr(settings, "AGENT_MAX_TOOL_ARG_CHARS", 5)
+    monkeypatch.setattr(settings, "AGENT_MAX_TOOL_WIRE_ARG_CHARS", 5)
     assembler = ToolCallAssembler()
     assembler.feed(event(arguments="123"))
     with pytest.raises(ToolCallProtocolError):

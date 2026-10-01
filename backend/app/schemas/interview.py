@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AnalyzeRequest(BaseModel):
@@ -67,10 +67,23 @@ class InterviewRecordUpdateRequest(BaseModel):
 class QAEditRequest(BaseModel):
     """``PATCH /interview-records/{record_id}/qa/{qa_id}`` request body."""
 
-    question: Optional[str] = None
-    answer: Optional[str] = None
-    critique: Optional[str] = None
-    improved_answer: Optional[str] = None
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_version: int = Field(ge=1)
+    question: Optional[str] = Field(default=None, min_length=1, max_length=50_000)
+    answer: Optional[str] = Field(default=None, max_length=100_000)
+    critique: Optional[str] = Field(default=None, max_length=50_000)
+    improved_answer: Optional[str] = Field(default=None, max_length=100_000)
+
+    @model_validator(mode="after")
+    def has_change(self):
+        if all(
+            getattr(self, field) is None
+            for field in ("question", "answer", "critique", "improved_answer")
+        ):
+            raise ValueError("at least one edited field is required")
+        if self.question is not None and not self.question.strip():
+            raise ValueError("question must not be blank")
+        return self
 
 
 class SaveQARequest(BaseModel):
@@ -89,3 +102,25 @@ __all__ = [
     "QAEditRequest",
     "SaveQARequest",
 ]
+
+
+class QATextSnapshot(BaseModel):
+    question: str | None
+    answer: str | None
+    critique: str | None
+    improved_answer: str | None
+
+
+class QACorrectionView(BaseModel):
+    id: str
+    qa_id: str
+    previous_version: int
+    new_version: int
+    before: QATextSnapshot
+    after: QATextSnapshot
+    created_at: str
+
+
+class QACorrectionPage(BaseModel):
+    items: list[QACorrectionView]
+    next_cursor: str | None

@@ -15,25 +15,23 @@ from app.models.chat import Conversation, ConversationMessage
 from app.models.file_asset import FileAsset
 from app.models.user import User
 from app.schemas.artifact import ArtifactProvenanceInput, ArtifactWriteInput
-from app.services.artifact_service import (
-    ArtifactArchivedError,
-    ArtifactConflictError,
-    ArtifactOwnershipError,
-    ArtifactSourceUnavailableError,
-    ArtifactSubmissionProofError,
-    archive_artifact,
-    deliver_flow_artifact,
-    edit_artifact,
-    get_current_artifact_version,
-    list_artifact_job_relations,
-    list_artifact_submissions,
-    list_artifact_versions,
-    promote_message_to_artifact,
-    record_receipt_confirmed_submission,
-    record_user_confirmed_submission,
-    relate_artifact_to_job,
-    save_artifact_explicitly,
-)
+from app.career.application.artifacts import ArtifactArchivedError
+from app.career.application.artifacts import ArtifactConflictError
+from app.career.application.artifacts import ArtifactOwnershipError
+from app.career.application.artifacts import ArtifactSourceUnavailableError
+from app.career.application.artifacts import ArtifactSubmissionProofError
+from app.career.application.artifacts import archive_artifact
+from app.career.application.artifacts import deliver_flow_artifact
+from app.career.application.artifacts import edit_artifact
+from app.career.application.artifacts import get_current_artifact_version
+from app.career.application.artifacts import list_artifact_job_relations
+from app.career.application.artifacts import list_artifact_submissions
+from app.career.application.artifacts import list_artifact_versions
+from app.career.application.artifacts import promote_message_to_artifact
+from app.career.application.artifacts import record_receipt_confirmed_submission
+from app.career.application.artifacts import record_user_confirmed_submission
+from app.career.application.artifacts import relate_artifact_to_job
+from app.career.application.artifacts import save_artifact_explicitly
 
 
 def _user(db, name: str) -> User:

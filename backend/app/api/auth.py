@@ -10,8 +10,8 @@ Security model:
   registration deliberately returns an explicit duplicate-account conflict.
 
 Thin router: token/code protocol flow + HTTP status mapping. The
-``users``-table work lives in ``services.auth.user_account_service``; the
-avatar storage logic in ``services.auth.avatar_service``.
+``users``-table work lives in ``identity.application.user_account_service``; the
+avatar storage logic in ``identity.application.avatar_service``.
 """
 
 from __future__ import annotations
@@ -39,15 +39,16 @@ from app.core.security import (
 from app.core.token_blacklist import consume, revoke
 from app.db.database import get_db
 from app.models.user import User
-from app.services.auth import avatar_service, user_account_service
-from app.services.auth.verification_code_service import (
-    CodeError,
-    assert_ip_not_locked,
+from app.identity.application import avatar_service
+from app.identity.application import user_account_service
+from app.identity.application.verification_code_service import CodeError
+from app.identity.application.verification_code_service import assert_ip_not_locked
+from app.identity.application.verification_code_service import (
     record_verify_failure_for_ip,
-    request_code,
-    reset_ip_failures,
-    verify_code,
 )
+from app.identity.application.verification_code_service import request_code
+from app.identity.application.verification_code_service import reset_ip_failures
+from app.identity.application.verification_code_service import verify_code
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,7 @@ def send_verification_code(
     request: Request,
     response: Response,
     payload: EmailRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Generate and send a 6-digit code to the given email.
 
@@ -135,6 +136,11 @@ def send_verification_code(
     accepted only for the register link. The high-value enumeration targets —
     LOGIN and password reset — keep generic responses elsewhere.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     account = user_account_service.get_by_email(db, str(payload.email))
     if payload.purpose == "register":
         if account is not None:
@@ -172,7 +178,7 @@ def reset_password(
     request: Request,
     response: Response,
     body: ResetPasswordRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Reset a forgotten password using a one-time email code.
 
@@ -181,6 +187,11 @@ def reset_password(
     bumps ``token_version``, immediately invalidating every old access and
     refresh token for the account.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     generic_err = _generic_400("重置失败，请检查验证码或重新获取")
     client_ip = request.client.host if request.client else None
 
@@ -213,7 +224,7 @@ def register_user(
     request: Request,
     response: Response,
     user_in: UserCreate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Register a new user after verifying their email code.
 
@@ -225,6 +236,11 @@ def register_user(
     NOT consume the IP verification-failure budget — a returning user fat-
     fingering their own email shouldn't get the IP locked out.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     generic_err = _generic_400("注册失败，请检查输入或重试")
     client_ip = request.client.host if request.client else None
 
@@ -269,9 +285,14 @@ def register_user(
 def login_access_token(
     request: Request,
     response: Response,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     form_data: OAuth2PasswordRequestForm = Depends(),
 ):
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     user = user_account_service.authenticate(db, form_data.username, form_data.password)
     if user is None:
         raise HTTPException(status_code=400, detail="用户名或密码错误")
@@ -296,7 +317,7 @@ def refresh_access_token(
     request: Request,
     response: Response,
     body: RefreshRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Rotate refresh tokens.
 
@@ -308,6 +329,11 @@ def refresh_access_token(
     A leaked refresh token therefore burns out the moment the legitimate
     holder refreshes — limiting the attacker to a single rotation window.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     credentials_exception = HTTPException(
         status_code=401,
         detail="Invalid or expired refresh token",
@@ -370,13 +396,33 @@ def logout(
     response: Response,
     body: LogoutRequest | None = None,
     access_token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Revoke the caller's access token and (optionally) their refresh token.
 
     Idempotent: revoking an already-revoked / already-expired token is a no-op.
     The endpoint never reveals whether the tokens were valid.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        from app.identity.application import local_unlock, supabase_auth
+
+        try:
+            hint = __import__("jwt").decode(
+                access_token, options={"verify_signature": False}
+            )
+            if hint.get("iss") == local_unlock.LOCAL_ISSUER:
+                claims = local_unlock.decode_local_token(access_token)
+                revoke(db, claims["jti"], exp=claims["exp"])
+            else:
+                claims = supabase_auth.verify_cloud_token(access_token)
+                revoke(
+                    db, supabase_auth.token_identity(access_token), exp=claims["exp"]
+                )
+            db.commit()
+            return {"status": "ok"}
+        except JWTError:
+            # Expired/malformed local tokens are already unusable.
+            return {"status": "ok"}
     _revoke_token_if_present(db, access_token)
     if body and body.refresh_token:
         _revoke_token_if_present(db, body.refresh_token)
@@ -391,7 +437,7 @@ def change_password(
     response: Response,
     body: ChangePasswordRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Change the caller's password and invalidate every outstanding token.
 
@@ -406,6 +452,11 @@ def change_password(
     to /auth on their next call, since the old refresh token now fails the
     token-version check too.
     """
+    if settings.AUTH_PROVIDER == "supabase":
+        raise HTTPException(
+            409,
+            "统一账号的注册、密码和会话由 Supabase Auth 管理；离线请使用独立本地解锁",
+        )
     valid, _ = verify_and_maybe_rehash(body.old_password, current_user.hashed_password)
     if not valid:
         raise HTTPException(status_code=400, detail="当前密码不正确")
@@ -440,7 +491,7 @@ def get_me(current_user: User = Depends(get_current_user)):
 def update_me(
     payload: MeUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_account_service.update_profile(
         db,
@@ -460,20 +511,17 @@ def set_avatar(
     response: Response,
     body: AvatarSetRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Set the avatar from a confirmed ``file_assets(purpose='avatar')`` upload.
 
-    The image was PUT straight to object storage via the unified presigned flow,
-    so there is no server-receives-bytes path. Here we run the image safety check
-    (declared type + size + magic bytes on the object head), then point
-    ``users.avatar_url`` at the asset and mark it consumed. ``avatar_url`` stores
-    the ``s3://`` URI; the serializer turns it into a presigned GET on /auth/me.
+    Upload bytes enter the bounded capability endpoint and are committed once
+    to the selected provider. Confirm verifies size and purpose; this command
+    also checks the declared image MIME against magic bytes before consuming
+    the asset. Profile serialization returns an owner-bound read capability.
     """
-    from app.services.uploads.file_asset_service import (
-        READABLE_UPLOAD_STATUSES,
-        get_owned_file_asset,
-    )
+    from app.files.application.file_asset_service import READABLE_UPLOAD_STATUSES
+    from app.files.application.file_asset_service import get_owned_file_asset
 
     asset = get_owned_file_asset(
         db,
@@ -494,7 +542,7 @@ def set_avatar(
         and asset.size_bytes > avatar_service.AVATAR_MAX_BYTES
     ):
         raise HTTPException(status_code=413, detail="图片过大（>1MB），请压缩后再试")
-    if not (asset.storage_uri or "").startswith("s3://"):
+    if not (asset.storage_uri or "").startswith(("s3://", "local://")):
         raise HTTPException(status_code=400, detail="头像存储位置无效")
 
     # Magic-byte check on the uploaded bytes (the server never saw them during
@@ -515,10 +563,7 @@ def set_avatar(
             detail="文件内容与声明的图片类型不匹配，已拒绝",
         )
 
-    # Known gap (deferred): the presigned PUT URL minted at upload-url time has a
-    # 1h TTL and isn't revoked after this validation, so a user could re-PUT bytes
-    # to their OWN key after the magic check passes (self-poisoning only — it only
-    # affects where their own avatar renders). A future hardening would copy the
-    # validated object to an immutable server key or shorten the upload TTL.
+    # Storage creation is immutable; neither the original upload capability
+    # nor a retry can overwrite the bytes validated here.
     avatar_service.swap_avatar(db, current_user, asset)
     return _serialize_me(current_user)

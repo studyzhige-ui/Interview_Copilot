@@ -26,7 +26,7 @@ from app.models.job_opportunity import JobOpportunity
 from app.models.offer import Offer
 from app.models.user import User
 from app.schemas.artifact import ArtifactWriteInput
-from app.services import artifact_service
+from app.career.application import artifacts as artifact_service
 
 NOW = datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc)
 
@@ -34,7 +34,7 @@ NOW = datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc)
 @pytest.fixture(autouse=True)
 def no_resume_broker_dispatch(monkeypatch):
     monkeypatch.setattr(
-        "app.services.resume.resume_dispatch_service.dispatch_resume_parse",
+        "app.career.application.resumes.resume_dispatch_service.dispatch_resume_parse",
         lambda _resume_id: None,
     )
 

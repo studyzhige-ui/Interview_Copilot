@@ -7,6 +7,9 @@ import logging
 from typing import Any
 
 import httpx
+from app.usage.external import request as metered_request
+from app.usage.service import ModelBudgetExceededError
+from app.core.execution_errors import ModelOutcomeUnknownError
 from pydantic import BaseModel, Field
 
 from app.agent_runtime.tool_registry import (
@@ -88,7 +91,12 @@ async def _search_jobs_handler(
             for site in target_sites:
                 url = f"{settings.LEVER_API_BASE}/postings/{site}?mode=json"
                 try:
-                    resp = await client.get(url)
+                    resp = await metered_request(
+                        lambda: client.get(url),
+                        provider="lever",
+                        operation="postings",
+                        content={"url": url},
+                    )
                 except httpx.TimeoutException:
                     logger.warning("Lever API timeout for site=%s", site)
                     timed_out_sites.append(site)
@@ -138,6 +146,8 @@ async def _search_jobs_handler(
             "count": len(jobs),
             "jobs": jobs,
         }
+    except (ModelBudgetExceededError, ModelOutcomeUnknownError):
+        raise
     except Exception as exc:
         logger.warning("search_jobs failed (%s)", type(exc).__name__)
         return {
@@ -180,7 +190,12 @@ async def _fetch_detail(job_id: str, sites: list[str]) -> dict[str, Any]:
             for site in sites:
                 url = f"{settings.LEVER_API_BASE}/postings/{site}/{job_id}?mode=json"
                 try:
-                    resp = await client.get(url)
+                    resp = await metered_request(
+                        lambda: client.get(url),
+                        provider="lever",
+                        operation="postings",
+                        content={"url": url},
+                    )
                 except httpx.TimeoutException:
                     continue
                 if resp.status_code != 200:
@@ -211,6 +226,8 @@ async def _fetch_detail(job_id: str, sites: list[str]) -> dict[str, Any]:
                 }
     except httpx.TimeoutException:
         return {"error": "Lever API request timed out", "job_id": job_id}
+    except (ModelBudgetExceededError, ModelOutcomeUnknownError):
+        raise
     except Exception as exc:
         logger.warning("search_jobs detail fetch failed (%s)", type(exc).__name__)
         return {"error": "Lever API request failed", "job_id": job_id}

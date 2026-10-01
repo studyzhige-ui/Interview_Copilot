@@ -4,7 +4,7 @@ from collections.abc import Iterator
 
 import app.models  # noqa: F401
 import pytest
-from app.services import agent_memory_service
+from app.memory import lifecycle as agent_memory_service
 from app.api import personalization
 from app.core.security import get_current_user
 from app.db.database import Base, get_db

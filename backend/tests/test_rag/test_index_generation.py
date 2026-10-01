@@ -17,9 +17,7 @@ def test_same_dimension_model_change_creates_new_index_generation(monkeypatch):
 
     assert first.embedding_dim == second.embedding_dim
     assert first.fingerprint != second.fingerprint
-    assert first.physical_collection("knowledge") != second.physical_collection(
-        "knowledge"
-    )
+    assert first.display_name("knowledge") != second.display_name("knowledge")
 
 
 def test_chunk_contract_change_creates_new_index_generation(monkeypatch):
@@ -62,3 +60,29 @@ def test_generation_reconciliation_is_idempotent(db_session):
 
     assert len(jobs) == 1
     assert jobs[0].idempotency_key == f"rag-generation:{document.id}:{active}"
+
+
+def test_pinned_revision_and_namespace_change_generation(monkeypatch):
+    from app.rag.index import identity
+
+    baseline = current_index_identity()
+    monkeypatch.setattr(
+        identity.settings,
+        "MODEL_REVISIONS_JSON",
+        {
+            identity.settings.EMBEDDING_MODEL: "a" * 40,
+        },
+    )
+    pinned = current_index_identity()
+    assert pinned.fingerprint != baseline.fingerprint
+    assert pinned.embedding_revision == "a" * 40
+    monkeypatch.setattr(
+        identity.settings,
+        "MODEL_REVISIONS_JSON",
+        {
+            identity.settings.EMBEDDING_MODEL: "b" * 40,
+        },
+    )
+    assert current_index_identity().fingerprint != pinned.fingerprint
+    monkeypatch.setattr(identity.settings, "RAG_INDEX_NAMESPACE", "separate-eval")
+    assert current_index_identity().namespace != pinned.namespace

@@ -63,11 +63,9 @@ from app.schemas.interview_invitation import (
     RejectInterviewInvitationCandidate,
 )
 from app.schemas.job_opportunity import OpportunityCreate
-from app.services.career_process_service import create_job_opportunity
-from app.services.chat.interaction_service import (
-    create_pending_interaction,
-    resolve_interaction,
-)
+from app.career.application.process import create_job_opportunity
+from app.conversation.application.interaction_service import create_pending_interaction
+from app.conversation.application.interaction_service import resolve_interaction
 
 
 NOW = datetime(2026, 8, 26, 9, 0, tzinfo=UTC)
@@ -212,6 +210,9 @@ def _fact_interaction(
     candidate,
     *,
     decision: str,
+    corrected_facts=None,
+    opportunity=None,
+    reason=None,
 ):
     candidate_row = db_session.get(InterviewInvitationCandidate, candidate.id)
     assert candidate_row is not None
@@ -269,7 +270,27 @@ def _fact_interaction(
         user_id=user.id,
         expected_version=row.version,
         status="rejected" if decision == "reject" else "resolved",
-        resolution=InteractionPayload(root={"decision": decision}),
+        resolution=InteractionPayload(
+            root={
+                "protocol": "interview_invitation.fact_confirmation.v1",
+                "decision": decision,
+                "reason": reason,
+                **(
+                    {
+                        "opportunity": (
+                            opportunity or CreateOpportunity(kind="create_new")
+                        ).model_dump(mode="json")
+                    }
+                    if decision != "reject"
+                    else {}
+                ),
+                **(
+                    {"corrected_facts": corrected_facts.model_dump(mode="json")}
+                    if corrected_facts is not None
+                    else {}
+                ),
+            }
+        ),
         resolution_identity=decision_identity,
     )
     return conversation, turn, resolved, decision_identity
@@ -452,13 +473,20 @@ def test_link_existing_requires_current_opportunity_version(db_session) -> None:
 def test_candidate_confirmation_records_decision_and_evidence(db_session) -> None:
     user = _user(db_session)
     intake, source, candidate = _source_and_candidate(db_session, user)
+    opportunity = _existing_opportunity(db_session, user)
+    selected = LinkExistingOpportunity(
+        kind="link_existing",
+        opportunity_id=opportunity.id,
+        expected_version=opportunity.version,
+    )
     conversation, turn, interaction, decision_identity = _fact_interaction(
         db_session,
         user,
         candidate,
         decision="correct_and_confirm",
+        corrected_facts=_facts(location="Corrected remote location"),
+        opportunity=selected,
     )
-    opportunity = _existing_opportunity(db_session, user)
     command = ConfirmInterviewInvitation(
         idempotency_key="candidate-confirm-1",
         actor_kind="agent_on_behalf",
@@ -509,6 +537,7 @@ def test_reject_candidate_has_zero_canonical_side_effects(db_session) -> None:
         user,
         candidate,
         decision="reject",
+        reason="This invitation belongs to another person",
     )
     result = reject_interview_invitation_candidate(
         db_session,

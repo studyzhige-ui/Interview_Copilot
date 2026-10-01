@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import pytest
 from app.models.outbox_job import OutboxJob
 from app.models.user import User
-from app.services import outbox as outbox_service
-from app.services.uploads import file_asset_service
+from app.platform import outbox as outbox_service
+from app.files.application import file_asset_service
 
 
 def _make_user(db, username="alice") -> User:
@@ -24,19 +24,11 @@ def _stub_presign(monkeypatch):
     Records the TTL each call used so tests can pin UP-7."""
     calls = {}
 
-    def _fake(object_key, content_type="application/octet-stream", expiration=600):
+    def _fake(asset, *, owner, operation, expiration=600):
         calls["expiration"] = expiration
-        return {
-            "upload_url": f"https://signed.example/{object_key}",
-            "storage_uri": f"s3://bucket/{object_key}",
-            "object_key": object_key,
-        }
+        return f"https://signed.example/{asset.id}"
 
-    monkeypatch.setattr(
-        file_asset_service,
-        "generate_presigned_upload_url_for_key",
-        _fake,
-    )
+    monkeypatch.setattr("app.files.application.storage_access.asset_url", _fake)
     return calls
 
 
@@ -46,7 +38,7 @@ def _stub_magic_gate(monkeypatch):
     about the byte-level detectors (those have their own unit tests in
     test_file_validation_detect.py), so stub the gate open by default; the
     magic/transient-specific tests override per-case."""
-    from app.services.uploads import file_validation
+    from app.files.application import file_validation
 
     monkeypatch.setattr(
         file_asset_service,
@@ -257,7 +249,7 @@ def test_enqueue_job_coalesces_immediate_wakeup_by_resource_lane(db_session):
     outbox_service.enqueue_job(
         db_session,
         user_pk=user.id,
-        job_type="milvus_upsert_document",
+        job_type="retrieval_upsert_document",
     )
 
     assert db_session.info["outbox_wakeup_lanes"] == {"cleanup", "index"}
@@ -348,7 +340,7 @@ def test_run_due_outbox_jobs_claims_only_requested_resource_class(
 ):
     user = _make_user(db_session)
     db_session.commit()
-    for job_type in ("delete_object", "milvus_upsert_document"):
+    for job_type in ("delete_object", "retrieval_upsert_document"):
         outbox_service.enqueue_job(
             db_session,
             user_pk=user.id,
@@ -373,7 +365,7 @@ def test_run_due_outbox_jobs_claims_only_requested_resource_class(
     statuses = {job.job_type: job.status for job in db_session.query(OutboxJob).all()}
     assert statuses == {
         "delete_object": "succeeded",
-        "milvus_upsert_document": "pending",
+        "retrieval_upsert_document": "pending",
     }
 
 
@@ -405,6 +397,7 @@ def test_delete_object_handler_enforces_owner_prefix(monkeypatch):
     from app.core import storage
 
     deleted = []
+    monkeypatch.setattr(storage.settings, "S3_BUCKET_NAME", "bucket")
     monkeypatch.setattr(storage, "delete_s3_object", deleted.append)
     owned_job = SimpleNamespace(
         job_type="delete_object",
@@ -489,7 +482,7 @@ def test_confirm_rejects_actual_size_over_cap(db_session, monkeypatch):
 
 def test_confirm_rejects_wrong_magic(db_session, monkeypatch):
     """UP-6: content that fails the purpose's magic detection fails confirm."""
-    from app.services.uploads import file_validation
+    from app.files.application import file_validation
 
     _make_user(db_session)
     db_session.commit()

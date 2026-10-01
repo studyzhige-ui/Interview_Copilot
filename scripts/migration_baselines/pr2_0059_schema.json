@@ -1,0 +1,5056 @@
+{
+  "ability_signal_source_refs": {
+    "ability_signal_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(37)"
+    },
+    "source_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "source_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    }
+  },
+  "ability_signals": {
+    "confidence": {
+      "nullable": true,
+      "type": "DOUBLE PRECISION"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "formed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "level": {
+      "nullable": true,
+      "type": "VARCHAR(64)"
+    },
+    "limitations": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "producer_key": {
+      "nullable": true,
+      "type": "VARCHAR(240)"
+    },
+    "rubric_version": {
+      "nullable": true,
+      "type": "VARCHAR(64)"
+    },
+    "scope_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "scope_ref_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "score": {
+      "nullable": true,
+      "type": "DOUBLE PRECISION"
+    },
+    "score_scale_version": {
+      "nullable": true,
+      "type": "VARCHAR(40)"
+    },
+    "signal_type": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "status_changed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "status_reason": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "summary": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "supersedes_signal_id": {
+      "nullable": true,
+      "type": "VARCHAR(35)"
+    },
+    "topic": {
+      "nullable": false,
+      "type": "VARCHAR(200)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "agent_interactions": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "expires_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "request_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "resolution_identity": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "resolution_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "resolved_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "schema_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "tool_call_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "turn_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "agent_memory_settings": {
+    "contribution_enabled": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "recall_enabled": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "agent_model_dispatches": {
+    "call_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "completed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "dispatch_generation": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "error_code": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "model": {
+      "nullable": false,
+      "type": "VARCHAR(255)"
+    },
+    "partial_text": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "provider": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "request_fingerprint": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "started_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "turn_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "usage_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "agent_task_revisions": {
+    "agent_task_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "changed_phase_ids_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "from_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "idempotency_key": {
+      "nullable": false,
+      "type": "VARCHAR(200)"
+    },
+    "reason": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "request_fingerprint": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "to_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "agent_task_skill_bindings": {
+    "activated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "agent_task_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "content_hash": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "skill_id": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "skill_name": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "skill_revision": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "skill_source": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    }
+  },
+  "agent_tasks": {
+    "completion_conditions_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "creation_fingerprint": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "creation_idempotency_key": {
+      "nullable": false,
+      "type": "VARCHAR(200)"
+    },
+    "frozen_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "objective": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "phases_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "turn_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "agent_tool_calls": {
+    "arguments_digest": {
+      "nullable": true,
+      "type": "VARCHAR(64)"
+    },
+    "arguments_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "call_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "completed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "completion_sequence": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "connection_identity": {
+      "nullable": true,
+      "type": "VARCHAR(255)"
+    },
+    "dispatch_generation": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "duration_ms": {
+      "nullable": true,
+      "type": "DOUBLE PRECISION"
+    },
+    "effect": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "error": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "handler_identity": {
+      "nullable": true,
+      "type": "VARCHAR(255)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "model_call_index": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "model_call_order": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "model_step": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "policy_decision": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "policy_reason": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "provider_identity": {
+      "nullable": true,
+      "type": "VARCHAR(255)"
+    },
+    "receipt_refs_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "resource_identities_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "result_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "session_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "started_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "timeline_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "timeout_seconds": {
+      "nullable": false,
+      "type": "DOUBLE PRECISION"
+    },
+    "tool_name": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "turn_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "application_operations": {
+    "actor_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "completed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "conversation_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "error_code": {
+      "nullable": true,
+      "type": "VARCHAR(80)"
+    },
+    "error_detail": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "idempotency_key": {
+      "nullable": false,
+      "type": "VARCHAR(200)"
+    },
+    "interaction_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "operation_name": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "request_fingerprint": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "request_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "result_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "schema_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(24)"
+    },
+    "task_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "tool_call_id": {
+      "nullable": true,
+      "type": "VARCHAR(256)"
+    },
+    "turn_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "artifact_job_relations": {
+    "artifact_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "job_opportunity_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "artifact_resume_states": {
+    "artifact_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "is_default": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "legacy_resume_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "parse_error": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "parse_status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "parse_version_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "artifact_submission_snapshots": {
+    "artifact_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "artifact_version_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "basis": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "confirmation_message_id": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "job_opportunity_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "operation_key": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "receipt_owner_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "receipt_owner_type": {
+      "nullable": true,
+      "type": "VARCHAR(64)"
+    },
+    "submitted_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "artifact_versions": {
+    "artifact_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "content_format": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "content_text": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "file_asset_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "file_asset_version": {
+      "nullable": true,
+      "type": "VARCHAR(96)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "operation_key": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "origin_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "source_message_id": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "source_owner_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "source_owner_type": {
+      "nullable": true,
+      "type": "VARCHAR(64)"
+    },
+    "source_turn_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "title": {
+      "nullable": false,
+      "type": "VARCHAR(240)"
+    },
+    "version_no": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "artifacts": {
+    "archived_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "creation_key": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "kind": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "career_domain_events": {
+    "aggregate_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "aggregate_type": {
+      "nullable": false,
+      "type": "VARCHAR(80)"
+    },
+    "aggregate_version": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "event_category": {
+      "nullable": false,
+      "type": "VARCHAR(24)"
+    },
+    "event_kind": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "idempotency_key": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "object_references_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "occurred_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "operation_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "payload_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "replayable": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "schema_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "sequence": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "career_profile_candidate_items": {
+    "conflict_kind": {
+      "nullable": false,
+      "type": "VARCHAR(24)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "current_value_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "draft_id": {
+      "nullable": false,
+      "type": "VARCHAR(37)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(37)"
+    },
+    "item_kind": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "payload_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "position": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "resolution_note": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "resolved_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "career_profile_directions": {
+    "career_profile_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "confirmed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "confirmed_source_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "confirmed_source_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "criteria_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "label": {
+      "nullable": false,
+      "type": "VARCHAR(160)"
+    },
+    "lifecycle": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "priority": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    }
+  },
+  "career_profile_draft_changes": {
+    "base_profile_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "career_profile_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(37)"
+    },
+    "proposed_directions_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "proposed_facts_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "resolution_note": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "resolved_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "source_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "career_profiles": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "personal_facts_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "context_checkpoints": {
+    "conversation_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "dispatch_generation": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "previous_window_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "scope": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "state": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "through_seq": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "window_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    }
+  },
+  "conversation_attachment_drafts": {
+    "conversation_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "file_asset_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "removed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "source_document_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "conversation_attachment_refs": {
+    "conversation_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "display_name": {
+      "nullable": false,
+      "type": "VARCHAR(512)"
+    },
+    "draft_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "file_asset_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "file_asset_version": {
+      "nullable": false,
+      "type": "VARCHAR(96)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "position": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "removed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "source_document_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "submission_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "turn_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "conversation_deletion_receipts": {
+    "call_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "correlation_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "deleted_conversation_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "dispatch_generation": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "effect": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "reason": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "resolved_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "resource_identities_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "retain_until": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(24)"
+    },
+    "tool_name": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "turn_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "conversation_messages": {
+    "content": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "content_blocks_json": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "conversation_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "created_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "rewritten_query": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "role": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "seq": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "tool_call_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "tool_name": {
+      "nullable": true,
+      "type": "VARCHAR"
+    }
+  },
+  "conversation_turns": {
+    "assistant_message_seq": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "attachments_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "budget_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "completed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "conversation_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "dispatch_generation": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "dispatch_requested_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "error": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "execution_mode": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "heartbeat_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "interrupt_submission_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "interrupt_submission_version": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "loaded_tool_schemas_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "message": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "mode": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "object_references_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "owner_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "question_indexes_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "recovery_attempts": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "started_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "submission_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "tool_snapshot_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "user_message_seq": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "waiting_reason": {
+      "nullable": true,
+      "type": "VARCHAR(32)"
+    }
+  },
+  "conversations": {
+    "active_turn_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "archived_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "compaction_cursor": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "created_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "execution_mode": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "execution_mode_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "guidance_source_message_id": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "guidance_text": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "guidance_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "memory_contribution_override": {
+      "nullable": true,
+      "type": "BOOLEAN"
+    },
+    "memory_control_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "memory_extraction_cursor": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "memory_recall_override": {
+      "nullable": true,
+      "type": "BOOLEAN"
+    },
+    "mode": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "subject_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "subject_type": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "summary": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "title": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "turn_count": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "type": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "copilot_preferences": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "instructions_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "document_chunks": {
+    "chunk_index": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "deleted_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "document_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "index_status": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "metadata_json": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "node_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "page_end": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "page_start": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "text": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "text_hash": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "token_count": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "external_plugin_accounts": {
+    "account_hint": {
+      "nullable": false,
+      "type": "VARCHAR(320)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "credential_handle_ciphertext": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "external_account_id": {
+      "nullable": false,
+      "type": "VARCHAR(255)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "last_checked_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "last_error_code": {
+      "nullable": true,
+      "type": "VARCHAR(64)"
+    },
+    "provider": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "revoked_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "scopes_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "external_plugin_oauth_states": {
+    "code_verifier_ciphertext": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "expires_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "provider": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "state_digest": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "file_assets": {
+    "checksum_sha256": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "content_type": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "deleted_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "object_key": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "original_filename": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "purpose": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "size_bytes": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "storage_uri": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "upload_status": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "validation_error": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "validation_status": {
+      "nullable": false,
+      "type": "VARCHAR"
+    }
+  },
+  "gmail_integration_accounts": {
+    "account_hint": {
+      "nullable": false,
+      "type": "VARCHAR(320)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "credential_handle_ciphertext": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "google_subject": {
+      "nullable": false,
+      "type": "VARCHAR(255)"
+    },
+    "history_cursor": {
+      "nullable": true,
+      "type": "VARCHAR(256)"
+    },
+    "history_cursor_updated_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "last_checked_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "last_error_code": {
+      "nullable": true,
+      "type": "VARCHAR(64)"
+    },
+    "last_observation_sync_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "last_observation_sync_error_code": {
+      "nullable": true,
+      "type": "VARCHAR(64)"
+    },
+    "revoked_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "scopes_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "gmail_oauth_states": {
+    "code_verifier_ciphertext": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "expires_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "state_digest": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "gmail_observation_review_cards": {
+    "candidate_event_kind": {
+      "nullable": false,
+      "type": "VARCHAR(40)"
+    },
+    "candidate_opportunity_id": {
+      "nullable": true,
+      "type": "VARCHAR(35)"
+    },
+    "confidence": {
+      "nullable": false,
+      "type": "DOUBLE PRECISION"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "description": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "new_opportunity_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "observation_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "occurred_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "persistent_task_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "process_event_id": {
+      "nullable": true,
+      "type": "VARCHAR(35)"
+    },
+    "rationale": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "resolution_note": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "resolved_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "source_snapshot_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "step_summary": {
+      "nullable": true,
+      "type": "VARCHAR(300)"
+    },
+    "unique_match": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_request_identity": {
+      "nullable": true,
+      "type": "VARCHAR(256)"
+    },
+    "user_request_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "gmail_observation_snapshots": {
+    "content_available": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "content_sha256": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "from_hint": {
+      "nullable": false,
+      "type": "VARCHAR(320)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "observation_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "observed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "provider_history_id": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "provider_message_id": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "provider_thread_id": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "received_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "snapshot_version": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "snippet": {
+      "nullable": false,
+      "type": "VARCHAR(1000)"
+    },
+    "subject": {
+      "nullable": false,
+      "type": "VARCHAR(500)"
+    }
+  },
+  "gmail_observations": {
+    "analysis_summary": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "applied_process_event_id": {
+      "nullable": true,
+      "type": "VARCHAR(35)"
+    },
+    "candidate_event_kind": {
+      "nullable": true,
+      "type": "VARCHAR(40)"
+    },
+    "classification_confidence": {
+      "nullable": true,
+      "type": "DOUBLE PRECISION"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "gmail_account_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "matched_job_opportunity_id": {
+      "nullable": true,
+      "type": "VARCHAR(35)"
+    },
+    "notification_summary": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "observed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "provider_message_id": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "provider_thread_id": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "received_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "retraction_process_event_id": {
+      "nullable": true,
+      "type": "VARCHAR(35)"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "unique_match": {
+      "nullable": true,
+      "type": "BOOLEAN"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "interview_invitation_candidates": {
+    "confidence": {
+      "nullable": true,
+      "type": "DOUBLE PRECISION"
+    },
+    "confirmed_operation_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "conflicts_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "extractor_version": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "facts_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "field_provenance_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "missing_fields_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "observation_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "resolution_note": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "resolved_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "resolved_by_interaction_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "source_identity": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "source_version": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "interview_invitation_evidence_refs": {
+    "candidate_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "field_name": {
+      "nullable": false,
+      "type": "VARCHAR(80)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "interview_record_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "operation_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "process_event_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "source_identity": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "source_snapshot_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "source_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "value_hash": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    }
+  },
+  "interview_invitation_observations": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "retraction_reason": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "source_snapshot_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "interview_invitation_source_snapshots": {
+    "content_sha256": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "observed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "payload_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "source_identity": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "source_version": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "interview_qa": {
+    "action": {
+      "nullable": true,
+      "type": "VARCHAR(32)"
+    },
+    "analyzed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "answer": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "answer_audio_file_asset_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "answer_audio_url": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "answer_input_mode": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "answer_quality_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "critique": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "follow_up_depth": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "grounding_refs_json": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "improved_answer": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "is_follow_up": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "key_points_json": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "order_idx": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "parent_qa_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "phase": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "phase_label": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "question": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "question_audio_url": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "question_summary": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "record_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "saved_document_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "score": {
+      "nullable": true,
+      "type": "DOUBLE PRECISION"
+    },
+    "source_provenance_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "source_segment_end": {
+      "nullable": true,
+      "type": "DOUBLE PRECISION"
+    },
+    "source_segment_start": {
+      "nullable": true,
+      "type": "DOUBLE PRECISION"
+    },
+    "source_transcript_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "topic": {
+      "nullable": true,
+      "type": "VARCHAR(80)"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "interview_qa_revisions": {
+    "after_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "author_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "before_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "invalidated_review_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "new_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "previous_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "qa_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "record_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    }
+  },
+  "interview_records": {
+    "ability_signal_generation": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "analysis_json": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "analysis_schema_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "analyzed_qa_count": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "audio_file_asset_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "category": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "celery_task_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "completed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "contact_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "debrief_guidance_source_message_id": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "debrief_guidance_text": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "debrief_guidance_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "error_message": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "invitation_candidate_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "invitation_operation_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "invitation_source_identity": {
+      "nullable": true,
+      "type": "VARCHAR(256)"
+    },
+    "invitation_source_kind": {
+      "nullable": true,
+      "type": "VARCHAR(32)"
+    },
+    "invitation_source_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "jd_file_asset_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "jd_structured_json": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "jd_text_snapshot": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "job_opportunity_id": {
+      "nullable": true,
+      "type": "VARCHAR(35)"
+    },
+    "last_dreamed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "meeting_url": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "original_time_text": {
+      "nullable": true,
+      "type": "VARCHAR(300)"
+    },
+    "resume_artifact_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "resume_artifact_version_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "resume_file_asset_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "resume_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "resume_source": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "resume_structured_snapshot_json": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "resume_text_snapshot": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "resume_title_snapshot": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "review_generation": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "schedule_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "scheduled_end_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "scheduled_location": {
+      "nullable": true,
+      "type": "VARCHAR(500)"
+    },
+    "scheduled_start_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "source": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "source_timezone": {
+      "nullable": true,
+      "type": "VARCHAR(80)"
+    },
+    "specification_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "stage_label": {
+      "nullable": true,
+      "type": "VARCHAR(200)"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "tag": {
+      "nullable": true,
+      "type": "VARCHAR(32)"
+    },
+    "title": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "transcript_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "interview_source_refs": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "display_name": {
+      "nullable": false,
+      "type": "VARCHAR(512)"
+    },
+    "file_asset_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "file_asset_version": {
+      "nullable": false,
+      "type": "VARCHAR(96)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "interview_record_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "origin_attachment_ref_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "origin_conversation_id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "removed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "source_document_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "interview_transcripts": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "duration_seconds": {
+      "nullable": true,
+      "type": "DOUBLE PRECISION"
+    },
+    "error_message": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "evidence_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "evidence_schema_version": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "language": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "provider": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "quality_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "record_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "segments_json": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "structure_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "structure_schema_version": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "text": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "invitation_submissions": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "operation_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "rejection_code": {
+      "nullable": true,
+      "type": "VARCHAR(80)"
+    },
+    "request_fingerprint": {
+      "nullable": true,
+      "type": "VARCHAR(64)"
+    },
+    "request_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "job_description_snapshots": {
+    "canonical_content": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "content_checksum": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "creation_fingerprint": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "idempotency_key": {
+      "nullable": false,
+      "type": "VARCHAR(200)"
+    },
+    "job_opportunity_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "normalized_url": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "observed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "original_url": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "provider": {
+      "nullable": false,
+      "type": "VARCHAR(80)"
+    },
+    "source_identity": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "source_version": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "job_opportunities": {
+    "archived_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "company_name": {
+      "nullable": false,
+      "type": "VARCHAR(200)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "current_step": {
+      "nullable": false,
+      "type": "VARCHAR(300)"
+    },
+    "direction_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "external_application_id": {
+      "nullable": true,
+      "type": "VARCHAR(200)"
+    },
+    "external_job_id": {
+      "nullable": true,
+      "type": "VARCHAR(200)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "idempotency_key": {
+      "nullable": true,
+      "type": "VARCHAR(200)"
+    },
+    "job_title": {
+      "nullable": false,
+      "type": "VARCHAR(300)"
+    },
+    "last_event_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "location": {
+      "nullable": true,
+      "type": "VARCHAR(200)"
+    },
+    "normalized_source_url": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "outcome": {
+      "nullable": true,
+      "type": "VARCHAR(32)"
+    },
+    "phase": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "source_provider": {
+      "nullable": true,
+      "type": "VARCHAR(80)"
+    },
+    "source_url": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "team": {
+      "nullable": true,
+      "type": "VARCHAR(200)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "job_opportunity_direction_links": {
+    "career_profile_direction_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "confirmed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(37)"
+    },
+    "job_opportunity_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "match_reason": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "position": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "source_identity": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    }
+  },
+  "job_opportunity_merges": {
+    "canonical_opportunity_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "confirmation_source_identity": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "duplicate_opportunity_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "operation_key": {
+      "nullable": false,
+      "type": "VARCHAR(200)"
+    },
+    "reason": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "retracted_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "retraction_operation_key": {
+      "nullable": true,
+      "type": "VARCHAR(200)"
+    },
+    "retraction_reason": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "knowledge_documents": {
+    "category": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "chunk_count": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "content_text": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "conversation_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "deleted_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "error_message": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "file_asset_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "index_fingerprint": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "object_key": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "ref_doc_ids": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "source_interview_record_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "source_ref_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "source_ref_type": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "storage_uri": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "task_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "title": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "long_term_agent_memories": {
+    "applicability": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "confidence": {
+      "nullable": false,
+      "type": "DOUBLE PRECISION"
+    },
+    "content": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "content_hash": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "deleted_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "evidence_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "formed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "index_text": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "invalidated_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "last_confirmed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "last_recalled_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "last_used_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "origin": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "recall_count": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "semantic_key": {
+      "nullable": false,
+      "type": "VARCHAR(120)"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "status_reason": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "tags_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "usage_count": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "valence": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "long_term_agent_memory_sources": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "memory_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "observed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "source_conversation_identity": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "source_deleted_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "source_turn_identity": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "support_quote_hash": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "turn_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    }
+  },
+  "memory_ability_states": {
+    "ability_score": {
+      "nullable": true,
+      "type": "DOUBLE PRECISION"
+    },
+    "archived_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "evidence_refs_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "last_evidence_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "mastery_level": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "score_version": {
+      "nullable": true,
+      "type": "VARCHAR(32)"
+    },
+    "search_text": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "skill_type": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "summary": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "topic": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "memory_audit_logs": {
+    "after_body": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "before_body": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "change_type": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "doc_type": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "idempotency_key": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "memory_ability_state_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "memory_document_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "source_conversation_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "source_interview_record_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "source_message_range_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "summary": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "topic": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "memory_documents": {
+    "body": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "doc_type": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "last_discussed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "one_liner": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "memory_extractions": {
+    "attempts": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "candidates_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "conversation_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "error_code": {
+      "nullable": true,
+      "type": "VARCHAR(80)"
+    },
+    "generated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "lease_token": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "lease_until": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "observed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "retry_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "source_hash": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(24)"
+    },
+    "summary": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "turn_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "memory_read_receipts": {
+    "cited_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "feedback": {
+      "nullable": true,
+      "type": "VARCHAR(16)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "memory_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "memory_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "turn_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "memory_workspaces": {
+    "attempts": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "error_code": {
+      "nullable": true,
+      "type": "VARCHAR(80)"
+    },
+    "index_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "input_hash": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "lease_token": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "lease_until": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "retry_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "revision": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(24)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "mock_answer_submissions": {
+    "claim_generation": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "command_sha256": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "question_message_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "record_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "request_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "response_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(20)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    }
+  },
+  "mock_interview_runtime": {
+    "answer_claim_generation": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "answer_claimed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "conversation_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "current_question_message_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "current_stage_key": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "interview_record_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "interviewer_style": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "last_activity_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "plan_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "target_question_count": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "mock_media_leases": {
+    "client_session_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "connection_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "expires_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "record_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    }
+  },
+  "mock_media_playback": {
+    "client_reported_samples": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "delivered_samples": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "generated_samples": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "message_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "playback_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "record_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "sample_rate": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    }
+  },
+  "model_budget_reservations": {
+    "cost_observed_micros": {
+      "nullable": true,
+      "type": "BIGINT"
+    },
+    "cost_reserved_micros": {
+      "nullable": false,
+      "type": "BIGINT"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "invoice_cost_micros": {
+      "nullable": true,
+      "type": "BIGINT"
+    },
+    "meter": {
+      "nullable": false,
+      "type": "VARCHAR(80)"
+    },
+    "model": {
+      "nullable": true,
+      "type": "VARCHAR(255)"
+    },
+    "observed_tokens": {
+      "nullable": false,
+      "type": "BIGINT"
+    },
+    "observed_units_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "price_snapshot_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "provider": {
+      "nullable": true,
+      "type": "VARCHAR(120)"
+    },
+    "provider_request_id": {
+      "nullable": true,
+      "type": "VARCHAR(255)"
+    },
+    "reconciliation_ref": {
+      "nullable": true,
+      "type": "VARCHAR(256)"
+    },
+    "request_fingerprint": {
+      "nullable": true,
+      "type": "VARCHAR(64)"
+    },
+    "reserved_tokens": {
+      "nullable": false,
+      "type": "BIGINT"
+    },
+    "reserved_units_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "revision": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "settled_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "transport_claimed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "valuation_snapshot_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "window_date": {
+      "nullable": false,
+      "type": "DATE"
+    }
+  },
+  "model_budget_windows": {
+    "call_limit": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "calls_admitted": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "cost_limit_micros": {
+      "nullable": true,
+      "type": "BIGINT"
+    },
+    "cost_reserved_micros": {
+      "nullable": false,
+      "type": "BIGINT"
+    },
+    "cost_used_micros": {
+      "nullable": false,
+      "type": "BIGINT"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "currency": {
+      "nullable": false,
+      "type": "VARCHAR(3)"
+    },
+    "token_limit": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "tokens_reserved": {
+      "nullable": false,
+      "type": "BIGINT"
+    },
+    "tokens_used": {
+      "nullable": false,
+      "type": "BIGINT"
+    },
+    "unit_limits_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "units_reserved_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "units_used_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "window_date": {
+      "nullable": false,
+      "type": "DATE"
+    }
+  },
+  "next_actions": {
+    "artifact_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "close_reason": {
+      "nullable": true,
+      "type": "VARCHAR(300)"
+    },
+    "content": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "due_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "ends_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "idempotency_key": {
+      "nullable": true,
+      "type": "VARCHAR(200)"
+    },
+    "interview_record_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "job_opportunity_id": {
+      "nullable": true,
+      "type": "VARCHAR(35)"
+    },
+    "offer_id": {
+      "nullable": true,
+      "type": "VARCHAR(35)"
+    },
+    "original_time_text": {
+      "nullable": true,
+      "type": "VARCHAR(300)"
+    },
+    "planned_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "planned_source_identity": {
+      "nullable": true,
+      "type": "VARCHAR(256)"
+    },
+    "planned_source_kind": {
+      "nullable": true,
+      "type": "VARCHAR(40)"
+    },
+    "planned_source_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "reminder_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "reminder_channel": {
+      "nullable": true,
+      "type": "VARCHAR(24)"
+    },
+    "reminder_delivered_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "reminder_dismissed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "reminder_next_attempt_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "resolution_source_identity": {
+      "nullable": true,
+      "type": "VARCHAR(256)"
+    },
+    "resolution_source_kind": {
+      "nullable": true,
+      "type": "VARCHAR(40)"
+    },
+    "resolution_source_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "resolved_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "source_identity": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "source_timezone": {
+      "nullable": true,
+      "type": "VARCHAR(80)"
+    },
+    "source_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "starts_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "time_kind": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "notification_preferences": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "default_channel": {
+      "nullable": false,
+      "type": "VARCHAR(24)"
+    },
+    "enabled": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "quiet_end": {
+      "nullable": true,
+      "type": "VARCHAR(5)"
+    },
+    "quiet_start": {
+      "nullable": true,
+      "type": "VARCHAR(5)"
+    },
+    "timezone": {
+      "nullable": false,
+      "type": "VARCHAR(80)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "offers": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "creation_operation_fingerprint": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "creation_operation_key": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "job_opportunity_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "last_confirmation_observed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "last_confirmation_source_identity": {
+      "nullable": true,
+      "type": "VARCHAR(256)"
+    },
+    "last_confirmation_source_kind": {
+      "nullable": true,
+      "type": "VARCHAR(32)"
+    },
+    "last_confirmation_source_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "last_operation_fingerprint": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "last_operation_key": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "last_source_identity": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "last_source_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "last_source_observed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "last_source_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "source_excerpts_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "term_sources_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "terms_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "operation_verifications": {
+    "attempt": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "completed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "conclusion": {
+      "nullable": false,
+      "type": "VARCHAR(20)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "expected_postconditions_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "failure_reason": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "method": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "next_reconciliation_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "observed_evidence_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "operation_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "schema_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    }
+  },
+  "outbox_jobs": {
+    "aggregate_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "aggregate_type": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "attempts": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "idempotency_key": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "job_type": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "last_error": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "locked_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "locked_by": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "max_attempts": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "next_run_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "payload_json": {
+      "nullable": true,
+      "type": "JSONB"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "pending_submissions": {
+    "attachments_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "claimed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "conversation_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "error": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "execution_mode": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(128)"
+    },
+    "message": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "mode": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "object_references_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "position": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "question_indexes_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "source_client_id": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "persistent_task_triggers": {
+    "admitted_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "admitted_turn_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "cursor_after": {
+      "nullable": true,
+      "type": "VARCHAR(1024)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "idempotency_key": {
+      "nullable": false,
+      "type": "VARCHAR(200)"
+    },
+    "kind": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "observed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "occurred_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "occurrence_fingerprint": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "persistent_task_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "source_identity": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "source_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "summary": {
+      "nullable": false,
+      "type": "TEXT"
+    }
+  },
+  "persistent_tasks": {
+    "action_scope_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "allowed_tool_names_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "compensation_blocked_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "conversation_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "creation_fingerprint": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "idempotency_key": {
+      "nullable": false,
+      "type": "VARCHAR(200)"
+    },
+    "instruction": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "next_due_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "read_scope_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "skill_refs_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "state": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "title": {
+      "nullable": false,
+      "type": "VARCHAR(120)"
+    },
+    "trigger_kind": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "trigger_spec_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "user_request_identity": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "user_request_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "version": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "process_events": {
+    "analysis_context_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "corrects_event_id": {
+      "nullable": true,
+      "type": "VARCHAR(35)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "description": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "idempotency_key": {
+      "nullable": false,
+      "type": "VARCHAR(300)"
+    },
+    "jd_snapshot_id": {
+      "nullable": true,
+      "type": "VARCHAR(36)"
+    },
+    "jd_snapshot_version": {
+      "nullable": true,
+      "type": "INTEGER"
+    },
+    "job_opportunity_id": {
+      "nullable": false,
+      "type": "VARCHAR(35)"
+    },
+    "kind": {
+      "nullable": false,
+      "type": "VARCHAR(40)"
+    },
+    "observed_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "occurred_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "operation": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "sequence": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "source_identity": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "source_version": {
+      "nullable": true,
+      "type": "VARCHAR(128)"
+    },
+    "step_summary": {
+      "nullable": true,
+      "type": "VARCHAR(300)"
+    }
+  },
+  "resume_sections": {
+    "content": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "embedding_status": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "metadata_json": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "order_idx": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "resume_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "section_type": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "title": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "resumes": {
+    "archived_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "file_asset_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "is_default": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "parse_error": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "parse_status": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "raw_text_snapshot": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "structured_json": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "title": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "retrieval_entries": {
+    "chunk_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "document_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "embedding": {
+      "nullable": false,
+      "type": "VECTOR"
+    },
+    "generation": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "lexical_terms": {
+      "nullable": false,
+      "type": "TEXT[]"
+    },
+    "node_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "passage": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "source_hash": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "source_kind": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "term_counts": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "token_count": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "retrieval_generations": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "embedding_dim": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "fingerprint": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "identity_json": {
+      "nullable": false,
+      "type": "JSONB"
+    }
+  },
+  "transcript_corrections": {
+    "author_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "command_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "command_sha256": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "confirmed_roles_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "invalidated_review_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "previous_transcript_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "record_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "request_id": {
+      "nullable": false,
+      "type": "VARCHAR(36)"
+    },
+    "review_generation": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "transcript_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    }
+  },
+  "usage_accounts": {
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "usage_adjustments": {
+    "after_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "before_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "evidence_ref": {
+      "nullable": false,
+      "type": "VARCHAR(256)"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "operator": {
+      "nullable": false,
+      "type": "VARCHAR(120)"
+    },
+    "payload_fingerprint": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "receipt_id": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "user_mcp_servers": {
+    "args_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "checked_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "command": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "enabled": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "last_error": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "last_status": {
+      "nullable": false,
+      "type": "VARCHAR(24)"
+    },
+    "name": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "secrets_ciphertext": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "tool_count": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "transport": {
+      "nullable": false,
+      "type": "VARCHAR(24)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "url": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "user_model_credentials": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "key_ciphertext": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "key_masked": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "last_validated_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "last_validation_error": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "provider": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "status": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "user_model_provider_settings": {
+    "api_base_override": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "enabled": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "extra_headers_json": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "organization_id": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "provider": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "user_model_selections": {
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "profile_id": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "role": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "user_skill_resources": {
+    "content": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "content_hash": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "kind": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "path": {
+      "nullable": false,
+      "type": "VARCHAR(255)"
+    },
+    "skill_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    }
+  },
+  "user_skills": {
+    "allowed_tools_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "applicable_profiles_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "content": {
+      "nullable": false,
+      "type": "TEXT"
+    },
+    "content_hash": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "description": {
+      "nullable": false,
+      "type": "VARCHAR(500)"
+    },
+    "enabled": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "name": {
+      "nullable": false,
+      "type": "VARCHAR(64)"
+    },
+    "required_tools_json": {
+      "nullable": false,
+      "type": "JSONB"
+    },
+    "revision": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "source": {
+      "nullable": false,
+      "type": "VARCHAR(32)"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "user_id": {
+      "nullable": false,
+      "type": "INTEGER"
+    }
+  },
+  "users": {
+    "avatar_url": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "bio": {
+      "nullable": true,
+      "type": "TEXT"
+    },
+    "created_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "default_execution_mode": {
+      "nullable": false,
+      "type": "VARCHAR(16)"
+    },
+    "email": {
+      "nullable": true,
+      "type": "VARCHAR"
+    },
+    "email_verified": {
+      "nullable": false,
+      "type": "BOOLEAN"
+    },
+    "hashed_password": {
+      "nullable": false,
+      "type": "VARCHAR"
+    },
+    "id": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "is_active": {
+      "nullable": true,
+      "type": "BOOLEAN"
+    },
+    "last_dreamed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "nickname": {
+      "nullable": true,
+      "type": "VARCHAR(64)"
+    },
+    "password_changed_at": {
+      "nullable": true,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "token_version": {
+      "nullable": false,
+      "type": "INTEGER"
+    },
+    "updated_at": {
+      "nullable": false,
+      "type": "TIMESTAMP WITH TIME ZONE"
+    },
+    "username": {
+      "nullable": false,
+      "type": "VARCHAR"
+    }
+  }
+}

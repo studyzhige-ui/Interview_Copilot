@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, Query, status
+from app.schemas.invitation_submission import SubmissionKey, InvitationSubmissionReceipt
+from app.career.application import invitation_submission_service as submissions
 from sqlalchemy.orm import Session
 
 from app.career.application.interview_invitation_operations import (
@@ -14,7 +16,6 @@ from app.career.application.interview_invitation_operations import (
     InvitationVerificationError,
     InvitationVersionConflictError,
     InterviewInvitationOperationError,
-    confirm_interview_invitation,
     get_interview_invitation_candidate,
     get_interview_invitation_handoff,
     list_interview_invitation_handoffs,
@@ -84,7 +85,7 @@ def confirm_invitation_from_ui(
     payload: ConfirmInterviewInvitation,
     response: Response,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> ConfirmInterviewInvitationResult:
     """Direct UI path; Agent and Automation use their own thin adapters."""
 
@@ -97,14 +98,22 @@ def confirm_invitation_from_ui(
             },
         )
     try:
-        result = confirm_interview_invitation(
-            db,
-            user_pk=current_user.id,
-            command=payload,
+        submissions.register_submission(db, user_pk=current_user.id, command=payload)
+        result = submissions.execute_submission(
+            db, user_pk=current_user.id, key=payload.idempotency_key
         )
         db.commit()
     except InterviewInvitationOperationError as exc:
         db.rollback()
+        # A rejected conflicting replay must not invalidate the original request.
+        if not isinstance(exc, InvitationIdempotencyConflictError):
+            submissions.reject_uncommitted_submission(
+                db,
+                user_pk=current_user.id,
+                key=payload.idempotency_key,
+                code=exc.code,
+            )
+            db.commit()
         raise _http_error(exc) from exc
     except Exception:
         db.rollback()
@@ -124,7 +133,7 @@ def ingest_fixture_observation(
     payload: FixtureInterviewInvitationInput,
     response: Response,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> FixtureInterviewInvitationResult:
     """VS-01 deterministic fixture ingress; this is not a live provider API."""
 
@@ -154,7 +163,7 @@ def ingest_fixture_observation(
 def read_invitation_candidate(
     candidate_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> InterviewInvitationCandidateView:
     try:
         return get_interview_invitation_candidate(
@@ -172,7 +181,7 @@ def read_invitation_candidate(
 )
 def list_confirmed_invitation_interviews(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> list[InterviewInvitationHandoffView]:
     return list_interview_invitation_handoffs(
         db,
@@ -187,7 +196,7 @@ def list_confirmed_invitation_interviews(
 def read_invitation_handoff(
     interview_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> InterviewInvitationHandoffView:
     try:
         return get_interview_invitation_handoff(
@@ -200,3 +209,57 @@ def read_invitation_handoff(
 
 
 __all__ = ["router"]
+
+
+@router.get("/submissions/receipt", response_model=InvitationSubmissionReceipt)
+def read_submission_receipt(
+    idempotency_key: str = Query(min_length=1, max_length=200),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db, scope="function"),
+):
+    try:
+        return submissions.submission_view(
+            db, user_pk=current_user.id, key=idempotency_key
+        )
+    except InterviewInvitationOperationError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/submissions/resume", response_model=ConfirmInterviewInvitationResult)
+def resume_submission(
+    payload: SubmissionKey,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db, scope="function"),
+):
+    try:
+        result = submissions.execute_submission(
+            db, user_pk=current_user.id, key=payload.idempotency_key
+        )
+        db.commit()
+        return result
+    except InterviewInvitationOperationError as exc:
+        db.rollback()
+        raise _http_error(exc) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/submissions/cancel", response_model=InvitationSubmissionReceipt)
+def cancel_pending_submission(
+    payload: SubmissionKey,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db, scope="function"),
+):
+    try:
+        result = submissions.cancel_submission(
+            db, user_pk=current_user.id, key=payload.idempotency_key
+        )
+        db.commit()
+        return result
+    except InterviewInvitationOperationError as exc:
+        db.rollback()
+        raise _http_error(exc) from exc
+    except Exception:
+        db.rollback()
+        raise

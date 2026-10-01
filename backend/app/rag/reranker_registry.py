@@ -25,6 +25,7 @@ from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
 
 from app.core.config import settings
+from app.core.model_policy import require_local_model
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +91,10 @@ class ResolvedReranker:
 def resolve_reranker() -> ResolvedReranker:
     pid = (settings.RERANKER_PROVIDER or "siliconflow").strip().lower()
     if pid not in PROVIDERS:
-        logger.warning(
-            "Unknown RERANKER_PROVIDER=%r, falling back to 'siliconflow'",
-            pid,
-        )
-        pid = "siliconflow"
+        raise ValueError(f"Unknown RERANKER_PROVIDER: {pid!r}")
+    require_local_model(
+        "reranking", is_local=PROVIDERS[pid].kind == "local_hf_crossencoder"
+    )
     model = (settings.RERANKER_MODEL or "BAAI/bge-reranker-v2-m3").strip()
     return ResolvedReranker(provider_id=pid, provider=PROVIDERS[pid], model=model)
 
@@ -108,7 +108,10 @@ def list_providers() -> list[dict[str, Any]]:
             "china_friendly": p.china_friendly,
             "api_key_env": p.api_key_env,
             "ready": p.kind == "local_hf_crossencoder"
-            or bool(os.getenv(p.api_key_env, "").strip()),
+            or (
+                settings.AUXILIARY_MODEL_POLICY != "local_only"
+                and bool(os.getenv(p.api_key_env, "").strip())
+            ),
         }
         for pid, p in PROVIDERS.items()
     ]
@@ -153,6 +156,7 @@ class RemoteAPIRerank(BaseNodePostprocessor):
     instead of mixing RRF-scale scores into the reranker-score contract.
     """
 
+    usage_provider: str = Field(default="custom")
     api_base: str = Field()
     api_key: str = Field()
     model: str = Field()
@@ -171,6 +175,7 @@ class RemoteAPIRerank(BaseNodePostprocessor):
         if not nodes or query_bundle is None:
             return nodes[: self.top_n]
 
+        require_local_model("reranking", is_local=False)
         documents = [n.node.get_content() for n in nodes]
         payload = {
             "model": self.model,
@@ -179,7 +184,11 @@ class RemoteAPIRerank(BaseNodePostprocessor):
             "top_n": min(self.top_n, len(documents)),
         }
         url = f"{self.api_base.rstrip('/')}/rerank"
-        try:
+        from app.usage import runtime
+        from app.usage.reranking import descriptor, observed
+        from app.usage.service import ModelBudgetExceededError
+
+        def send():
             with httpx.Client(timeout=self.timeout) as client:
                 resp = client.post(
                     url,
@@ -187,7 +196,22 @@ class RemoteAPIRerank(BaseNodePostprocessor):
                     headers={"Authorization": f"Bearer {self.api_key}"},
                 )
                 resp.raise_for_status()
-                body = resp.json()
+                return resp.json()
+
+        try:
+            body = runtime.invoke_sync(
+                send,
+                observed=lambda body: observed(body, len(documents)),
+                **descriptor(
+                    self.usage_provider,
+                    self.model,
+                    query_bundle.query_str,
+                    documents,
+                    destination=url,
+                ),
+            )
+        except ModelBudgetExceededError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise RerankerUnavailableError(
                 f"remote rerank ({self.model}) failed: {exc}"
@@ -258,38 +282,10 @@ def build_reranker(top_n: int) -> Any:
     p = cfg.provider
 
     if p.kind == "local_hf_crossencoder":
-        from llama_index.postprocessor.sbert_rerank import SentenceTransformerRerank
+        from app.local_inference.rag import BrokerReranker
+        from app.usage.reranking import AccountLocalReranker
 
-        from app.core.hf_runtime import (
-            format_missing_model_error,
-            prepare_hf_runtime,
-            resolve_local_snapshot,
-        )
-
-        prepare_hf_runtime()
-        from app.rag.policy import current_rag_policy, resolve_rag_device
-
-        local_path = resolve_local_snapshot(cfg.model)
-        if local_path is None:
-            raise RuntimeError(
-                format_missing_model_error(
-                    model_id=cfg.model,
-                    role="Reranker",
-                    filter_substring="rerank",
-                    fix_hint="python scripts/init_models.py --only reranker",
-                )
-            )
-        logger.info("Reranker: local model=%s top_n=%d", cfg.model, top_n)
-        reranker = SentenceTransformerRerank(
-            model=local_path,
-            device=resolve_rag_device(),
-            top_n=top_n,
-            cross_encoder_kwargs={
-                "max_length": current_rag_policy().tokens.rerank_input
-            },
-        )
-        _warm_local_reranker(reranker)
-        return reranker
+        return AccountLocalReranker(BrokerReranker(cfg.model, top_n), cfg.model)
 
     if p.kind == "remote_openai_style":
         api_key = os.getenv(p.api_key_env, "").strip()
@@ -305,6 +301,7 @@ def build_reranker(top_n: int) -> Any:
             top_n,
         )
         return RemoteAPIRerank(
+            usage_provider=cfg.provider_id,
             api_base=p.api_base,
             api_key=api_key,
             model=cfg.model,

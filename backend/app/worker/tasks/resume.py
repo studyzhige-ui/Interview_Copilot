@@ -17,8 +17,8 @@ def _process_artifact_resume(resume_id: str) -> dict[str, str]:
 
     from app.core.runtime_files import create_runtime_temp_file
     from app.models.user import User
-    from app.services.resume import resume_artifact_service
-    from app.services.uploads.file_asset_service import get_file_asset
+    from app.career.application.resumes import resume_artifact_service
+    from app.files.application.file_asset_service import get_file_asset
 
     with SessionLocal() as db:
         owner_pk = _artifact_owner_pk(db, resume_id)
@@ -49,14 +49,16 @@ def _process_artifact_resume(resume_id: str) -> dict[str, str]:
                     else None
                 )
                 object_key = asset.object_key if asset is not None else ""
-            if storage_uri and storage_uri.startswith("s3://"):
-                from app.core.storage import download_file_from_s3
-                from app.services.interview.document_text import extract_document_text
+            if storage_uri:
+                from app.core.storage import download_file_from_storage
+                from app.interviews.application.document_text import (
+                    extract_document_text,
+                )
 
                 _, ext = os.path.splitext(object_key or "")
                 tmp_path = create_runtime_temp_file(suffix=ext or ".pdf")
                 try:
-                    download_file_from_s3(storage_uri, tmp_path)
+                    download_file_from_storage(storage_uri, tmp_path)
                     text = (extract_document_text(tmp_path) or "").strip()
                 finally:
                     if os.path.exists(tmp_path):
@@ -75,11 +77,16 @@ def _process_artifact_resume(resume_id: str) -> dict[str, str]:
                 db.commit()
             return {"status": "failed", "resume_id": resume_id}
 
-        candidates = run_async(
-            resume_artifact_service.extract_profile_candidates(
-                text, user_id=owner_username
+        from app.usage.runtime import scope
+
+        with scope(
+            owner_pk, f"resume:{resume_id}:{source_version_id}", username=owner_username
+        ):
+            candidates = run_async(
+                resume_artifact_service.extract_profile_candidates(
+                    text, user_id=owner_username
+                )
             )
-        )
         with SessionLocal() as db:
             resume_artifact_service.persist_extracted_resume(
                 db,

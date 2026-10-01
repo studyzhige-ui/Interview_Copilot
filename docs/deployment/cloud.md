@@ -27,7 +27,7 @@ forges the request.
 - PostgreSQL
 - Redis and isolated Celery workers for turns, indexing pipelines, voice,
   background intelligence, and short control jobs
-- Milvus
+- PostgreSQL pgvector extension (built into the provided database image)
 - S3-compatible object storage
 - Managed or operator-hosted embedding and reranking
 - Managed or operator-hosted transcription and diarization
@@ -97,13 +97,14 @@ Create a PostgreSQL backup, optionally including S3 objects:
 python scripts/backup.py create --output /secure/backups --include-objects
 ```
 
-Restore only into a pre-created target database, then rebuild Milvus from the
+Restore only into a pre-created target database, then rebuild the pgvector projection from the
 PostgreSQL chunk source of truth:
 
 ```bash
 python scripts/backup.py restore /secure/backups/<timestamp> \
   --target-database-url postgresql://.../restore_target --restore-objects
-python scripts/reingest_hybrid.py
+python scripts/reingest_hybrid.py  # read-only, finite batch plan
+python scripts/reingest_hybrid.py --execute  # explicit model work; follow next_cursor
 ```
 
 Run the non-destructive release drills and deployed smoke flow:

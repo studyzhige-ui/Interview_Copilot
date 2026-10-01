@@ -1,3 +1,5 @@
 node_modules/
 smoke-result.json
 *.log
+.runtime/
+release/

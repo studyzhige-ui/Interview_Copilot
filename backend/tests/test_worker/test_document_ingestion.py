@@ -32,6 +32,9 @@ def _skip_worker_runtime_warmup(monkeypatch):
     unrelated and capable of blocking an otherwise in-memory unit test.  The
     signal-to-runtime mapping is covered separately by ``test_celery_routes``.
     """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "S3_BUCKET_NAME", "b")
     import app.rag.runtime as rag_runtime
 
     monkeypatch.setattr(rag_runtime, "ensure_rag_runtime", lambda **kwargs: None)
@@ -98,12 +101,12 @@ def _seed_doc(
 def test_chat_audio_is_transcribed_into_private_citable_chunks(worker_db, monkeypatch):
     import app.core.storage as storage_mod
     import app.rag.ingest.pipeline as ingestion_mod
-    import app.services.voice.audio_transcription_service as transcription_mod
+    import app.media.application.audio_transcription_service as transcription_mod
     from app.worker.tasks import process_document_ingestion
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "wb").write(b"audio"),
     )
 
@@ -225,7 +228,7 @@ def test_worker_marks_failed_on_empty_after_cleaning_without_retry(
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
@@ -260,7 +263,7 @@ def test_worker_keeps_processing_when_index_queued(worker_db, monkeypatch):
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
@@ -294,12 +297,12 @@ def test_worker_keeps_processing_when_index_queued(worker_db, monkeypatch):
 
 def test_ready_chat_projection_notifies_waiting_turn_service(worker_db, monkeypatch):
     import app.core.storage as storage_mod
-    import app.services.chat.attachment_waiting_service as waiting_service
+    import app.conversation.application.attachment_waiting_service as waiting_service
     from app.worker.tasks import process_document_ingestion
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
@@ -320,7 +323,7 @@ def test_ready_chat_projection_notifies_waiting_turn_service(worker_db, monkeypa
     monkeypatch.setattr(
         waiting_service,
         "wake_attachment_turns_for_projection",
-        lambda document_id: notified.append(document_id) or ["turn-1"],
+        lambda document_id, *, actions: notified.append(document_id) or ["turn-1"],
     )
 
     doc_id = _seed_doc(
@@ -346,7 +349,7 @@ def test_worker_marks_failed_on_embedding_validation_without_retry(
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
@@ -383,7 +386,7 @@ def test_worker_does_not_leave_document_processing_for_non_retryable_crash(
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
@@ -405,3 +408,77 @@ def test_worker_does_not_leave_document_processing_for_non_retryable_crash(
         assert "导入失败" in (doc.error_message or "")
     finally:
         db.close()
+
+
+def test_source_edit_during_download_stops_before_parser(worker_db, monkeypatch):
+    import app.core.storage as storage
+    import app.rag.ingest.pipeline as pipeline
+    from app.worker.tasks import process_document_ingestion
+
+    doc_id = _seed_doc(worker_db, filename="notes.txt")
+
+    def download(_uri, path):
+        with open(path, "wb") as file:
+            file.write(b"old source")
+        with worker_db() as db:
+            db.get(KnowledgeDocument, doc_id).title = "new source title"
+            db.commit()
+
+    monkeypatch.setattr(storage, "download_file_from_storage", download)
+    monkeypatch.setattr(
+        pipeline,
+        "ingest_document",
+        lambda *a, **kw: pytest.fail("stale source reached parser"),
+    )
+    assert process_document_ingestion.run(doc_id)["status"] == "superseded"
+    with worker_db() as db:
+        doc = db.get(KnowledgeDocument, doc_id)
+        assert doc.title == "new source title" and doc.status == "processing"
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_late_ingest_cannot_revive_deleted_source_and_waits_without_transaction(
+    worker_db, monkeypatch, raises
+):
+    import app.core.storage as storage
+    import app.rag.ingest.pipeline as pipeline
+    import app.worker.tasks.ingestion as worker
+    from app.db.types import utc_now
+
+    doc_id = _seed_doc(worker_db, filename="notes.txt")
+    opened = []
+
+    def sessions():
+        session = worker_db()
+        opened.append(session)
+        return session
+
+    def download(_uri, path):
+        assert not any(db.in_transaction() for db in opened)
+        with open(path, "wb") as file:
+            file.write(b"source")
+
+    async def ingest(*args, **kw):
+        assert not any(db.in_transaction() for db in opened)
+        assert kw["expected_source"].document_id == doc_id
+        with worker_db() as db:
+            doc = db.get(KnowledgeDocument, doc_id)
+            doc.status, doc.deleted_at = "deleted", utc_now()
+            db.commit()
+        if raises:
+            raise RuntimeError("late parser error")
+        return {
+            "success": True,
+            "indexed": True,
+            "chunk_count": 1,
+            "content_text": "stale",
+        }
+
+    monkeypatch.setattr(worker, "SessionLocal", sessions)
+    monkeypatch.setattr(storage, "download_file_from_storage", download)
+    monkeypatch.setattr(pipeline, "ingest_document", ingest)
+    assert worker.process_document_ingestion.run(doc_id)["status"] == "superseded"
+    with worker_db() as db:
+        doc = db.get(KnowledgeDocument, doc_id)
+        assert doc.status == "deleted" and doc.deleted_at is not None
+        assert doc.content_text is None

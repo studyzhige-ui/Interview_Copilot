@@ -13,7 +13,15 @@ guide for maintenance work, not a proposal for extra framework layers.
 | `backend/app/main.py` | FastAPI composition root: middleware, lifecycle checks, static mounts, and routers |
 | `backend/app/api/` | HTTP/SSE transport, authentication dependencies, request validation, and response mapping |
 | `backend/app/schemas/` | Pydantic request and response contracts |
-| `backend/app/services/` | Business use cases grouped by auth, chat, career state, artifacts, interviews, personalization, knowledge, resume, upload, voice, integrations, and model source |
+| `backend/app/career/application/` | Single owners for profile/evidence, opportunities/actions, invitations, artifacts/resumes, offers and reminders |
+| `backend/app/conversation/application/` | Durable Turn/dispatch/checkpoint/interaction owners; `session_commands.py` owns session changes |
+| `backend/app/interviews/application/` | Mock interview and uploaded-interview analysis, QA editing and recovery |
+| `backend/app/rag/application/` | Owned knowledge commands, library queries and ingestion workflow |
+| `backend/app/usage/` | Unified account resource/fee ledger, physical-call adapters, read-only projections and audited operator reconciliation |
+| `backend/app/identity/`, `files/`, `media/` | Account/credential, upload/asset, and speech application owners |
+| `backend/app/automation/`, `integrations/`, `capabilities/` | Persistent task lifecycle, authorized provider resources, plugin/catalog policy |
+| `backend/app/memory/`, `observability/`, `providers/catalog/`, `platform/outbox/` | Memory lifecycle, diagnostic projections, model catalog, durable outbox |
+| `backend/app/maintenance/` | Explicit operator-only legacy migration; runtime must not import this package |
 | `backend/app/conversation/` | Chat/Agent conversation engine, strategy selection, planning, and event contracts |
 | `backend/app/agent_runtime/` | Current ReAct execution, turn-local Tool catalog, MCP clients, Tool Calls, cancellation, and result storage; target Harness/Tool/Policy semantics are defined by `career-agent-os-blueprint.md` and future formal Contracts |
 | `backend/app/rag/` | Parsing, cleaning, chunking, embedding/reranking providers, Milvus indexing, retrieval, and hydration |
@@ -38,6 +46,43 @@ Runtime files, model weights, logs, generated reports, and user uploads belong
 under `data/` and are not source code. Python bytecode and system-style
 temporary files are redirected there by the supported launchers; application
 code uses `core/runtime_files.py` for temporary files and bounded JSONL output.
+
+## Shared wire schemas and compatibility gate
+
+`backend/app/schemas/` owns versioned Operation, Verification, Interaction,
+Client Action, Context Package and Activity contracts. Do not independently
+change a frontend mirror. The schema export imports only these DTOs, not the
+application, database, model clients or user configuration. Validation and
+serialization schemas are separate: clients may omit defaults while the current
+response serializers include them. Validation-only ORM aliases such as
+`request_json` must not leak into the response contract.
+
+```sh
+python scripts/export_shared_contracts.py
+npm ci --prefix scripts/contract_codegen --ignore-scripts
+npm run --prefix scripts/contract_codegen generate
+# CI checks both snapshots and TypeScript consumer compatibility:
+python scripts/export_shared_contracts.py --check
+npm run --prefix scripts/contract_codegen check
+npm run --prefix frontend typecheck
+```
+
+The committed OpenAPI 3.1 snapshot has local component references only. The
+pinned official `openapi-typescript` generator is a development tool, not a
+runtime HTTP client replacement. Its 7.13.0 TypeScript-5 peer is isolated in its
+own lockfile (5.9.3); the frontend keeps its existing TypeScript 6.0.3. Generated
+source is checked, not silently regenerated during CI. Compile-time directional
+checks ensure requests fit server inputs and responses fit UI projections;
+negative controls prevent an empty check from appearing successful. The UI can
+omit unused response fields, but cannot invent non-nullability or a supported
+action enum. Nullable candidate fields remain unknown; only a new manual form
+suggests the browser timezone.
+
+These checks do not implement semantic validators in TypeScript: permissions,
+aware dates, field dependencies, exact decisions and unknown schema versions
+still require runtime validation and behavior tests. Official generation APIs:
+[Pydantic JSON Schema](https://docs.pydantic.dev/latest/concepts/json_schema/) and
+[openapi-typescript CLI](https://openapi-ts.dev/cli), checked 2026-09-19.
 
 ## Runtime flow
 
@@ -82,6 +127,216 @@ side effects. Cross-system changes use the typed outbox and are claimed by
 cleanup. PostgreSQL owns lifecycle state, object storage owns file bytes, and
 Milvus is a rebuildable retrieval index.
 
+## Shared invitation ingress and unified consumption accounting
+
+The invitation domain operation remains
+`career/application/interview_invitation_operations.py`. UI, Agent and source
+adapters do not each implement another invitation writer:
+
+- A manual UI request first registers its exact command with
+  `invitation_submission_service.py`. Execution and the shared Operation's
+  verification/receipt link commit together. The browser keeps only an opaque,
+  account-scoped request key in sessionStorage, not the invitation fields.
+  Reload performs a read-only receipt lookup; only an explicit resume retries
+  the exact registered command. `not_received` is not proof that a delayed POST
+  cannot arrive. Cancellation uses the same owner lock and can create a
+  tombstone before that delayed POST arrives. A committed operation is not
+  undone by cancelling its ingress request.
+- Gmail interview invitations use `gmail_invitation_adapter.py` and the same
+  provider-neutral source/candidate/typed fact-confirmation flow as fixture
+  observations. Confidence and task scopes never auto-confirm an interview.
+  Missing dates/timezones stay missing until the user corrects them. The shared
+  Operation binds exact facts, object selections and versions to the saved
+  decision. Legacy invitation review approval hands off to this path, rather
+  than appending a second invitation ProcessEvent. Other event types keep their
+  existing lifecycle. Views project terminal status from the canonical
+  candidate instead of inventing another editable Gmail business state.
+- `usage/service.py` is the only account-consumption owner. The old
+  `services/chat/model_budget_service.py` implementation is retired. Primary
+  dispatch still reserves in the same transaction as `AgentModelDispatch`;
+  every other owned physical provider boundary also reserves before execution
+  and settles in a short, independently owned transaction.
+
+### One account envelope, not one quota per feature
+
+The historical `MODEL_DAILY_CALL_LIMIT` and `MODEL_DAILY_TOKEN_LIMIT` environment
+names remain supported, but now cover all registered production categories:
+primary Chat/Agent, internal router/worker, model completion/ping, compaction,
+vision, embedding, reranking, transcription, diarization, speech synthesis,
+cloud document parsing, external connector resource requests and opaque MCP
+invocations. Logical tokens, bytes, audio milliseconds, characters, pages,
+documents and request/invocation counts share a UTC-day window. A local model is
+still resource work, not an implicit free bypass. Empty/cache-only work that
+never executes does not create a provider call.
+
+Authentication and canonical Worker records establish the stable numeric owner.
+`ContextVar` carries only identity plus synchronized per-request ordinals, never
+a Session. Thread workers copy the context; independent task entry points restore
+it. Missing or conflicting owners stop consumption. Standalone operator ingestion
+uses the same owned boundary. The independent optional benchmark generator/judge
+has separate credentials and evaluation cost records; it is not a hidden product
+endpoint. The memory benchmark uses a retained local synthetic-account ledger.
+
+`usage_accounts` is an independent lock root. `0052` seeds existing users and
+preserves their windows, old dispatch identities and used/reserved tokens;
+creating a user creates its accounting root. Consumption windows and reservations
+reference that root, not a locked career User row. Lock order is account, receipt,
+window. No provider request runs inside the accounting transaction. Deleting a
+conversation cannot reset usage. An unresolved call retains its allowance across
+restart/day boundaries; an account-wide unresolved-count cap prevents unlimited
+accumulation. Replaying an existing dispatch is not a second admission.
+
+### Settlement and upgrade closeout
+
+The application must not infer another network-send permission from a failed
+accounting COMMIT. `ConsumptionSettlementUnconfirmedError` is non-retryable and
+explicitly distinguishes unconfirmed **local settlement** from an unknown
+**provider result**. The original receipt remains the recovery anchor, whether
+COMMIT rolled back or committed but its acknowledgement was lost. No automatic
+second settlement or provider resend is performed. Usage validation cannot
+rewrite admission attempt counts or provide inconsistent logical/disjoint token
+buckets. Operator quiescence is a real boolean attestation, not a truthy string.
+
+The same rule is enforced outside the ledger, at each transport and fallback
+boundary. HTTP stream success settles after the stream's cleanup scope; MCP
+success settles outside its transport-error handler, without discarding the
+healthy session. Cloud parsing propagates the settlement error rather than
+calling settlement a second time. Web/job search and parser-selection fallbacks
+propagate non-retryable consumption errors. The optional conversation planner,
+parallel candidate fusion and retrieval/reranking orchestrator preserve that
+same stop signal rather than recasting it as degraded evidence. Already-started
+parallel channels still complete their accounting; success in another channel
+cannot hide an unconfirmed paid result. An ordinary read timeout or local parser
+failure still follows its documented fallback. Tests inject failure both
+before COMMIT and after a successful COMMIT with a lost acknowledgement, checking
+one provider completion, one settlement attempt, unchanged receipt identity,
+resource cleanup and the actual persisted balance. A green ledger-unit test
+alone is not evidence that outer adapters preserve its contract.
+
+`0052` uses `jsonb_build_object`, not colon-containing JSON SQL literals. Its
+PostgreSQL campaign checks every old status (`reserved`, `unknown`, `settled`,
+`estimated`, `rejected`) across owners and UTC days, a user with no past calls,
+original timestamps/evidence/identities/balances, later reconciliation against the
+same old receipt, and safe refusal of destructive rollback. Logical token totals
+are preserved without inventing an input/output/cache split for historical rows.
+
+An additional shared-command call-site guard inspects actual API and Agent calls
+for the current profile, opportunity, action, artifact, JD, interview and RAG
+owners. Import and timestamp guards both assert a non-empty application scan.
+Static wiring is not a substitute for the behavioral ownership, CAS and recovery
+suites; it prevents a second independent implementation from replacing only one
+entry point unnoticed. Historical test directory names and append-only migration
+history are not executable compatibility service owners.
+
+Official semantics checked on 2026-09-19 (dependencies remain pinned and tested;
+reading a newer patch's documentation does not silently upgrade production):
+
+- [SQLAlchemy 2.0 text/bind parameters](https://docs.sqlalchemy.org/en/20/core/sqlelement.html#sqlalchemy.sql.expression.text)
+  and [Alembic execute](https://alembic.sqlalchemy.org/en/latest/ops.html#alembic.operations.Operations.execute):
+  SQL string execution uses TextClause bind parsing, including literal colons.
+- [PostgreSQL 15 JSON construction](https://www.postgresql.org/docs/15/functions-json.html)
+  and [row locking](https://www.postgresql.org/docs/15/explicit-locking.html):
+  JSON constructors and transactional row locks, tested against the actual CI database.
+- [Python context-manager exception propagation](https://docs.python.org/3.13/library/contextlib.html)
+  and [HTTPX async streaming](https://www.python-httpx.org/async/):
+  exceptions from a caller's block return at `yield`; response cleanup must
+  complete, but a later accounting failure must not re-enter transport recovery.
+- [Python 3.13 cancellation shielding](https://docs.python.org/3.13/library/asyncio-task.html#shielding-from-cancellation):
+  protecting the short accounting task is not cancellation of an already-sent
+  remote operation or an already-running thread.
+
+### Rated costs and supplier evidence are different
+
+`USAGE_RATE_CARD_JSON` uses exact `meter:provider:model` identities and decimal
+**strings of currency per unit**. Each admitted call freezes its currency, rates
+and version. Amounts are integer millionths of that currency; public JSON uses
+strings for monetary amounts to avoid JavaScript integer rounding. There are no
+bundled guessed prices, implicit exchange rates or conversions from vendor
+credits. A missing rate remains *unpriced*, not zero. Explicit zero is an
+operator policy (for example a local resource), not a supplier pricing claim.
+
+`USAGE_DAILY_COST_LIMIT_MICROS` is optional. When configured, an unpriced request
+or unreconciled unpriced historical usage in the same day blocks admission.
+`USAGE_DAILY_UNITS_JSON` independently caps resources. An admitted stricter policy
+is persisted; later environment changes cannot silently relax that day's cap.
+Rates on past receipts are never revalued in place. Estimates are conservative
+reservations, not a guarantee that an opaque remote server's eventual invoice
+matches an application tariff; higher observed usage is recorded and prevents
+further over-budget admission rather than hiding the overrun.
+
+Provider success with missing usage settles as **estimated** using the admitted
+allowance. Unknown transport outcomes retain the allowance. Explicit refusals
+release consumable units but keep attempt counts. Parsing a completed response
+incorrectly cannot erase a paid request. OpenAI and Anthropic cache buckets are
+normalized without double-counting; native Anthropic completion uses Messages,
+not an OpenAI-compatible URL assumption. Structured output uses the configured
+native format; unsupported capabilities fail rather than silently becoming a
+different provider/model.
+
+Models shows `/usage` and an account-scoped keyset-paginated receipt history.
+`GET /usage/receipts/{id}/corrections` exposes sanitized adjustment history;
+there is no browser/Agent refund, price-edit or quota-reset action. No prompts,
+raw audio, document text, filenames, credentials or evidence-file contents enter
+the consumption ledger. Provider request IDs, HMAC input identity, frozen prices,
+measured/estimated units and statuses remain auditable.
+
+Operator correction is `python scripts/reconcile_usage.py request.json
+--evidence supplier-evidence.json`, dry-run by default. Applying also requires
+`--apply --acknowledge-external-evidence`. The JSON names `user_id`, `receipt_id`,
+`expected_revision`, `request_id`, `operator`, `outcome`, all `observed_units`,
+`observed_tokens` and `currency`; it may supply `invoice_cost_micros` and/or
+explicit `rates`. Active/unknown receipts additionally require `quiesced=true`.
+Verify the remote result and quiesce its Worker first: a local timeout is not
+proof. A supplier aggregate cannot be assigned to one call without verifiable
+allocation. Corrections use CAS, stable request identity and an append-only
+before/after journal; original price snapshots remain intact. Keep evidence
+outside Git. This CLI does not contact suppliers or charge/refund money.
+
+### Boundary inventory and intentional exclusions
+
+| Boundary | Accounting / authority |
+|---|---|
+| Native primary streaming | Existing dispatch receipt, no nested second charge |
+| Internal/analysis/mock/resume completion | `MeteredLLM.complete/acomplete`; other unmetered methods rejected |
+| Compaction/vision native stream | Receipt spans connection, iteration and close |
+| Remote embedding | Actual SDK embeddings request, before wrappers discard usage |
+| Local embedding / local or remote rerank | Bounded work owns permit until actual completion; measured units or explicit estimate |
+| ASR / diarization | Bounded local size/duration check; streamed multipart; known refusals/unknown tracked |
+| Speech | One logical synthesis, character allowance and bounded output; third-party edge-tts is not Azure service/SLA |
+| LlamaParse | Official v2 multipart upload, one paid POST, saved job ID, bounded status reads/output/pages; no silent resubmit |
+| Gmail/plugin/web/search resources | Authorized external resource request tariff; control-plane reads are not resource results |
+| Opaque MCP tool | Invocation tariff, not a claim to observe the remote server's private model/tool calls |
+| OAuth bootstrap/refresh/revoke, provider catalog, parser status polls | Explicit control plane; not a second billable resource request |
+| SQL/Redis/S3/Milvus infrastructure, hosting, local electricity | Deployment costs, outside per-call supplier metering |
+| Optional independent benchmark generator/judge | Separate benchmark keys/checkpoint accounting; production provider calls still require an owned scope |
+
+The cloud parser no longer uses the retired LlamaParse SDK. `fast` returns the
+v2 text expansion; other tiers use Markdown. A known PDF page count is checked;
+failed/missing pages or an ambiguous cap produce incomplete/failed parsing rather
+than claiming whole-file coverage. Version `latest` is a visible configuration
+choice, not an immutable model identity: pin a dated available version for
+repeatable evaluation. OCR languages use provider defaults unless explicitly
+configured in a future validated contract; no invented language code is sent.
+
+`0052` refuses downgrade when it would discard new-category or priced receipts
+or adjustments. Back up/restore-test before upgrade. Old primary-only balances
+are not reset or assigned fictitious historical prices. A completed rollout does
+not prove every supplier has correct prices configured or every invoice reconciled.
+
+Migrations `0048` and `0049` add these state tables without rewriting existing
+career facts. Account deletion cascades their records; conversation deletion
+must not erase account usage. Pending manual commands necessarily contain the
+user-supplied invitation fields on the server. Cancel clears their payload;
+committed records retain the identity/receipt relationship. Do not expose or
+log these payloads as diagnostics. Automatic retention/expiry for unresolved
+commands and cancellation tombstones is not claimed: dropping a tombstone while
+an old request can still arrive would invalidate cancellation safety.
+
+Apply migrations before running the new application. Back up the database and
+verify restore first. Downgrading below these revisions drops their accounting
+and recovery records: export/reconcile them and quiesce pending requests first.
+Do not use downgrade as a quota-reset or to erase outcome-unknown receipts.
+
 ## Storage value contracts
 
 Database values follow two explicit rules, enforced by models, migrations and
@@ -118,17 +373,17 @@ streaming. CPU/model-heavy work does not run in either API execution path.
 
 ## Dependency direction
 
-The codebase is layered by responsibility rather than by a mechanically
-enforced import rule. New code should follow these directions:
+The codebase is layered by ownership and checked against actual source imports.
+New code must follow these directions:
 
-1. API routes depend on schemas, services, conversation entry points, and
+1. API routes depend on schemas, application commands, conversation entry points, and
    shared core dependencies. Routes should not contain reusable business logic.
-2. Services dispatch durable work through `task_queue/`; Celery task functions
-   validate task inputs and delegate back to services. Business behavior must
+2. Application owners dispatch durable work through `task_queue/`; Celery task functions
+   validate task inputs and delegate back to application owners. Business behavior must
    remain callable without importing task implementations.
-3. Conversation and Agent runtime may use services, RAG, prompts, models, and
+3. Conversation and Agent runtime may use application owners, RAG, prompts, models, and
    core utilities; they must not import HTTP route modules.
-4. Services own transactions and use models, database connections, prompts,
+4. Application owners own transactions and use models, database connections, prompts,
    RAG adapters, and core utilities as needed.
 5. RAG code owns retrieval/index implementation and may use core configuration,
    database facts, and persistence models. Routes must not bypass it with a
@@ -136,22 +391,27 @@ enforced import rule. New code should follow these directions:
 6. Models depend only on the database base and other persistence models.
    Pydantic schemas do not own database behavior.
 7. Core is for genuinely shared technical policy. Existing model factories use
-   a few lazy service imports to resolve per-user settings; this is a narrow
+   a few lazy owner imports to resolve per-user settings; this is a narrow
    integration seam, not permission to move domain workflows into `core`.
 8. The frontend reaches backend behavior only through `frontend/src/api/`.
    Pages should not construct service URLs or duplicate edition policy.
 
 `backend/tests/test_architecture/` enforces these high-level directions and an
-acyclic internal import graph. It also prevents models from reintroducing naive
+acyclic internal import graph, including package `__init__` and deferred imports.
+The scanner asserts real application files are present; an empty/wrong root cannot
+pass. API, Agent Tools and scheduled task adapters cannot add/delete domain ORM
+rows directly. The legacy `services` tree and runtime imports of operator-only
+`maintenance` migrations are prohibited. It also prevents models from reintroducing naive
 datetime columns. Cross-domain calls should use an existing shared contract or
 a clearly owned service, not a second implementation.
 
 ## Placement rules
 
 - Add a route contract to `schemas/`, transport handling to `api/`, and the
-  reusable operation to the matching `services/<domain>/` package.
+  reusable operation to its existing domain `application/` owner.
+  The generic `services/` tree is retired; do not add compatibility implementations.
 - Add a durable background entry point to `worker/tasks/`; keep its real work in
-  a service.
+  its application owner; pass scheduler/transport ports from the composition root.
 - Add product prompt text only to `prompts/`; call sites provide structured
   variables rather than duplicate instructions.
 - Add a parser, embedding, reranker, or retrieval implementation to `rag/` and
@@ -178,3 +438,150 @@ Model placement is a separate choice. Either launch topology can use remote
 providers, local models, or a per-capability hybrid; do not describe these as
 additional launch modes. `scripts/init_models.py` owns interactive local model
 selection and persists the resulting provider/model settings in `.env`.
+
+
+## Retrieval admission and model-connection authority
+
+`core/bounded_work.py` is a small synchronous-work admission primitive, not a
+new scheduler framework. `rag/retrieval/workers.py` owns four process-local
+pools for canonical storage, vector search, embedding and reranking. A permit
+belongs to the actual concurrent Future: cancellation of an async waiter does
+not free a slot while its Python thread still runs. Pending jobs can be cancelled;
+running jobs drain. The default single reranker worker avoids assuming that a
+local model instance is thread-safe. Prefork children create their own pools;
+API/Celery shutdown closes admission and pending work. No live Session is passed
+into these pools: storage functions create and close their own sessions.
+
+The limits multiply by the number of API/worker processes. They are not a
+fleet-wide quota, a CPU sandbox or a way to kill hung native code. SDK/network/DB
+deadlines and operator process supervision remain necessary. A closed pool
+cannot be reopened until its previous work has drained.
+
+Retrieval preserves `capacity_exhausted`, `retrieval_incomplete` and
+`canonical_unavailable` instead of misreporting `no_candidates`. Partial results
+keep `degraded=true`; the Agent tool receives that flag and the exact outcome.
+Canonical ownership checks never fall back to index text when PostgreSQL is
+unavailable. These operational limits do not alter the ranking threshold or
+pretend to improve factual recall without an evaluation.
+
+Model connection resolution distinguishes verified absence from lookup failure.
+No stored override/key/selection may still use the existing documented deployment
+fallback; a database/decryption error stops construction with
+`ModelConnectionUnavailable` instead of changing the destination or credential.
+The user-facing error is stable and does not contain the underlying storage error.
+The plaintext LRU is only a decryption optimization: every lookup rechecks the
+current encrypted row. Cross-worker rotation/deletion invalidates reuse on the
+next lookup; lazy re-encryption uses a ciphertext compare-and-swap. Already-sent
+provider requests cannot be retrospectively revoked by this mechanism.
+
+## Evidence levels used by CI
+
+The same repository has three distinct kinds of tests, not interchangeable claims:
+
+1. Unit/service/component tests exercise contracts with controlled dependencies.
+2. PostgreSQL/Redis/Celery SIGKILL and Chromium campaigns exercise real process,
+   transport, transaction and UI behavior. Only heavyweight/live-model boundaries
+   use labeled fixtures, and every test owns an isolated database/queue.
+3. `evaluation/` live semantic/learning evaluations require explicit model/data
+   configuration. Their results are not inferred from (1) or (2).
+
+`career_agent_os_eval` binds all 15 VS-01 scenarios to fresh backend and frontend
+JUnit. A static manifest or a skipped required case is not acceptance. CI runs
+that full deterministic gate after the real browser campaign. The gate covers
+invitation intake/confirmation/handoff only: it does not certify all future
+career journeys, memory quality, real OAuth accounts or financial accounting.
+
+
+## Official references checked for the 2026-09-19 implementation
+
+Pinned dependency versions in `pyproject.toml` remain the tested environment;
+consult matching release families, not an unrelated latest-major example.
+These links explain protocol/ownership choices, not product quality guarantees.
+
+| Primary documentation | Implementation implication |
+|---|---|
+| [SQLAlchemy 2.0 Session basics](https://docs.sqlalchemy.org/en/20/orm/session_basics.html) | Session per thread/task; short owned units of work, not ContextVar Session sharing |
+| [PostgreSQL 15 explicit locks](https://www.postgresql.org/docs/15/explicit-locking.html) | Independent accounting lock root, fixed lock order, bounded row-lock recovery |
+| [Python 3.13 contextvars](https://docs.python.org/3.13/library/contextvars.html) | Copy trusted identities across threads; Context propagation is not shared-Session safety |
+| [Python Decimal](https://docs.python.org/3.13/library/decimal.html) | Explicit decimal rates and rounding; no binary-float currency math |
+| [HTTPX timeout semantics](https://www.python-httpx.org/advanced/timeouts/) | Network inactivity and end-to-end deadline are separate controls |
+| [OpenAI embeddings API](https://platform.openai.com/docs/api-reference/embeddings/create) | Capture prompt-token usage at the SDK response before higher wrappers discard it |
+| [OpenAI speech-to-text](https://platform.openai.com/docs/guides/speech-to-text) | Enforce this provider's upload limit, separate from other providers' limits |
+| [Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create) and [structured output](https://platform.claude.com/docs/en/build-with-claude/structured-outputs) | Native Messages/usage and output configuration, not an assumed OpenAI wire format |
+| [LlamaParse v2 REST](https://developers.llamaindex.ai/llamaparse/parse/guides/api-reference/) and [configuration](https://developers.llamaindex.ai/llamaparse/parse/guides/configuring-parse/) | Multipart configuration, job identity, tier-appropriate expansions, bounded/incomplete pages |
+| [Celery tasks](https://docs.celeryq.dev/en/stable/userguide/tasks.html) | Delivery/retry settings do not replace application idempotency or verified external outcomes |
+
+### Migration scope
+
+This migration covers the *currently shipped* Python application: all active
+imports, entry points and package assets move to one owner per responsibility;
+shared public operation semantics and Celery task names are preserved. Historical
+DB tables/columns remain for migration or readback, not as a second runtime
+writer. Operator migration tools are isolated rather than silently deleting user
+history. It is not a claim to have implemented every future feature in the target
+Blueprint (for example a future external calendar branch), nor a new semantic
+quality or production load score. Existing quality/memory gates remain active.
+
+## Local-first refactor: evaluator and model boundary (2026-09-19)
+
+This is the first implementation batch of the approved functional refactor, not
+completion of pgvector migration, real-time voice, or the complete product review.
+The prior unified-accounting/owner migration remains intact. Current work status
+is tracked in the existing implementation ledger.
+
+`evaluation/mock_contracts.py` validates dataset and judge contracts;
+`mock_run.py` owns the finite campaign journal and judge client; the mock evaluator
+reuses the production interview generator through an injected resolved model.
+It does not implement another interview business engine. Its synthetic turn
+markers do not claim actual recovery. Existing DB/worker/browser tests retain that
+responsibility.
+
+`core/model_assets.py` is a read-only structural inspector. The runtime facade
+`core/hf_runtime.py`, setup command and local doctor all use it; there are no
+competing "directory nonempty" and "total size >10MB" definitions of readiness.
+Recognized Transformer/CT2 assets require config, weights and tokenizer/vocabulary;
+indexed weights require every declared shard. Safetensors checks bound the header
+and validate extents without loading tensors. LFS pointers, zero-length assets,
+unsafe shard paths and incomplete active revisions are rejected. HF refs resolve
+the selected snapshot: commit hashes are NOT ordered by recency. Multiple cached
+snapshots without a ref require an explicit choice.
+
+Existing `org--model` flat exports remain supported without inventing their
+revision provenance. Explicit `MODEL_REVISIONS_JSON` pins require an exact SHA and
+an exact cached or managed revision; no fall back to an unversioned export.
+Completed setup downloads produce size/hash manifests and activate a version
+under `org--model/.revisions/<sha>` with one atomic pointer. An interrupted setup
+cannot overwrite the old flat export or change the active pointer. These are
+operator-owned local receipts, not vendor signatures. Runtime checks size and
+structure; an explicit doctor `--verify-hashes` reads full files when a receipt is
+available. Legacy exports without a receipt remain clearly unverified by hash.
+
+Custom pyannote/Docling bundles are reported as `bundle_requires_loader`, not
+certified complete: component resolution, licenses, GPU compatibility and actual
+inference require their offline loader and hardware tests. No pickle/model code
+is deserialized by the doctor. This change does not claim to validate the user's
+actual local weights from GitHub.
+
+`MODEL_ROOT_DIR` can reference read-only weights independently of writable
+`CACHE_DIR` (HF metadata and Torch caches). Windows drive paths passed to Linux
+are diagnosed, never interpreted as a local folder named `D:`. The optional
+`AUXILIARY_MODEL_POLICY=local_only` rejects online embedding, reranking, ASR,
+cloud parsing and current online edge-tts at their entry points, irrespective of
+whether a credential exists. It also activates HF offline mode before optional
+model imports. Ordinary parser fallback cannot swallow this policy error.
+This is an application policy, not an OS-level network sandbox or permission to
+load unaudited remote model code. DeepSeek remains an online language model.
+The legacy `configured` policy remains the default for existing deployments.
+
+`init_models.py --dry-run` no longer contacts HF or creates runtime directories.
+Remote size lookup requires `--check-remote`. Actual setup explicitly enables
+network access in its own process, freezes the resolved revision, checks expected
+file sizes, records hashes, then activates. It must not run concurrently from
+Windows and WSL against the same writable model tree. Do not turn offline mode
+off in a live inference process to install models.
+
+Official references:
+- [HF cache refs, snapshots and blobs](https://huggingface.co/docs/huggingface_hub/guides/manage-cache).
+- [Transformers offline loading](https://huggingface.co/docs/transformers/installation).
+- [Safetensors format](https://github.com/huggingface/safetensors#format).
+- [Pydantic strict mode](https://docs.pydantic.dev/latest/concepts/strict_mode/).

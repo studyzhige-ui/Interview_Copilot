@@ -24,13 +24,11 @@ from app.schemas.gmail_integration import (
     GmailIntegrationStatusView,
     GmailOAuthAuthorizationView,
 )
-from app.services import gmail_integration_service
-from app.services.google_gmail_connector import (
-    GmailOAuthCompletion,
-    GmailOAuthFlowError,
-    GoogleGmailConnector,
-    build_configured_google_gmail_connector,
-)
+from app.integrations.gmail import contract as gmail_integration_service
+from app.integrations.gmail.connector import GmailOAuthCompletion
+from app.integrations.gmail.connector import GmailOAuthFlowError
+from app.integrations.gmail.connector import GoogleGmailConnector
+from app.integrations.gmail.connector import build_configured_google_gmail_connector
 
 
 router = APIRouter(prefix="/integrations/gmail", tags=["integrations"])
@@ -201,7 +199,7 @@ async def _cleanup_failed_rebind(
 @router.get("", response_model=GmailIntegrationStatusView)
 def get_gmail_integration(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     connector: GoogleGmailConnector | None = Depends(get_gmail_oauth_connector),
 ):
     return _view(
@@ -247,7 +245,7 @@ async def complete_gmail_authorization(
     state: str | None = Query(default=None),
     code: str | None = Query(default=None),
     error: str | None = Query(default=None),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     connector: GoogleGmailConnector | None = Depends(get_gmail_oauth_connector),
 ):
     concrete_connector = _require_oauth_connector(connector)
@@ -336,7 +334,7 @@ async def complete_gmail_authorization(
 @router.post("/test", response_model=GmailIntegrationStatusView)
 async def test_gmail_integration(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     adapter: gmail_integration_service.GmailProviderAdapter | None = Depends(
         get_gmail_provider_adapter
     ),
@@ -362,7 +360,7 @@ async def test_gmail_integration(
 @router.post("/revoke", response_model=GmailIntegrationStatusView)
 async def revoke_gmail_integration(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     adapter: gmail_integration_service.GmailProviderAdapter | None = Depends(
         get_gmail_provider_adapter
     ),

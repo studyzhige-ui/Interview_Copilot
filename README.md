@@ -1,6 +1,6 @@
 # Interview Copilot
 
-Interview Copilot is a cloud-first career copilot. It combines job-search
+Interview Copilot is a local-first career copilot. It combines job-search
 tracking, mock interviews, recording analysis, resume/JD retrieval, durable
 artifacts, user Skills, and MCP tools. Long-term Agent Memory remains behind
 its evaluation gate; the current runtime does not produce or recall it.
@@ -22,30 +22,44 @@ The repository ships one shared product core in two editions:
 · [Codebase architecture](docs/architecture/codebase.md) ·
 [Product and systems audit](docs/reports/full-product-and-systems-audit-2026-08-04.md)
 
+## Refactor branch status
+
+The `refactor/product-runtime-convergence` branch integrates the shared Copilot
+workspace, invitation confirmation/preparation, text-first mock handoff, and
+runtime/RAG correctness fixes. It is not a completed product release: the
+[existing implementation ledger](docs/implementation/career-agent-os-ledger.md)
+records implementation and fixed-commit evidence. The branch now also contains
+real Celery/PostgreSQL recovery and Chromium campaigns, mock-answer generation
+fences, explicit retry consent, bounded retrieval workers and fail-closed model
+configuration. Use the current PR's checks, not an earlier green commit, as the
+execution evidence. No historical user records are discarded to make migrations
+pass. Live model quality, full-platform monetary accounting and memory release
+remain separate gates.
+
 ## Core features
 
 - Mock interviews grounded in a resume and job description
 - Audio transcription, speaker-aware review, scoring, and skill radar
-- Hybrid RAG with Milvus, reranking, citations, and document lifecycle support
+- Hybrid RAG with PostgreSQL/pgvector, reranking, citations, and document lifecycle support
 - Per-user credentials and one answer-model preference shared by chat, Agent,
   and mock interview
 - Long-running agent turns with reconnectable event streams and cancellation
 - User-scoped Skills and MCP servers with concrete Tool discovery, execution records, and current policy controls
-- PostgreSQL, Redis/Celery, Milvus, and S3-compatible object storage
+- PostgreSQL/pgvector, Redis/Celery, private local file storage, and optional S3
 
 ## Quick start
 
 Choose one run mode and do not mix them in the same checkout.
 
-### Host development
+### Host development (Linux or WSL2)
+
+Native Windows users should use the [desktop launcher](desktop/README.md) with
+Docker Desktop or the full container stack below. The backend and Celery run in
+Linux. Use the Bash launchers below for host-backend development.
 
 Requirements: Python 3.11–3.13, Node.js 20+, Docker, and an active Python
 virtual environment. The setup script installs dependencies, starts the local
 infrastructure, applies migrations, and installs the frontend packages.
-
-```powershell
-pwsh ./scripts/setup.ps1
-```
 
 ```bash
 bash ./scripts/setup.sh
@@ -55,10 +69,6 @@ The setup script asks which edition to configure. Community then asks for a
 model profile: lightweight remote, local/hybrid CPU, or local/hybrid CUDA. A
 local profile opens a per-capability model wizard and stores the selection in
 `.env`. Then use the matching daily launcher:
-
-```powershell
-.\scripts\start.ps1
-```
 
 ```bash
 bash ./scripts/start.sh
@@ -78,7 +88,10 @@ docker compose --profile full up -d --wait
 ```
 
 Open `http://localhost`. Runtime data and model caches are stored under
-`data/`; PostgreSQL, Redis, MinIO, and Milvus use Docker volumes.
+`data/`; PostgreSQL/pgvector and Redis use Docker volumes. New files use
+`data/storage` by default. Optional S3 needs an explicit endpoint and credentials;
+existing S3 assets retain their original provider. Old MinIO volumes are not
+automatically migrated or deleted.
 
 See [Community deployment](docs/deployment/community.md) or
 [Cloud deployment](docs/deployment/cloud.md) for the complete contract.

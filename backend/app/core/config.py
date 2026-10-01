@@ -30,24 +30,72 @@ class Settings(BaseSettings):
 
     PROJECT_NAME: str = "Interview Copilot API"
     APP_EDITION: Literal["cloud", "community"] = "community"
+    AUTH_PROVIDER: Literal["local", "supabase"] = "local"
+    SUPABASE_URL: str = ""
+    SUPABASE_PUBLISHABLE_KEY: str = ""
+    SUPABASE_EMAIL_DELIVERY: Literal["team_only", "custom_smtp"] = "team_only"
+
+    @model_validator(mode="after")
+    def validate_supabase_auth(self):
+        if self.AUTH_PROVIDER == "supabase":
+            from urllib.parse import urlsplit
+
+            url = urlsplit(self.SUPABASE_URL)
+            if (
+                url.scheme != "https"
+                or not url.hostname
+                or url.username
+                or url.password
+                or url.query
+                or url.fragment
+                or url.path.rstrip("/")
+            ):
+                raise ValueError("SUPABASE_URL must be the HTTPS project origin")
+            if not self.SUPABASE_PUBLISHABLE_KEY.startswith("sb_publishable_"):
+                raise ValueError(
+                    "Use a Supabase publishable key, never service_role, a secret key, or a JWT signing secret"
+                )
+        return self
+
     DATABASE_URL: str = (
         "postgresql://postgres:postgres@localhost:5432/interview_copilot"
     )
     LLAMA_CLOUD_API_KEY: str = ""
+    CLOUD_PARSE_TIER: Literal["fast", "cost_effective", "agentic", "agentic_plus"] = (
+        "cost_effective"
+    )
+    CLOUD_PARSE_VERSION: str = Field("latest", min_length=1, max_length=80)
+    CLOUD_PARSE_MAX_PAGES: int = Field(500, ge=1, le=10000)
+    CLOUD_PARSE_MAX_INPUT_BYTES: int = Field(
+        50 * 1024 * 1024, ge=1, le=500 * 1024 * 1024
+    )
+    CLOUD_PARSE_MAX_OUTPUT_BYTES: int = Field(20_000_000, ge=1, le=100_000_000)
+    CLOUD_PARSE_DEADLINE_SECONDS: float = Field(300.0, gt=0, le=3600)
 
     # Runtime data paths
     APP_DATA_DIR: str = _default_app_data_dir()
 
-    # Database and vector-store data
-    MILVUS_URI: str = "http://localhost:19530"
-    MILVUS_COLLECTION: str = "interview_copilot_rag"
-    MILVUS_SIMILARITY_METRIC: str = "IP"
-    MILVUS_DENSE_INDEX_TYPE: str = "HNSW"
-    MILVUS_HNSW_M: int = 16
-    MILVUS_HNSW_EF_CONSTRUCTION: int = 200
-    MILVUS_HNSW_EF_SEARCH: int = 64
+    # One PostgreSQL store; all new indexes use pgvector and scoped BM25.
+    RAG_SIMILARITY_METRIC: Literal["IP", "COSINE", "L2"] = "IP"
+    RAG_INDEX_NAMESPACE: str = "interview_copilot_rag"
+    RAG_INDEX_STATEMENT_TIMEOUT_MS: int = Field(5000, ge=100, le=60000)
+    RAG_INDEX_LOCK_TIMEOUT_MS: int = Field(3000, ge=100, le=60000)
+    RAG_INDEX_MAX_DOCUMENT_CHUNKS: int = Field(10000, ge=1, le=100000)
     # Hugging Face, model, and framework caches
     CACHE_DIR: str = ""
+    # Optional read-only weights shared from a Windows data drive into WSL.
+    # Framework metadata/locks remain under writable CACHE_DIR separately.
+    MODEL_ROOT_DIR: str = ""
+    MODEL_REVISIONS_JSON: dict[str, str] = Field(default_factory=dict)
+    LOCAL_MODELS_OFFLINE: bool = False
+    AUXILIARY_MODEL_POLICY: Literal["configured", "local_only"] = "configured"
+
+    # One local inference broker; API/worker never load local RAG weights.
+    LOCAL_INFERENCE_SOCKET: str = ""
+    LOCAL_INFERENCE_TIMEOUT_SECONDS: float = Field(120, gt=0, le=600)
+    LOCAL_EMBED_MAX_TOKENS: int = Field(8192, ge=1, le=32768)
+    LOCAL_EMBED_QUERY_PREFIX: str = Field("", max_length=2048)
+    LOCAL_EMBED_TEXT_PREFIX: str = Field("", max_length=2048)
 
     # Logs and telemetry
     LOG_DIR: str = ""
@@ -55,9 +103,11 @@ class Settings(BaseSettings):
 
     # Local upload backups and object-storage staging
     STORAGE_DIR: str = ""
+    STORAGE_BACKEND: Literal["filesystem", "s3"] = "filesystem"
+    STORAGE_MIN_FREE_BYTES: int = Field(default=64 * 1024 * 1024, ge=0)
 
-    # One device choice for the local RAG stack (Docling, embedding, reranker).
-    # Every component supports CPU; ``auto`` uses CUDA when available.
+    # Parser device policy. RAG weights use the independently configured broker;
+    # its device is explicit and never initializes CUDA in this process.
     RAG_DEVICE: str = "auto"
     # ── Model selection: provider + free-form model name ───────────────────
     # Two axes per role:
@@ -69,7 +119,7 @@ class Settings(BaseSettings):
     #
     # ⚠ EMBEDDING_DIM must match the model's actual output dimension.
     #   Switching to a different-dim model after data is indexed requires
-    #   dropping the Milvus collection and re-ingesting.
+    #   building a new generation from the retained source facts.
 
     # Platform-owned internal LLM. End users cannot select this model or
     # supply its credential; both latency-sensitive routing and background
@@ -127,13 +177,36 @@ class Settings(BaseSettings):
     AGENT_MAX_RESPONSE_TOKENS: int = 4096
     AGENT_TOOL_SCHEMA_STRICT: bool = True
     AGENT_MAX_TOOL_ARG_CHARS: int = 4000
+    # Transport cap, not an authorization to give every tool a larger payload.
+    # Only a trusted built-in definition may opt into a larger decoded budget.
+    AGENT_MAX_TOOL_WIRE_ARG_CHARS: int = 640_000
     LLM_REQUEST_TIMEOUT_SECONDS: int = 60
+    # UTC-day account-wide dispatch/token limits. Historical names are retained
+    # for deployment compatibility; all model, speech and tool meters share the
+    # ledger. Money uses exact frozen operator rates, never guessed prices.
+    MODEL_DAILY_CALL_LIMIT: int = Field(default=500, ge=1, le=1_000_000)
+    MODEL_DAILY_TOKEN_LIMIT: int = Field(default=2_000_000, ge=1, le=2_000_000_000)
+    # Global consumption envelope. Missing prices are visible as unpriced; a
+    # monetary ceiling rejects unpriced work rather than treating it as free.
+    USAGE_CURRENCY: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+    USAGE_DAILY_COST_LIMIT_MICROS: int | None = Field(default=None, ge=1, le=10**12)
+    USAGE_RATE_CARD_JSON: str = "{}"
+    USAGE_DAILY_UNITS_JSON: str = '{"audio_ms":14400000,"characters":2000000,"documents":50000,"pages":5000,"bytes":1073741824,"external_requests":2000,"tool_invocations":1000}'
+    USAGE_AUDIO_MAX_BYTES: int = Field(500 * 1024 * 1024, ge=1, le=2**31 - 1)
+    USAGE_AUDIO_MAX_MS: int = Field(3_600_000, ge=1, le=86_400_000)
+    USAGE_AUDIO_PROBE_SECONDS: float = Field(30.0, gt=0, le=300)
+    USAGE_TTS_MAX_BYTES: int = Field(10_000_000, ge=1, le=100_000_000)
+    USAGE_MAX_UNRESOLVED: int = Field(default=100, ge=1, le=100000)
+    MODEL_STREAM_DEADLINE_SECONDS: float = Field(default=180, gt=0, le=3600)
+    MODEL_STREAM_MAX_BYTES: int = Field(default=2_000_000, ge=1024, le=50_000_000)
     # Anthropic native Messages prompt caching. Disabling it changes only
     # latency/cost; the adapter still sends the complete semantic request.
     ANTHROPIC_PROMPT_CACHE_ENABLED: bool = True
     ANTHROPIC_PROMPT_CACHE_TTL: str = "5m"
     TURN_HEARTBEAT_SECONDS: int = 10
     TURN_QUEUE_TIMEOUT_SECONDS: int = 900
+    TURN_RECOVERY_BATCH_SIZE: int = Field(default=100, ge=1, le=1000)
+    TURN_RECOVERY_MAX_ATTEMPTS: int = Field(default=3, ge=0, le=10)
     TURN_STALE_SECONDS: int = 60
     # Delay before the single automatic Memory producer rechecks that a
     # completed source Turn's Conversation is idle. Contribution remains
@@ -175,6 +248,16 @@ class Settings(BaseSettings):
     RAG_RRF_K: int = 60
     RAG_SEARCH_TIMEOUT_SECONDS: float = 8.0
     RAG_RERANK_TIMEOUT_SECONDS: float = 30.0
+    # Per-process bounds. Queue permits survive cancellation of the async waiter.
+    # Reranker defaults to one worker: model instances need not be thread-safe.
+    RAG_STORAGE_WORKERS: int = Field(default=4, ge=1, le=32)
+    RAG_STORAGE_QUEUE: int = Field(default=8, ge=0, le=128)
+    RAG_SEARCH_WORKERS: int = Field(default=4, ge=1, le=32)
+    RAG_SEARCH_QUEUE: int = Field(default=16, ge=0, le=128)
+    RAG_EMBEDDING_WORKERS: int = Field(default=2, ge=1, le=16)
+    RAG_EMBEDDING_QUEUE: int = Field(default=8, ge=0, le=128)
+    RAG_RERANK_WORKERS: int = Field(default=1, ge=1, le=8)
+    RAG_RERANK_QUEUE: int = Field(default=8, ge=0, le=128)
     RAG_OUTPUT_TOKEN_RESERVE: int = 4_096
     CONTEXT_TOOL_OUTPUT_TOKENS: int = 10_000
     CONTEXT_AUTO_COMPACT_TOKEN_LIMIT: int = 0
@@ -202,7 +285,16 @@ class Settings(BaseSettings):
     # with do_ocr=False so text PDFs still parse instead of failing on a missing
     # engine. Set False to disable OCR globally even where the engine is present.
     RAG_OCR_ENABLED: bool = True
-    TTS_DEFAULT_VOICE: str = "zh-CN-YunxiNeural"
+    # Local document models run in an owned CPU interpreter, never the API/GPU lane.
+    PARSER_LOCAL_PYTHON: str = ""
+    PARSER_TIMEOUT_SECONDS: float = Field(300.0, gt=0, le=3600)
+    PARSER_MAX_INPUT_BYTES: int = Field(50 * 1024 * 1024, ge=1, le=500 * 1024 * 1024)
+    PARSER_MAX_PAGES: int = Field(500, ge=1, le=10000)
+    PARSER_MAX_TEXT_BYTES: int = Field(4_000_000, ge=1, le=8_000_000)
+    TTS_PROVIDER: Literal["local_qwen3_tts", "edge"] = "local_qwen3_tts"
+    TTS_MODEL: str = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+    TTS_DEFAULT_VOICE: str = "Vivian"
+    TTS_LANGUAGE: str = "Auto"
     LEVER_API_BASE: str = "https://api.lever.co/v0"
     LEVER_SITES: str = "openai"
 
@@ -287,11 +379,11 @@ class Settings(BaseSettings):
     NOTION_OAUTH_CLIENT_SECRET: SecretStr = SecretStr("")
     NOTION_OAUTH_REDIRECT_URI: str = ""
 
-    # S3-compatible object storage. Defaults are for local MinIO development.
-    AWS_ACCESS_KEY_ID: str = "minioadmin"
-    AWS_SECRET_ACCESS_KEY: str = "minioadmin"
+    # Optional S3-compatible storage requires explicit endpoint and credentials.
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
     AWS_REGION: str = "us-east-1"
-    AWS_ENDPOINT_URL: str = "http://localhost:9000"
+    AWS_ENDPOINT_URL: str = ""
     # Browser-facing endpoint used only to sign presigned URLs. Containers use
     # AWS_ENDPOINT_URL=http://minio:9000 for server I/O while browsers need a
     # host/public address such as http://localhost:9000.
@@ -310,6 +402,25 @@ class Settings(BaseSettings):
     # Blocking SSE/cancellation reads cannot consume command capacity.
     REDIS_POOL_SIZE: int = 20
     REDIS_EVENT_POOL_SIZE: int = 64
+
+    @field_validator("USAGE_RATE_CARD_JSON")
+    @classmethod
+    def _usage_rates_valid(cls, value: str) -> str:
+        from app.usage.pricing import rate_catalog
+
+        rate_catalog(value)
+        return value
+
+    @field_validator("USAGE_DAILY_UNITS_JSON")
+    @classmethod
+    def _usage_limits_valid(cls, value: str) -> str:
+        import json
+        from app.usage.pricing import quantities
+
+        limits = quantities(json.loads(value))
+        if any(v <= 0 for v in limits.values()):
+            raise ValueError("resource allowances must be positive")
+        return value
 
     @field_validator(
         "CACHE_DIR",
@@ -517,4 +628,9 @@ def _validate_production_safety(s: "Settings") -> None:
 
 
 settings = Settings()
+# Apply before any optional HF/Transformers import. Download commands opt into a
+# separate online setup process; changing policy in a running process is unsupported.
+if settings.LOCAL_MODELS_OFFLINE or settings.AUXILIARY_MODEL_POLICY == "local_only":
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 _validate_production_safety(settings)

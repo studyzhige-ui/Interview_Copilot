@@ -9,16 +9,22 @@ from app.models.career_profile import CareerProfileCandidateItem
 from app.models.resume import Resume
 from app.models.user import User
 from app.schemas.career_profile import SkillFactInput
-from app.services.career_profile_service import get_career_profile
-from app.services.interview.interview_record_service import interview_record_service
-from app.services.resume.resume_artifact_service import (
+from app.career.application.profile import get_career_profile
+from app.interviews.application.interview_record_service import interview_record_service
+from app.career.application.resumes.resume_artifact_service import (
     ExtractedProfileCandidates,
-    add_resume_version,
-    claim_resume_parse,
+)
+from app.career.application.resumes.resume_artifact_service import add_resume_version
+from app.career.application.resumes.resume_artifact_service import claim_resume_parse
+from app.career.application.resumes.resume_artifact_service import (
     create_resume_artifact,
-    list_resume_artifacts,
-    mark_parse_state,
+)
+from app.career.application.resumes.resume_artifact_service import list_resume_artifacts
+from app.career.application.resumes.resume_artifact_service import mark_parse_state
+from app.career.application.resumes.resume_artifact_service import (
     persist_extracted_resume,
+)
+from app.career.application.resumes.resume_artifact_service import (
     ResumeArtifactStaleVersionError,
 )
 

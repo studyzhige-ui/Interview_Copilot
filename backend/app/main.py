@@ -55,6 +55,7 @@ from app.core.request_id import (  # noqa: E402
 from app.core.http_log_redaction import (  # noqa: E402
     install_sensitive_query_access_log_filter,
 )
+from app.conversation.application.turn_executor import attachment_resume_actions
 
 # ``logging.basicConfig`` writes a default Formatter; replace the
 # handler's formatter with our request-id-aware variant so every log
@@ -114,21 +115,19 @@ async def lifespan(app: FastAPI):
             "Run `alembic upgrade head` before starting the API."
         )
 
-    from app.services.chat.turn_executor import (
-        fail_orphaned_turns,
-        monitor_orphaned_turns,
-    )
+    from app.conversation.application.turn_executor import fail_orphaned_turns
+    from app.conversation.application.turn_executor import monitor_orphaned_turns
 
     try:
         orphan_count = await fail_orphaned_turns()
         if orphan_count:
             logger.warning("Closed %d orphaned conversation turn(s).", orphan_count)
-        from app.services.chat.attachment_waiting_service import (
+        from app.conversation.application.attachment_waiting_service import (
             recover_terminal_attachment_turns,
         )
 
         resumed_attachment_turns = await asyncio.to_thread(
-            recover_terminal_attachment_turns
+            recover_terminal_attachment_turns, actions=attachment_resume_actions()
         )
         if resumed_attachment_turns:
             logger.info(
@@ -143,25 +142,35 @@ async def lifespan(app: FastAPI):
     # duplicate embedding + reranker copy in memory. The diagnostic /rag/query
     # endpoint initializes its own process lazily when explicitly requested.
     logger.info(">>> Heavy AI runtimes are owned by their worker queues.")
+    from app.rag.retrieval.workers import open_pools, close_pools
+
+    from app.media.application import workers as audio_workers
+
+    audio_workers.open_pools()
+    open_pools()
     safe_background_task(monitor_orphaned_turns(), name="orphan-turn-monitor")
     logger.info("====== Interview Copilot startup sequence complete ======")
     try:
         yield
     finally:
         logger.info("Draining background tasks before shutdown...")
-        await cancel_and_wait_all(timeout=10.0)
+        from app.media.realtime.transport import registry as media_registry
         from app.agent_runtime.mcp import manager
-
-        await manager.close_all()
         from app.core.runtime_resources import close_current_resources
         from app.db.redis import sync_redis_client
-
-        await close_current_resources()
-        await asyncio.to_thread(sync_redis_client.close)
         from app.core.async_runtime import shutdown_worker_runtime
 
-        await asyncio.to_thread(shutdown_worker_runtime)
-        await asyncio.to_thread(engine.dispose)
+        await media_registry.close()
+        audio_workers.close_pools()
+        close_pools()
+        try:
+            await cancel_and_wait_all(timeout=10.0)
+        finally:
+            await manager.close_all()
+            await close_current_resources()
+            await asyncio.to_thread(sync_redis_client.close)
+            await asyncio.to_thread(shutdown_worker_runtime)
+            await asyncio.to_thread(engine.dispose)
         logger.info("====== Interview Copilot shutdown sequence complete ======")
 
 
@@ -176,6 +185,10 @@ app = FastAPI(
 _cors_origins = [
     origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()
 ]
+from app.usage.middleware import ConsumptionContextMiddleware
+
+app.add_middleware(ConsumptionContextMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -185,26 +198,8 @@ app.add_middleware(
     # that happens to be in CORS_ORIGINS by accident.
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
-    expose_headers=["X-Request-ID"],
+    expose_headers=["X-Request-ID", "X-Transcript-ID", "X-Audio-Source-SHA256"],
     max_age=600,
-)
-
-
-# ─── Local-fallback static files (avatars only) ──────────────────────────
-# When S3 / MinIO is unreachable an avatar upload falls back to writing the
-# bytes under ``STORAGE_DIR/avatars/...`` (see app.core.storage fallback).
-# Those files need to be browser-readable; we mount JUST the avatars/
-# sub-tree as a public static route. Other STORAGE_DIR contents (resumes,
-# JDs, knowledge documents) stay off-bus — they're private and only the
-# backend should touch them.
-from fastapi.staticfiles import StaticFiles  # noqa: E402
-
-_avatar_local_dir = Path(settings.STORAGE_DIR) / "avatars"
-_avatar_local_dir.mkdir(parents=True, exist_ok=True)
-app.mount(
-    "/api/v1/static/avatars",
-    StaticFiles(directory=str(_avatar_local_dir)),
-    name="local-avatars",
 )
 
 
@@ -217,6 +212,22 @@ import traceback as _tb
 
 from fastapi import Request as _Request
 from fastapi.responses import JSONResponse as _JSONResponse
+
+
+from app.core.model_connection_error import ModelConnectionUnavailable
+
+
+@app.exception_handler(ModelConnectionUnavailable)
+async def model_connection_unavailable(
+    _request: _Request, exc: ModelConnectionUnavailable
+):
+    from app.core.request_id import get_request_id
+
+    return _JSONResponse(
+        status_code=503,
+        content={"detail": str(exc), "code": "model_connection_unavailable"},
+        headers={"X-Request-ID": get_request_id()},
+    )
 
 
 @app.exception_handler(Exception)
@@ -375,9 +386,15 @@ app.include_router(agent_tasks.router, prefix="/api/v1")
 app.include_router(attachment_sources.router, prefix="/api/v1")
 app.include_router(artifacts.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
+from app.api import unified_auth
+
+app.include_router(unified_auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(capabilities.router, prefix="/api/v1")
 app.include_router(career_process.router, prefix="/api/v1")
 app.include_router(workspace.router, prefix="/api/v1")
+from app.api import usage
+
+app.include_router(usage.router, prefix="/api/v1")
 app.include_router(career_activity.router, prefix="/api/v1")
 app.include_router(career_insights.router, prefix="/api/v1")
 app.include_router(career_profile.router, prefix="/api/v1")

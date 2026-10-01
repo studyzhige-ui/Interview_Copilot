@@ -16,12 +16,11 @@ from app.models.memory_pipeline import (
 )
 from app.models.user import User
 from app.schemas.agent_memory import AgentMemoryStatusCommand, AgentMemoryUpdate
-from app.services import (
-    memory_pipeline as pipeline,
-    memory_recall as recall,
-    agent_memory_service as service,
-)
-from app.services.memory_prompts import EXTRACT, CONSOLIDATE
+from app.memory import consolidation as pipeline
+from app.memory import recall as recall
+from app.memory import lifecycle as service
+from app.memory.prompts import EXTRACT
+from app.memory.prompts import CONSOLIDATE
 from tests.conftest import NoCloseSession
 
 
@@ -553,7 +552,7 @@ def test_historical_provenance_edges_do_not_block_current_evidence(
     db_session, monkeypatch
 ):
     from app.models.long_term_memory import LongTermAgentMemorySource
-    from app.services.memory_retention import unavailable_memory_ids
+    from app.memory.retention import unavailable_memory_ids
 
     user, conversation, turn = source(db_session)
     asyncio.run(pipeline.process_turn(turn.id))

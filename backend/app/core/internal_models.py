@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.core import model_catalog
 from app.core.config import settings
 from app.core.model_catalog import ModelProfile
-from app.services.model_sources.providers import get_provider_defaults
+from app.providers.catalog.providers import get_provider_defaults
 
 INTERNAL_MODEL_ROLES: tuple[str, ...] = ("router", "worker")
 

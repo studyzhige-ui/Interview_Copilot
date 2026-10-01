@@ -9,10 +9,8 @@ from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, re
 from app.agent_runtime.tool_policy import ToolEffect
 from app.db.database import SessionLocal
 from app.schemas.history_search import HistorySearchQuery
-from app.services.interaction_history_service import (
-    get_interaction_history_record,
-    search_interaction_history,
-)
+from app.conversation.history_queries import get_interaction_history_record
+from app.conversation.history_queries import search_interaction_history
 
 
 class SearchInteractionHistoryArgs(BaseModel):

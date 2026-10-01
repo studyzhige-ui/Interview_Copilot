@@ -3,11 +3,19 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from app.services.chat.conversation_deletion_resource_service import (
+from app.conversation.application.conversation_deletion_resource_service import (
     MAX_RECEIPT_RESOURCE_IDENTITIES,
+)
+from app.conversation.application.conversation_deletion_resource_service import (
     find_unresolved_conversation_deletion_resource_receipts,
+)
+from app.conversation.application.conversation_deletion_resource_service import (
     has_unresolved_conversation_deletion_resource_conflict,
+)
+from app.conversation.application.conversation_deletion_resource_service import (
     normalize_receipt_resource_identities,
+)
+from app.conversation.application.conversation_deletion_resource_service import (
     receipt_resource_identities_for_call,
 )
 

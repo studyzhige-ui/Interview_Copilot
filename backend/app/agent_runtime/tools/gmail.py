@@ -20,16 +20,14 @@ from app.agent_runtime.tool_registry import (
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.schemas.gmail_integration import GmailSearchMessagesArgs
-from app.services.gmail_integration_service import (
-    GMAIL_READONLY_SCOPE,
-    GmailAccountNotFoundError,
-    GmailConnectionRequiredError,
-    GmailIntegrationError,
-    GmailProviderAdapter,
-    GmailProviderAdapterError,
-    get_account,
-    search_messages,
-)
+from app.integrations.gmail.contract import GMAIL_READONLY_SCOPE
+from app.integrations.gmail.contract import GmailAccountNotFoundError
+from app.integrations.gmail.contract import GmailConnectionRequiredError
+from app.integrations.gmail.contract import GmailIntegrationError
+from app.integrations.gmail.contract import GmailProviderAdapter
+from app.integrations.gmail.contract import GmailProviderAdapterError
+from app.integrations.gmail.contract import get_account
+from app.integrations.gmail.contract import search_messages
 
 
 GmailAdapterFactory = Callable[[], GmailProviderAdapter]

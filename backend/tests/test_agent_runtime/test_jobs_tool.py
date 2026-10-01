@@ -1,6 +1,10 @@
 """search_jobs tool — call-time connection preflight and network handling."""
 
+import pytest
+
 import asyncio
+
+pytestmark = pytest.mark.usefixtures("usage_scope")
 
 
 class TestSearchJobsConnectionPreflight:
@@ -8,14 +12,14 @@ class TestSearchJobsConnectionPreflight:
 
     def test_tool_remains_registered_without_lever_configuration(self, monkeypatch):
         monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "")
-        from app.agent_runtime.tool_registry import registry
+        from app.agent_runtime.builtin_tools import registry
 
         assert "search_jobs" in registry
 
     def test_missing_deployment_config_is_hard_denied(self, monkeypatch):
         monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "")
         from app.agent_runtime.tool_registry import AgentToolContext
-        from app.agent_runtime.tool_registry import registry
+        from app.agent_runtime.builtin_tools import registry
 
         ctx = AgentToolContext(user_id="alice", session_id="s1")
         plan = asyncio.run(

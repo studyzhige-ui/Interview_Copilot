@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.agent_runtime.turn_tool_catalog import (
     cloud_sustainable_automation_tool_names,
 )
-from app.agent_runtime.tool_registry import registry
+from app.agent_runtime.builtin_tools import registry
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.user import User
@@ -28,8 +28,8 @@ from app.schemas.persistent_task import (
     PersistentTaskUpdate,
     PersistentTaskView,
 )
-from app.services import persistent_task_service
-from app.services.chat.turn_executor import schedule_turn
+from app.automation.application import tasks as persistent_task_service
+from app.conversation.application.turn_executor import schedule_turn
 
 
 router = APIRouter(prefix="/persistent-tasks", tags=["persistent-tasks"])
@@ -82,7 +82,7 @@ def _run_domain(
 @router.get("", response_model=list[PersistentTaskView])
 def get_persistent_tasks(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return persistent_task_service.list_persistent_tasks(
         db,
@@ -94,7 +94,7 @@ def get_persistent_tasks(
 def post_persistent_task(
     body: PersistentTaskCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -132,7 +132,7 @@ def get_persistent_task_eligible_tools(
 def get_persistent_task(
     task_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -151,7 +151,7 @@ def get_persistent_task(
 def get_persistent_task_triggers(
     task_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -168,7 +168,7 @@ def patch_persistent_task(
     task_id: str,
     body: PersistentTaskUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -188,7 +188,7 @@ def delete_persistent_task(
     task_id: str,
     body: PersistentTaskDelete,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     result = _run_domain(
         db,
@@ -225,7 +225,7 @@ def delete_persistent_task(
 def get_persistent_task_deletion_impact(
     task_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -267,7 +267,7 @@ def pause_persistent_task(
     task_id: str,
     body: PersistentTaskStateChange,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _change_state(
         db,
@@ -283,7 +283,7 @@ def resume_persistent_task(
     task_id: str,
     body: PersistentTaskStateChange,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _change_state(
         db,
@@ -304,7 +304,7 @@ def trigger_persistent_task(
     body: PersistentTaskTriggerInput,
     response: Response,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     admission = _run_domain(
         db,

@@ -1,12 +1,16 @@
 """Real MCP SDK client/server handshake, discovery, validation and execution."""
 
+import pytest
+
 import asyncio
 import json
 import sys
 
 from app.agent_runtime.mcp.manager import MCPManager
 from app.core.config import settings
-from app.services.capabilities.mcp_server_service import MCPServerConfig
+from app.capabilities.application.mcp_server_service import MCPServerConfig
+
+pytestmark = pytest.mark.usefixtures("usage_database")
 
 
 def test_real_stdio_server_roundtrip_and_error_contract(tmp_path, monkeypatch):

@@ -6,11 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.interview.transcript_structure_service import (
+from app.interviews.application.transcript_structure_service import (
     TranscriptProjectionError,
-    project_interview_qa,
 )
-from app.services.voice.transcript_evidence import build_transcript_evidence
+from app.interviews.application.transcript_structure_service import project_interview_qa
+from app.media.application.transcript_evidence import build_transcript_evidence
 
 
 class _FakeLLM:

@@ -13,7 +13,7 @@ class TestInterviewHistoryErrorHandling:
             raise RuntimeError("DB connection refused")
 
         monkeypatch.setattr(
-            "app.services.interview.interview_record_service.interview_record_service.list_by_user",
+            "app.interviews.application.interview_record_service.interview_record_service.list_by_user",
             _boom,
         )
 

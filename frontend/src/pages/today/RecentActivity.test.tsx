@@ -11,13 +11,13 @@ function show() {
 }
 it('separates confirmed facts from pending execution and links the owning conversation', async () => {
   vi.mocked(listCareerActivity).mockResolvedValue([
-    { event_id: 'fact', event_category: 'domain', occurred_at: '2026-09-23T00:00:00Z', conversation_id: null, payload: { title: '面试已记录', status: 'confirmed' } },
-    { event_id: 'waiting', event_category: 'harness', occurred_at: '2026-09-23T00:00:00Z', conversation_id: 'conv-1', payload: { title: 'Copilot 执行', detail: '等待用户决定', status: 'waiting' } },
+    { event_id: 'fact', event_kind: 'domain_event', schema_version: 1, operation_id: null, interaction_id: null, replayable: false, event_category: 'domain', occurred_at: '2026-09-23T00:00:00Z', conversation_id: null, payload: { title: '面试已记录', status: 'confirmed' } },
+    { event_id: 'waiting', event_kind: 'turn', schema_version: 1, operation_id: null, interaction_id: null, replayable: false, event_category: 'harness', occurred_at: '2026-09-23T00:00:00Z', conversation_id: 'conv-1', payload: { title: 'Copilot 执行', detail: '等待用户决定', status: 'waiting' } },
   ]);
   show();
   expect(await screen.findByText('等待用户决定')).toBeInTheDocument();
   expect(screen.getByText('面试已记录')).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: '查看相关对话' })).toHaveAttribute('href', '/chat?session=conv-1');
+  expect(screen.getByRole('link', { name: '查看相关对话' })).toHaveAttribute('href', '/general-chat?session=conv-1');
 });
 it('does not turn a failed read into an empty state', async () => {
   vi.mocked(listCareerActivity).mockRejectedValue(new Error('offline'));

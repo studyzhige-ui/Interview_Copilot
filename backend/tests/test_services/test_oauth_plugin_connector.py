@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import asyncio
 from urllib.parse import parse_qs, urlsplit
 
@@ -9,15 +10,13 @@ from app.core.config import Settings
 from app.core.secrets import decrypt_secret
 from app.models.external_plugin_connection import ExternalPluginOAuthState
 from app.models.user import User
-from app.services.oauth_plugin_connector import (
-    bind_external_plugin_account,
-    configured_external_plugin_connectors,
-)
-from app.services.plugin_credential_store import (
-    InMemoryPluginCredentialStore,
-    PluginCredentialNotFoundError,
-)
+from app.integrations.plugins.connector import bind_external_plugin_account
+from app.integrations.plugins.connector import configured_external_plugin_connectors
+from app.integrations.plugins.credentials import InMemoryPluginCredentialStore
+from app.integrations.plugins.credentials import PluginCredentialNotFoundError
 from tests.conftest import NoCloseSession
+
+pytestmark = pytest.mark.usefixtures("usage_database")
 
 
 def _user(db_session, name: str = "plugin-user") -> User:

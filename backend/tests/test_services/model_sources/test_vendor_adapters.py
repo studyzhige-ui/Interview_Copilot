@@ -20,12 +20,11 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from app.services.model_sources.vendors import ALL_SPECS, get_spec
-from app.services.model_sources.vendors import base as base_mod
-from app.services.model_sources.vendors.base import (
-    VendorFetchFailed,
-    fetch_one_vendor,
-)
+from app.providers.catalog.vendors import ALL_SPECS
+from app.providers.catalog.vendors import get_spec
+from app.providers.catalog.vendors import base as base_mod
+from app.providers.catalog.vendors.base import VendorFetchFailed
+from app.providers.catalog.vendors.base import fetch_one_vendor
 
 # ── Registry sanity ─────────────────────────────────────────────────
 

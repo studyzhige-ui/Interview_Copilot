@@ -9,8 +9,8 @@ from app.core.config import Settings
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.user import User
-from app.services.oauth_plugin_connector import configured_external_plugin_connectors
-from app.services.plugin_credential_store import InMemoryPluginCredentialStore
+from app.integrations.plugins.connector import configured_external_plugin_connectors
+from app.integrations.plugins.credentials import InMemoryPluginCredentialStore
 from tests.conftest import NoCloseSession
 
 

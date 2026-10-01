@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { extractErr } from '@/api/client';
 import { LogOut, Save, RefreshCw, AlertCircle, CheckCircle2, Camera } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { Field } from '@/components/ui/Field';
@@ -9,20 +11,22 @@ import { getMe, updateMe, uploadAvatar, type MeResponse } from '@/api/auth';
 import { useAuthStore } from '@/store/authStore';
 import { useIsMounted } from '@/hooks/useIsMounted';
 import { Avatar } from '@/components/ui/Avatar';
+import { StorageUsagePanel } from './StorageUsagePanel';
 
 export function ProfilePage() {
+  const queryClient = useQueryClient();
   const logout = useAuthStore((s) => s.logout);
   const setStoreMe = useAuthStore((s) => s.setMe);
   const [me, setMe] = useState<MeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [nickname, setNickname] = useState('');
-  // Render-only URL (S3-presigned, local fallback, or user-supplied HTTP URL).
+  // Render-only URL (signed storage URL or user-supplied HTTP URL).
   // Never round-trip it through the public URL editor field.
   const [avatarUrl, setAvatarUrl] = useState('');
   // Editable URL field. Initialised to '' on load — once the user types a
   // public http(s) URL here we send THAT in the PATCH; otherwise we leave
-  // the stored avatar_url alone so an S3-uploaded blob isn't clobbered.
+  // the stored avatar_url alone so an uploaded avatar isn't clobbered.
   const [avatarUrlInput, setAvatarUrlInput] = useState('');
   const [bio, setBio] = useState('');
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
@@ -40,10 +44,10 @@ export function ProfilePage() {
       setMe(next);
       setStoreMe(next);
       setAvatarUrl(next.avatar_url ?? '');
+      void queryClient.invalidateQueries({ queryKey: ['storage-usage'] });
       toast.success('头像已更新');
     } catch (e) {
-      const detail = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail;
-      toast.error(detail ?? '上传失败');
+      toast.error(extractErr(e, '上传失败'));
     } finally {
       setUploadingAvatar(false);
     }
@@ -120,8 +124,8 @@ export function ProfilePage() {
   return (
     <div className="p-6 max-w-3xl mx-auto">
       <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-xs">
-        <div className="flex items-center gap-4">
-          <div className="relative group">
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="relative group shrink-0">
             <input
               ref={avatarInputRef}
               type="file"
@@ -152,11 +156,11 @@ export function ProfilePage() {
             </button>
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xl font-semibold text-stone-800">
+            <div className="text-xl font-semibold text-stone-800 break-words">
               {me.nickname || me.username}
             </div>
-            <div className="text-xs text-stone-500 mt-0.5">@{me.username}</div>
-            <div className="mt-1.5 flex items-center gap-2">
+            <div className="text-xs text-stone-500 mt-0.5 break-all">@{me.username}</div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
               {me.email_verified ? (
                 <Pill tone="success">
                   <CheckCircle2 size={10} /> 邮箱已验证
@@ -169,7 +173,7 @@ export function ProfilePage() {
               <span className="text-[11px] text-stone-400">加入于 {created || '—'}</span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0">
             {dirty && <span className="text-xs text-warning-700">有未保存的修改</span>}
             <Btn
               icon={<Save size={14} />}
@@ -245,6 +249,7 @@ export function ProfilePage() {
           </Btn>
         </div>
       </div>
+      <StorageUsagePanel />
     </div>
   );
 }

@@ -33,7 +33,9 @@ class InteractionPayload(RootModel[dict[str, JsonValue]]):
 class ToolInteractionRequest(BaseModel):
     """Minimal user-visible facts for a paused concrete Tool Call."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     tool_name: str
     call_id: str
@@ -43,7 +45,9 @@ class ToolInteractionRequest(BaseModel):
 
 
 class ResolveInteractionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     expected_version: PositiveInt
     status: InteractionResolutionStatus
@@ -52,7 +56,9 @@ class ResolveInteractionRequest(BaseModel):
 
 
 class AgentInteractionView(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True, json_schema_serialization_defaults_required=True
+    )
 
     id: str
     turn_id: str
@@ -73,6 +79,8 @@ class AgentInteractionView(BaseModel):
 
 
 class ResolveInteractionResponse(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
     interaction: AgentInteractionView
     turn_status: Literal["pending", "cancelled"]
     dispatch_generation: PositiveInt
@@ -81,7 +89,9 @@ class ResolveInteractionResponse(BaseModel):
 class PendingInteractionProjection(BaseModel):
     """User-level query projection; the Interaction remains the sole owner."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     conversation_id: str
     turn_status: str

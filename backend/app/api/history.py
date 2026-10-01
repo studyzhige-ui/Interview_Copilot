@@ -13,11 +13,9 @@ from app.schemas.history_search import (
     HistorySearchQuery,
     HistorySearchResponse,
 )
-from app.services.interaction_history_service import (
-    HistorySearchNotFoundError,
-    get_interaction_history_record,
-    search_interaction_history,
-)
+from app.conversation.history_queries import HistorySearchNotFoundError
+from app.conversation.history_queries import get_interaction_history_record
+from app.conversation.history_queries import search_interaction_history
 
 router = APIRouter(prefix="/history", tags=["history"])
 
@@ -30,7 +28,7 @@ def search_history(
     role: list[Literal["user", "assistant", "tool", "system"]] = Query(default=[]),
     limit: int = Query(20, ge=1, le=50),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         request = HistorySearchQuery(
@@ -49,7 +47,7 @@ def search_history(
 def read_history_record(
     identity: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         return get_interaction_history_record(

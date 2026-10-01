@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+
 from app.core.model_catalog import ModelProfile
 from app.core.model_provider_adapter import (
     ModelProviderAdapter,
@@ -14,6 +15,8 @@ from app.core.model_provider_adapter import (
     provider_image_block,
     provider_text_block,
 )
+
+pytestmark = pytest.mark.usefixtures("usage_scope")
 
 
 def _profile(provider: str) -> ModelProfile:
@@ -415,3 +418,51 @@ def test_unsupported_provider_sends_full_request_without_cache_fields():
     ]
     assert "cache_control" not in str(captured)
     assert normalized[0].usage.prompt_tokens == 4
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+@pytest.mark.parametrize("fail", [False, True])
+def test_native_stream_owned_by_normalizer_is_closed_on_early_exit(provider, fail):
+    from app.core.model_provider_adapter import (
+        _normalize_openai_stream,
+        _normalize_anthropic_stream,
+    )
+
+    class Native:
+        def __init__(self):
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if fail:
+                raise ConnectionError("fixture transport error")
+            return SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="text_delta", text="x"),
+                choices=[],
+            )
+
+        async def close(self):
+            self.closed = True
+
+    native = Native()
+
+    async def run():
+        stream = (
+            _normalize_openai_stream
+            if provider == "openai"
+            else _normalize_anthropic_stream
+        )(native)
+        try:
+            if fail:
+                with pytest.raises(ConnectionError):
+                    await anext(stream)
+            else:
+                await anext(stream)
+        finally:
+            await stream.aclose()
+
+    asyncio.run(run())
+    assert native.closed

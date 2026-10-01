@@ -14,7 +14,7 @@ from app.models.conversation_turn import ConversationTurn
 from app.models.pending_submission import PendingSubmission
 from app.models.user import User
 from app.schemas.client_action import MockPrefillPayload
-from app.services.chat.client_action_service import create_mock_client_action
+from app.conversation.application.client_action_service import create_mock_client_action
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -128,8 +128,8 @@ def test_delivery_takeover_resolution_and_replay_keep_one_turn_call(
     monkeypatch,
 ):
     _user, conversation, turn, interaction, action = _seed(db)
-    from app.services.chat import turn_executor
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application import turn_executor
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     scheduled: list[str] = []
 

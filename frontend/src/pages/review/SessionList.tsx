@@ -13,7 +13,7 @@ interface Props {
   activeId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
-  onChanged: () => void;
+  onChanged: (change?: { deletedId: string }) => void;
   onDraftMutate: (id: string, patch: Partial<InterviewRecordListItem>) => void;
   onDraftDelete: (id: string) => void;
   /** Per-record live progress so the pill can show the current sub-stage. */
@@ -179,7 +179,7 @@ export function SessionList({
       await deleteInterviewRecord(deleting.id);
       toast.success('已删除');
       setDeleting(null);
-      onChanged();
+      onChanged({ deletedId: deleting.id });
     } catch (e) {
       toast.error(extractErr(e, '删除失败'));
     }

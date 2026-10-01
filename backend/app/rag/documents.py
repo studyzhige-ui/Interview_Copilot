@@ -18,6 +18,7 @@ class ParsedDocument:
     content_kind: str = "text"
     ocr_used: bool = False
     warnings: list[str] = field(default_factory=list)
+    runtime_profile: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

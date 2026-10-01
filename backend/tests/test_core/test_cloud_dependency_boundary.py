@@ -50,7 +50,7 @@ sys.meta_path.insert(0, BlockCommunityImports())
 import app.main
 from app.rag.embedding_registry import build_embedding
 from app.rag.reranker_registry import build_reranker
-from app.services.voice.transcription_registry import resolve_transcription
+from app.media.application.transcription_registry import resolve_transcription
 
 build_embedding()
 build_reranker(top_n=5)

@@ -41,7 +41,7 @@ def profile_sha256(profile: dict[str, Any]) -> str:
 def _current_runtime_contract() -> dict[str, Any]:
     from app.core.config import settings
     from app.rag.index.identity import (
-        active_knowledge_collection_name,
+        active_index_label,
         current_index_identity,
     )
 
@@ -64,17 +64,14 @@ def _current_runtime_contract() -> dict[str, Any]:
         "retrieved_context_tokens": settings.RAG_RETRIEVED_CONTEXT_TOKENS,
         "output_token_reserve": settings.RAG_OUTPUT_TOKEN_RESERVE,
         "context_safety_margin": settings.RAG_CONTEXT_SAFETY_MARGIN,
-        "milvus_uri_sha256": hashlib.sha256(
-            settings.MILVUS_URI.encode("utf-8")
-        ).hexdigest(),
-        "milvus_collection_base": settings.MILVUS_COLLECTION,
-        "milvus_collection": active_knowledge_collection_name(),
+        "retrieval_backend": "postgresql-pgvector",
+        "retrieval_namespace": settings.RAG_INDEX_NAMESPACE,
+        "retrieval_generation": active_index_label(),
         "index_fingerprint": current_index_identity().fingerprint,
-        "milvus_similarity_metric": settings.MILVUS_SIMILARITY_METRIC,
-        "milvus_dense_index_type": settings.MILVUS_DENSE_INDEX_TYPE,
-        "milvus_hnsw_m": settings.MILVUS_HNSW_M,
-        "milvus_hnsw_ef_construction": settings.MILVUS_HNSW_EF_CONSTRUCTION,
-        "milvus_hnsw_ef_search": settings.MILVUS_HNSW_EF_SEARCH,
+        "similarity_metric": settings.RAG_SIMILARITY_METRIC,
+        "dense_index_type": "EXACT",
+        "lexical_analyzer": current_index_identity().analyzer_contract,
+        "statement_timeout_ms": settings.RAG_INDEX_STATEMENT_TIMEOUT_MS,
     }
 
 
@@ -144,7 +141,7 @@ def _dependency_versions() -> dict[str, str]:
     names = (
         "docling",
         "llama-index-core",
-        "pymilvus",
+        "pgvector",
         "pymupdf",
         "sentence-transformers",
         "torch",

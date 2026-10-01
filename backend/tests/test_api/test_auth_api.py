@@ -45,6 +45,7 @@ from fastapi import HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from starlette.requests import Request
 
 
@@ -64,7 +65,9 @@ def _disable_rate_limiter():
 
 @pytest.fixture
 def db_session_local():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     session = Session()
@@ -276,7 +279,7 @@ async def test_register_duplicate_email_returns_409(db_session_local):
 
 @pytest.mark.asyncio
 async def test_register_bad_code_returns_generic_400(db_session_local):
-    from app.services.auth.verification_code_service import CodeError
+    from app.identity.application.verification_code_service import CodeError
 
     with (
         patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock),
@@ -511,7 +514,7 @@ async def test_get_current_user_accepts_valid_token(db_session_local):
     user = _register_sync(db_session_local, "alice", "pw")
     token = create_access_token(data=token_claims_for(user))
     with patch("app.core.security.is_revoked", return_value=False):
-        got = get_current_user(token=token, db=db_session_local)
+        got = await get_current_user(token=token, db=db_session_local)
     assert got.id == user.id
 
 
@@ -524,7 +527,7 @@ async def test_get_current_user_rejects_token_version_mismatch(db_session_local)
     db_session_local.commit()
     with patch("app.core.security.is_revoked", return_value=False):
         with pytest.raises(HTTPException) as exc:
-            get_current_user(token=token, db=db_session_local)
+            await get_current_user(token=token, db=db_session_local)
     assert exc.value.status_code == 401
 
 
@@ -535,7 +538,7 @@ async def test_get_current_user_rejects_token_without_token_version(db_session_l
     legacy = create_access_token(data={"sub": user.username})  # pre-migration shape
     with patch("app.core.security.is_revoked", return_value=False):
         with pytest.raises(HTTPException) as exc:
-            get_current_user(token=legacy, db=db_session_local)
+            await get_current_user(token=legacy, db=db_session_local)
     assert exc.value.status_code == 401
 
 
@@ -574,7 +577,7 @@ async def test_reset_password_consumes_code_and_kills_old_tokens(db_session_loca
 
     with patch("app.core.security.is_revoked", return_value=False):
         with pytest.raises(HTTPException) as exc:
-            get_current_user(token=old_access, db=db_session_local)
+            await get_current_user(token=old_access, db=db_session_local)
     assert exc.value.status_code == 401
 
 
@@ -582,7 +585,7 @@ async def test_reset_password_consumes_code_and_kills_old_tokens(db_session_loca
 async def test_reset_password_bad_code_is_generic_and_does_not_change_password(
     db_session_local,
 ):
-    from app.services.auth.verification_code_service import CodeError
+    from app.identity.application.verification_code_service import CodeError
 
     user = _register_sync(db_session_local, "alice", "oldpw1")
     with (
@@ -658,7 +661,7 @@ async def test_change_password_bumps_version_and_kills_old_tokens(db_session_loc
     # The access token issued before the change now fails the version gate.
     with patch("app.core.security.is_revoked", return_value=False):
         with pytest.raises(HTTPException) as exc:
-            get_current_user(token=old_access, db=db_session_local)
+            await get_current_user(token=old_access, db=db_session_local)
     assert exc.value.status_code == 401
 
 

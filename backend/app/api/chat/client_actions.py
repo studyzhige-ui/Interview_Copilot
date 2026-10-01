@@ -18,13 +18,11 @@ from app.schemas.client_action import (
     MockClientActionTakeoverRequest,
     MockClientActionView,
 )
-from app.services.chat.client_action_service import (
-    ClientActionConflictError,
-    ClientActionNotFoundError,
-    pending_action_for_client,
-    resolve_pending_action,
-    takeover_pending_action,
-)
+from app.conversation.application.client_action_service import ClientActionConflictError
+from app.conversation.application.client_action_service import ClientActionNotFoundError
+from app.conversation.application.client_action_service import pending_action_for_client
+from app.conversation.application.client_action_service import resolve_pending_action
+from app.conversation.application.client_action_service import takeover_pending_action
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["client-actions"])
@@ -39,7 +37,7 @@ def get_pending_client_action(
     turn_id: str,
     client_id: str = Query(min_length=1, max_length=128),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Replay a pending action only to the instance currently bound to it."""
 
@@ -66,7 +64,7 @@ def takeover_client_action(
     interaction_id: str,
     body: MockClientActionTakeoverRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Explicit user command to bind a stranded action to this client."""
 
@@ -113,16 +111,14 @@ async def resolve_client_action(
     interaction_id: str,
     body: MockClientActionResultRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Persist ack/refusal/failure and resume the same Turn/Tool Call once."""
 
-    from app.services.chat.turn_event_buffer import turn_event_buffer
-    from app.services.chat.turn_executor import (
-        fail_pending_turn,
-        resume_waiting_turn,
-        schedule_turn,
-    )
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_executor import fail_pending_turn
+    from app.conversation.application.turn_executor import resume_waiting_turn
+    from app.conversation.application.turn_executor import schedule_turn
 
     user_pk = resolve_user_pk(db, current_user.username)
     try:

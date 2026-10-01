@@ -13,13 +13,14 @@ from app.models.interview_record import InterviewRecord
 from app.models.job_opportunity import JobOpportunity, NextAction
 from app.models.pending_submission import PendingSubmission
 from app.models.user import User
-from app.services.chat import product_object_reference, turn_executor
-from app.services.chat.context_assembly_pipeline import (
-    AssembledContext,
-    PromptRenderer,
+from app.conversation.application import product_object_reference
+from app.conversation.application import turn_executor
+from app.conversation.application.context_assembly_pipeline import AssembledContext
+from app.conversation.application.context_assembly_pipeline import PromptRenderer
+from app.conversation.application.context_assembly_pipeline import (
     render_historical_user_content,
 )
-from app.services.chat.product_object_reference import (
+from app.conversation.application.product_object_reference import (
     ProductObjectReferenceUnavailableError,
 )
 
@@ -478,6 +479,9 @@ async def test_execution_persists_unavailable_reference_failure(monkeypatch):
     )
     monkeypatch.setattr(turn_executor, "_claim", lambda _turn_id: turn)
     monkeypatch.setattr(
+        turn_executor, "_cancellation_requested", lambda _turn_id: False
+    )
+    monkeypatch.setattr(
         turn_executor,
         "build_product_object_context",
         lambda **_kwargs: (_ for _ in ()).throw(
@@ -496,7 +500,9 @@ async def test_execution_persists_unavailable_reference_failure(monkeypatch):
     monkeypatch.setattr(
         turn_executor,
         "_finish",
-        lambda _turn_id, status, error=None: finished.append((status, error)) or True,
+        lambda _turn_id, status, error=None, **_fence: (
+            finished.append((status, error)) or True
+        ),
     )
     events: list[dict] = []
 

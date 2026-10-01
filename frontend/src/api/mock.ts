@@ -1,4 +1,10 @@
 import { apiClient } from './client';
+import { isAxiosError } from 'axios';
+import type { components } from '@/types/generated/shared-protocols';
+import { clearAnswerIntent, rememberAnswerIntent } from './answerIntent';
+
+export type MockAnswerReceipt = components['schemas']['MockAnswerReceiptResponseContract'];
+type MockAnswerCommand = components['schemas']['MockAnswerRequestRequestContract'];
 import type {
   MockAnswerResp,
   MockAnswerAudioResp,
@@ -7,35 +13,41 @@ import type {
   MockStartResp,
 } from '@/types/api';
 
-export async function startMockInterview(payload: {
-  resume_id: string;
-  jd_text: string;
-  interviewer_style: 'friendly' | 'professional' | 'rigorous' | 'pressure';
-  target_question_count: 15 | 20 | 30;
-  job_opportunity_id?: string;
-}): Promise<MockStartResp> {
+export async function startMockInterview(payload: components['schemas']['MockPreparationRequestRequestContract']): Promise<MockStartResp> {
   const res = await apiClient.post('/mock-interviews/start', payload);
   return res.data;
 }
 
 export async function submitMockAnswer(
   recordId: string,
-  payload: {
-    answer_text: string;
-    answer_audio_file_asset_id?: string;
-    /** Concurrency token (MOCK-3): id of the question being answered. */
-    question_message_id: number;
-  },
+  payload: MockAnswerCommand,
 ): Promise<MockAnswerResp> {
+  rememberAnswerIntent(recordId, payload.request_id, payload.question_message_id);
   const res = await apiClient.post(
     `/mock-interviews/${encodeURIComponent(recordId)}/answer`,
     payload,
   );
+  clearAnswerIntent(recordId, payload.request_id);
   return res.data;
+}
+
+/** Read-only reconciliation. A missing receipt never triggers a POST. */
+export async function getMockAnswerReceipt(recordId: string, requestId: string): Promise<MockAnswerReceipt | null> {
+  try {
+    const response = await apiClient.get<MockAnswerReceipt>(
+      `/mock-interviews/${encodeURIComponent(recordId)}/answer-receipts/${encodeURIComponent(requestId)}`,
+    );
+    if (response.data.request_id !== requestId) throw new Error('回答收据编号不匹配');
+    return response.data;
+  } catch (error) {
+    if (isAxiosError(error) && error.response?.status === 404) return null;
+    throw error;
+  }
 }
 
 export async function finishMockInterview(recordId: string): Promise<MockFinishResp> {
   const res = await apiClient.post(`/mock-interviews/${encodeURIComponent(recordId)}/finish`);
+  clearAnswerIntent(recordId);
   return res.data;
 }
 
@@ -49,13 +61,17 @@ export async function retryMockReview(recordId: string): Promise<MockFinishResp>
 export async function prepareMockAnswerAudio(
   recordId: string,
   blob: Blob,
+  options?: { signal?: AbortSignal },
 ): Promise<MockAnswerAudioResp> {
   const fd = new FormData();
-  const extension = blob.type.includes('ogg') ? 'ogg' : 'webm';
+  const mime = blob.type.toLowerCase().split(';', 1)[0].trim();
+  const extension = ({ 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/wav': 'wav', 'audio/webm': 'webm' } as Record<string, string>)[mime];
+  if (!extension || !blob.size) throw new Error('录音格式不受支持或录音为空，请重新录制。');
   fd.append('file', blob, `answer.${extension}`);
   const res = await apiClient.post(
     `/mock-interviews/${encodeURIComponent(recordId)}/answer-audio`,
     fd,
+    { signal: options?.signal },
   );
   return res.data;
 }
@@ -89,6 +105,7 @@ interface AbandonMockResp {
 
 export async function abandonMockInterview(recordId: string): Promise<AbandonMockResp> {
   const res = await apiClient.delete(`/mock-interviews/${encodeURIComponent(recordId)}`);
+  clearAnswerIntent(recordId);
   return res.data;
 }
 

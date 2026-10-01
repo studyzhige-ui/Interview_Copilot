@@ -24,8 +24,8 @@ from app.schemas.offer import (
     OfferRecordRequest,
     OfferView,
 )
-from app.services import offer_service
-from app.services.uploads.file_asset_service import READABLE_UPLOAD_STATUSES
+from app.career.application import offers as offer_service
+from app.files.application.file_asset_service import READABLE_UPLOAD_STATUSES
 
 router = APIRouter(prefix="/career-process/opportunities", tags=["offers"])
 
@@ -172,7 +172,7 @@ def _raise_offer_http(exc: offer_service.OfferDomainError) -> None:
 @router.get("/offers/current", response_model=list[OfferListItem])
 def list_current_offers(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     rows = (
         db.query(Offer, JobOpportunity)
@@ -199,7 +199,7 @@ def list_current_offers(
 def read_current_offer(
     job_opportunity_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _require_owned_job(db, current_user.id, job_opportunity_id, active=False)
     try:
@@ -221,7 +221,7 @@ def record_current_offer(
     job_opportunity_id: str,
     body: OfferRecordRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _require_owned_job(db, current_user.id, job_opportunity_id, active=True)
     try:
@@ -261,7 +261,7 @@ def confirm_offer_terms(
     job_opportunity_id: str,
     body: OfferConfirmTermsRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _require_owned_job(db, current_user.id, job_opportunity_id, active=True)
     if (

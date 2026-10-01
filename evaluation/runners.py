@@ -1250,11 +1250,9 @@ async def _run_generation(
         RetrievalState,
     )
     from app.rag.grounding.builder import grounding_builder
-    from app.services.chat.context_assembly_pipeline import (
-        AssembledContext,
-        TokenBudget,
-        prompt_renderer,
-    )
+    from app.conversation.application.context_assembly_pipeline import AssembledContext
+    from app.conversation.application.context_assembly_pipeline import TokenBudget
+    from app.conversation.application.context_assembly_pipeline import prompt_renderer
 
     from evaluation.llm_factory import build_evaluation_llm
     from evaluation.ragas_runner import (

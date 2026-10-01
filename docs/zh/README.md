@@ -1,6 +1,6 @@
 # Interview Copilot
 
-Interview Copilot 是一个 Cloud-first 的职业发展 Copilot，包含求职进展管理、
+Interview Copilot 是一个本地优先的职业发展 Copilot，包含求职进展管理、
 模拟面试、录音分析、简历/JD 检索、耐久 Artifact、用户 Skill 和 MCP 工具。
 Long-term Agent Memory 仍受评估门禁控制；当前运行时不生成或召回它。
 
@@ -19,15 +19,14 @@ Edition Policy 决定，后端负责最终强制执行。
 
 本地只保留两种受支持的运行方式，请在同一份代码中二选一。
 
-### 宿主开发模式
+### 宿主开发模式（Linux 或 WSL2）
+
+Windows 用户请使用 [桌面启动器](../../desktop/README.md) 与 Docker Desktop，
+或下方的完整容器模式。后端与 Celery 在 Linux 中运行；宿主开发使用下方
+Linux/WSL2 的 Bash 脚本。
 
 要求 Python 3.11–3.13、Node.js 20+、Docker Compose v2，并提前激活独立
 Python 环境。
-
-```powershell
-pwsh ./scripts/setup.ps1
-.\scripts\start.ps1
-```
 
 ```bash
 bash ./scripts/setup.sh
@@ -45,7 +44,8 @@ docker compose --profile full up -d --wait
 ```
 
 浏览器打开 `http://localhost`。此路径已内置数据库迁移，并等待依赖服务健康后
-再启动 API 和 Worker。
+再启动 API 和 Worker。新文件默认保存在私有的 `data/storage`；S3 可显式配置。
+已有 S3 文件保持原存储位置，旧 MinIO 数据不会自动迁移或删除。
 
 详细说明：
 

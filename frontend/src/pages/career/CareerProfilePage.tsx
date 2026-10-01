@@ -1,3 +1,4 @@
+import { formatScore } from '@/lib/scoring';
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -424,16 +425,16 @@ function AbilityCard({ signal, onAction, onRecompute }: { signal: AbilitySignal;
           <h3 className="font-medium text-stone-800">{signal.topic}</h3>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-stone-500">
             <span>{signal.signal_type}</span>{signal.level && <span>· {signal.level}</span>}
-            {signal.score !== null && <span>· {signal.score}</span>}
+            <span>· {formatScore(signal.score)}</span>
           </div>
         </div>
         <Pill tone={tone}>{signal.status}</Pill>
       </div>
       <p className="mt-3 text-sm leading-relaxed text-stone-700">{signal.summary}</p>
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-stone-100" title={`置信度 ${Math.round((signal.confidence ?? 0) * 100)}%`}>
-        <div className="h-full bg-primary-500" style={{ width: `${Math.round((signal.confidence ?? 0) * 100)}%` }} />
-      </div>
-      <div className="mt-2 text-[11px] text-stone-500">置信度 {Math.round((signal.confidence ?? 0) * 100)}% · {signal.sources.length} 个真实来源</div>
+      {signal.confidence !== null && <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-stone-100" title={`置信度 ${Math.round(signal.confidence * 100)}%`}>
+        <div className="h-full bg-primary-500" style={{ width: `${Math.round(signal.confidence * 100)}%` }} />
+      </div>}
+      <div className="mt-2 text-[11px] text-stone-500">{signal.confidence === null ? '置信度未校准' : `置信度 ${Math.round(signal.confidence * 100)}%`} · {signal.sources.length} 个来源引用</div>
       {signal.limitations && <p className="mt-2 text-xs text-stone-500">局限：{signal.limitations}</p>}
       {canChallenge && <div className="mt-3 flex gap-2">
         {signal.status === 'active' && <Btn kind="outline" size="sm" onClick={() => onAction('dispute')}>提出异议</Btn>}

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Interview Copilot — one-time bootstrap (Windows / PowerShell 7+).
+    Interview Copilot — one-time bootstrap (PowerShell 7+).
 .DESCRIPTION
     Brings a fresh clone to a "ready to develop" state. Run this once
     after cloning. For everyday startup, use scripts/start.ps1.
@@ -32,6 +32,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+    throw 'Native Windows backend execution is unsupported. Use the Windows desktop with Docker Desktop, the full container stack, or use the Bash developer launcher inside Linux/WSL2.'
+}
 
 try { chcp 65001 > $null } catch { }
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
@@ -174,14 +178,12 @@ if ($envContent -match '(?m)^SECRET_KEY=\s*$') {
 # -----------------------------------------------------------------------------
 # 5. Infrastructure
 # -----------------------------------------------------------------------------
-Step 'Starting Docker infrastructure (postgres, redis, minio, milvus)'
+Step 'Starting Docker infrastructure (postgres/pgvector, redis)'
 Push-Location $projectRoot
 try {
     docker compose up -d --wait --wait-timeout 180 `
-        db redis minio milvus-etcd milvus-minio milvus-standalone | Out-Host
+        db redis | Out-Host
     if ($LASTEXITCODE -ne 0) { Fail 'Infrastructure did not become healthy.' }
-    docker compose run --rm --no-deps minio-create-bucket | Out-Host
-    if ($LASTEXITCODE -ne 0) { Fail 'MinIO bucket initialization failed.' }
 } finally { Pop-Location }
 Ok 'infrastructure healthy'
 

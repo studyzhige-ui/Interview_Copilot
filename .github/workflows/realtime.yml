@@ -1,0 +1,35 @@
+name: Realtime transport
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: realtime-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  local-webrtc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      REQUIRE_WEBRTC: "1"
+      DATABASE_URL: sqlite://
+      SECRET_KEY: ci-realtime-not-production
+      DEEPSEEK_API_KEY: test-key-not-real
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e '.[dev]' aiortc==1.15.0
+      - run: python scripts/export_realtime_contracts.py --check
+      - run: pytest backend/tests/test_realtime -q --junitxml=realtime-results.xml
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: realtime-results
+          path: realtime-results.xml
+          retention-days: 7

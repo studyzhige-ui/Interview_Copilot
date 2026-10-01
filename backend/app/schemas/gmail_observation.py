@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.interview_invitation import InterviewInvitationCandidateFacts
 from app.schemas.job_opportunity import ProcessEventKind
 
 
@@ -55,7 +56,26 @@ class GmailObservationSnapshotView(BaseModel):
     created_at: datetime
 
 
+class GmailInvitationHandoff(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidate_id: str
+    candidate_version: int
+    candidate_status: Literal[
+        "needs_clarification",
+        "pending_confirmation",
+        "confirmed",
+        "rejected",
+        "superseded",
+    ]
+    conversation_id: str | None
+    turn_id: str | None
+    interaction_id: str | None
+    # The read/route operation itself never performs a canonical write.
+    canonical_write: Literal[False] = False
+
+
 class GmailObservationView(BaseModel):
+    invitation_handoff: GmailInvitationHandoff | None = None
     model_config = ConfigDict(from_attributes=True)
 
     id: str
@@ -112,6 +132,9 @@ class GmailObservationProposal(BaseModel):
     observation_id: str = Field(min_length=1, max_length=36)
     expected_version: int = Field(ge=1)
     disposition: Literal["auto_apply", "needs_confirmation", "dismiss"]
+    # Source-derived partial schedule only. occurred_at is NOT the interview
+    # start time; never guess timezone or scheduling fields from message time.
+    invitation_facts: InterviewInvitationCandidateFacts | None = None
     event_kind: ProcessEventKind | None = None
     opportunity_id: str | None = Field(default=None, max_length=35)
     new_opportunity: GmailObservationNewOpportunity | None = None
@@ -124,6 +147,11 @@ class GmailObservationProposal(BaseModel):
 
     @model_validator(mode="after")
     def validate_shape(self) -> "GmailObservationProposal":
+        if (
+            self.invitation_facts is not None
+            and self.event_kind != "interview_scheduled"
+        ):
+            raise ValueError("invitation_facts requires interview_scheduled")
         if self.disposition == "dismiss":
             if any(
                 value is not None
@@ -137,6 +165,15 @@ class GmailObservationProposal(BaseModel):
                 )
             ):
                 raise ValueError("dismiss does not carry a process-event candidate")
+            return self
+        if self.event_kind == "interview_scheduled":
+            # An invitation candidate can have neither a known opportunity nor
+            # an event time. Missing facts are resolved by the user, not guessed
+            # to satisfy the retired ProcessEvent input schema.
+            if self.opportunity_id is not None and self.new_opportunity is not None:
+                raise ValueError(
+                    "invitation cannot name both existing and new opportunity"
+                )
             return self
         if self.event_kind is None or self.occurred_at is None or not self.description:
             raise ValueError("event candidate requires kind, time, and description")
@@ -240,6 +277,8 @@ class GmailObservationSyncView(BaseModel):
 
 class GmailObservationResolutionView(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    invitation_handoff: GmailInvitationHandoff | None = None
 
     outcome: str
     observation: GmailObservationView

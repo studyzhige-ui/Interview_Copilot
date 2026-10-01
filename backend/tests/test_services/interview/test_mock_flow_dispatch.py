@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import pytest
 from app.models.chat import Conversation
-from app.services.interview import mock_flow, mock_runtime_service
-from app.services.interview.interview_record_service import (
-    STATUS_MOCK_IN_PROGRESS,
-    STATUS_PROCESSING_REVIEW,
-    STATUS_REVIEW_FAILED,
-    interview_record_service,
-)
+from app.interviews.application import mock_flow
+from app.interviews.application import mock_runtime_service
+from app.interviews.application.interview_record_service import STATUS_MOCK_IN_PROGRESS
+from app.interviews.application.interview_record_service import STATUS_PROCESSING_REVIEW
+from app.interviews.application.interview_record_service import STATUS_REVIEW_FAILED
+from app.interviews.application.interview_record_service import interview_record_service
 
 
 @pytest.fixture(autouse=True)
@@ -128,7 +127,7 @@ def test_dispatch_success_stamps_task_id_and_deletes_runtime(db_session, monkeyp
     monkeypatch.setattr(
         mock_flow,
         "dispatch_mock_interview_review",
-        lambda *_args, **_kwargs: type("Task", (), {"id": "celery-task-1"})(),
+        lambda *_args, **_kwargs: type("Task", (), {"id": _kwargs["task_id"]})(),
     )
 
     task = mock_flow.dispatch_review(
@@ -138,9 +137,9 @@ def test_dispatch_success_stamps_task_id_and_deletes_runtime(db_session, monkeyp
     )
 
     db_session.refresh(record)
-    assert task.id == "celery-task-1"
+    assert len(task.id) == 36
     assert record.status == STATUS_PROCESSING_REVIEW
-    assert record.celery_task_id == "celery-task-1"
+    assert record.celery_task_id == task.id
     assert (
         mock_runtime_service.get_runtime_for_record(
             db_session, interview_record_id=record.id

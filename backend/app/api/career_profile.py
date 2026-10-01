@@ -31,7 +31,8 @@ from app.schemas.career_profile import (
     PersonalFactMutationInput,
     PersonalFactRemovalInput,
 )
-from app.services import ability_signal_service, career_profile_service
+from app.career.application import signals as ability_signal_service
+from app.career.application import profile as career_profile_service
 
 router = APIRouter(tags=["career-profile"])
 
@@ -68,7 +69,7 @@ def _ability_error(exc: Exception) -> HTTPException:
 @router.get("/career-profile", response_model=CareerProfileView)
 def read_career_profile(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_pk = _user_pk(db, current_user)
     career_profile_service.ensure_career_profile(db, user_pk=user_pk)
@@ -80,7 +81,7 @@ def read_career_profile(
 def create_personal_fact(
     body: PersonalFactMutationInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = career_profile_service.upsert_personal_fact(
@@ -102,7 +103,7 @@ def update_personal_fact(
     fact_id: str,
     body: PersonalFactMutationInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = career_profile_service.upsert_personal_fact(
@@ -125,7 +126,7 @@ def delete_personal_fact(
     fact_id: str,
     body: PersonalFactRemovalInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = career_profile_service.remove_personal_fact(
@@ -146,7 +147,7 @@ def delete_personal_fact(
 def create_direction(
     body: DirectionMutationInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _mutate_direction(None, body, current_user, db)
 
@@ -158,7 +159,7 @@ def update_direction(
     direction_id: str,
     body: DirectionMutationInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _mutate_direction(direction_id, body, current_user, db)
 
@@ -193,7 +194,7 @@ def update_direction_lifecycle(
     direction_id: str,
     body: DirectionLifecycleMutationInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = career_profile_service.set_profile_direction_lifecycle(
@@ -215,7 +216,7 @@ def update_direction_lifecycle(
 def list_profile_drafts(
     include_resolved: bool = Query(False),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         return career_profile_service.list_profile_draft_views(
@@ -233,7 +234,7 @@ def list_profile_drafts(
 def create_profile_draft(
     body: CareerProfileDraftInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = career_profile_service.create_profile_draft_change(
@@ -255,7 +256,7 @@ def accept_profile_draft(
     draft_id: str,
     body: CareerProfileDraftResolutionInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     if body.expected_profile_version is None:
         raise HTTPException(
@@ -283,7 +284,7 @@ def reject_profile_draft(
     draft_id: str,
     body: CareerProfileDraftResolutionInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = career_profile_service.reject_profile_draft_change(
@@ -310,7 +311,7 @@ def resolve_profile_candidates(
     draft_id: str,
     body: CareerProfileCandidateBatchResolutionInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = career_profile_service.resolve_profile_candidate_items(
@@ -330,7 +331,7 @@ def resolve_profile_candidates(
 def read_ability_signals(
     include_inactive: bool = Query(False),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return ability_signal_service.list_ability_signals(
         db,
@@ -343,7 +344,7 @@ def read_ability_signals(
 def read_ability_signal(
     signal_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         return ability_signal_service.get_ability_signal(
@@ -361,7 +362,7 @@ def recompute_interview_ability_signals(
     interview_record_id: str,
     body: AbilitySignalRecomputeInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     del body  # reason is user-facing context; source facts drive recomputation.
     try:
@@ -383,7 +384,7 @@ def dispute_ability_signal(
     signal_id: str,
     body: AbilitySignalStatusChangeInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _change_signal_status(
         "dispute", signal_id, body, current_user=current_user, db=db
@@ -397,7 +398,7 @@ def invalidate_ability_signal(
     signal_id: str,
     body: AbilitySignalStatusChangeInput,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _change_signal_status(
         "invalidate", signal_id, body, current_user=current_user, db=db

@@ -240,7 +240,7 @@ export function PersistentTasksPage() {
       <header className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-stone-800">持续任务</h1>
-          <p className="mt-1 text-sm text-stone-500">只有你明确创建的任务才会在云端持续运行；每次执行只使用已列出的云端 Tool 和动作范围。</p>
+          <p className="mt-1 text-sm text-stone-500">只有你明确创建的任务才会在当前运行服务中持续执行；每次执行只使用已列出的工具和动作范围。</p>
         </div>
         <div className="flex gap-2">
           <Btn kind="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={() => { void refresh(); }}>刷新</Btn>
@@ -485,7 +485,7 @@ function TaskDetail({
             </div>
           )}
         </InfoCard>
-        <InfoCard title="允许的云端只读 Tool">
+        <InfoCard title="允许的只读工具">
           {task.allowed_tool_names_json.length
             ? <div className="flex flex-wrap gap-1.5">{task.allowed_tool_names_json.map((tool) => <Pill key={tool}>{tool}</Pill>)}</div>
             : <span>未授权任何 Tool</span>}
@@ -700,11 +700,11 @@ function TaskEditor({
               : <div role="alert" className="mt-2 text-danger-700">需要先在“设置与连接”中完成真实 Gmail 只读授权。</div>}
         </div>}
         <div className="sm:col-span-2">
-          <FormItem label="允许的云端 Tool" hint="仅显示当前真实注册且适合无人值守的能力；写入仍受动作范围、Policy 与领域不变量约束。">
+          <FormItem label="允许的工具" hint="仅显示当前真实注册且适合无人值守的能力；写入仍受动作范围、Policy 与领域不变量约束。">
             <div className="grid gap-2 rounded-lg border border-stone-200 bg-stone-50 p-3 sm:grid-cols-2">
               {toolsQuery.isLoading && <div className="col-span-2 flex items-center gap-2 text-xs text-stone-500"><Spinner size={13} />正在读取当前可用 Tool…</div>}
               {toolsQuery.isError && <div role="alert" className="col-span-2 text-xs text-danger-700">{extractErr(toolsQuery.error, '当前可用 Tool 读取失败')}</div>}
-              {toolsQuery.isSuccess && tools.length === 0 && <div className="col-span-2 text-xs text-stone-500">当前部署没有可用于无人值守任务的云端 Tool。</div>}
+              {toolsQuery.isSuccess && tools.length === 0 && <div className="col-span-2 text-xs text-stone-500">当前部署没有可用于无人值守任务的工具。</div>}
               {tools.map((tool: PersistentTaskEligibleTool) => (
                 <label key={tool.name} title={tool.description} className="flex items-center gap-2 text-xs text-stone-700">
                   <input

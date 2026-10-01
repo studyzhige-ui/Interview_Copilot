@@ -19,23 +19,49 @@ from app.models.interview_source import InterviewSourceRef
 from app.models.knowledge import KnowledgeDocument
 from app.models.pending_submission import PendingSubmission
 from app.models.user import User
-from app.services.chat.attachment_ingress_service import (
+from app.conversation.application.attachment_ingress_service import (
     claim_attachment_drafts,
+)
+from app.conversation.application.attachment_ingress_service import (
     create_attachment_draft,
 )
-from app.services.chat.attachment_source_service import (
+from app.conversation.application.attachment_source_service import (
     AttachmentSourceNotFoundError,
+)
+from app.conversation.application.attachment_source_service import (
     cleanup_conversation_attachment_scope,
+)
+from app.conversation.application.attachment_source_service import (
     cleanup_interview_source_scope,
+)
+from app.conversation.application.attachment_source_service import (
     get_attachment_source_state,
+)
+from app.conversation.application.attachment_source_service import (
     list_claimed_attachment_sources,
+)
+from app.conversation.application.attachment_source_service import (
     list_debrief_project_sources,
+)
+from app.conversation.application.attachment_source_service import (
     list_pending_submission_sources,
+)
+from app.conversation.application.attachment_source_service import (
     load_debrief_source_text,
+)
+from app.conversation.application.attachment_source_service import (
     mark_attachment_retry_dispatch_failed,
+)
+from app.conversation.application.attachment_source_service import (
     prepare_attachment_projection_retry,
+)
+from app.conversation.application.attachment_source_service import (
     promote_attachment_to_debrief,
+)
+from app.conversation.application.attachment_source_service import (
     remove_conversation_attachment_from_scope,
+)
+from app.conversation.application.attachment_source_service import (
     remove_debrief_project_source,
 )
 

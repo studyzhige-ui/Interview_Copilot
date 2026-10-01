@@ -19,15 +19,13 @@ from app.schemas.external_plugin_connection import (
     ExternalPluginProvider,
     ExternalPluginStatusView,
 )
-from app.services.oauth_plugin_connector import (
-    ExternalPluginError,
-    OAuthPluginConnector,
-    bind_external_plugin_account,
-    configured_external_plugin_connectors,
-    get_external_plugin_account,
-    revoke_external_plugin_account,
-    test_external_plugin_account,
-)
+from app.integrations.plugins.connector import ExternalPluginError
+from app.integrations.plugins.connector import OAuthPluginConnector
+from app.integrations.plugins.connector import bind_external_plugin_account
+from app.integrations.plugins.connector import configured_external_plugin_connectors
+from app.integrations.plugins.connector import get_external_plugin_account
+from app.integrations.plugins.connector import revoke_external_plugin_account
+from app.integrations.plugins.connector import test_external_plugin_account
 
 
 router = APIRouter(prefix="/integrations/plugins", tags=["integrations"])
@@ -94,7 +92,7 @@ def _redirect(
 def get_plugin_status(
     provider: ExternalPluginProvider,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     connectors: dict[ExternalPluginProvider, OAuthPluginConnector] = Depends(
         get_external_plugin_connectors
     ),
@@ -147,7 +145,7 @@ async def complete_plugin_authorization(
     state: str | None = Query(default=None),
     code: str | None = Query(default=None),
     error: str | None = Query(default=None),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     connectors: dict[ExternalPluginProvider, OAuthPluginConnector] = Depends(
         get_external_plugin_connectors
     ),
@@ -183,7 +181,7 @@ async def complete_plugin_authorization(
 async def test_plugin(
     provider: ExternalPluginProvider,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     connectors: dict[ExternalPluginProvider, OAuthPluginConnector] = Depends(
         get_external_plugin_connectors
     ),
@@ -205,7 +203,7 @@ async def test_plugin(
 async def revoke_plugin(
     provider: ExternalPluginProvider,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     connectors: dict[ExternalPluginProvider, OAuthPluginConnector] = Depends(
         get_external_plugin_connectors
     ),

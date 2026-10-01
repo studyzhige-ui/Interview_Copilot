@@ -1,94 +1,137 @@
-"""测试 app.core.storage 的 S3 上传与本地降级逻辑。
-
-UP-8/UP-10 之后的契约：降级写盘统一返回 ``local://`` URI（不再返回绝对
-路径）；legacy 的 ``upload_file_to_s3`` 已删除，业务统一走
-``upload_file_to_owned_key``。
-"""
+"""Filesystem-default provider and optional S3 regression contracts."""
 
 from io import BytesIO
-from unittest.mock import patch
+from unittest.mock import MagicMock
+
+import pytest
+from botocore.exceptions import ClientError
+from app.core import storage
 
 
-def test_presigned_urls_use_browser_facing_signing_client():
-    with (
-        patch("app.core.storage.s3_signing_client") as signer,
-        patch("app.core.storage.s3_client") as internal,
-        patch("app.core.storage.settings") as settings,
-    ):
-        settings.S3_BUCKET_NAME = "bucket"
-        signer.generate_presigned_url.return_value = "http://localhost:9000/signed"
-
-        from app.core.storage import generate_presigned_upload_url_for_key
-
-        result = generate_presigned_upload_url_for_key("uploads/1/file.pdf")
-
-    assert result["upload_url"] == "http://localhost:9000/signed"
-    signer.generate_presigned_url.assert_called_once()
-    internal.generate_presigned_url.assert_not_called()
+@pytest.fixture(autouse=True)
+def root(monkeypatch, tmp_path):
+    monkeypatch.setattr(storage.settings, "STORAGE_DIR", str(tmp_path))
+    monkeypatch.setattr(storage.settings, "STORAGE_BACKEND", "filesystem")
+    monkeypatch.setattr(storage.settings, "STORAGE_MIN_FREE_BYTES", 0)
+    monkeypatch.setattr(
+        storage.settings, "AWS_ENDPOINT_URL", "https://s3.example.invalid"
+    )
+    monkeypatch.setattr(storage.settings, "AWS_ACCESS_KEY_ID", "synthetic")
+    monkeypatch.setattr(storage.settings, "AWS_SECRET_ACCESS_KEY", "synthetic")
+    return tmp_path
 
 
-def test_fallback_local_save_returns_local_uri(tmp_path):
-    """_fallback_local_save 应写入本地并返回 local:// URI（供读取方解析）。"""
-    with patch("app.core.storage.settings") as mock_settings:
-        mock_settings.STORAGE_DIR = str(tmp_path)
+def test_local_atomic_immutable_roundtrip(root):
+    uri = storage.upload_file_to_owned_key(BytesIO(b"bytes"), "uploads/1/fa_a/a.txt")
+    assert uri == "local://uploads/1/fa_a/a.txt"
+    assert storage.head_object(uri)["size_bytes"] == 5
+    assert storage.read_object_head(uri) == b"bytes"
+    with pytest.raises(FileExistsError):
+        storage.upload_file_to_owned_key(BytesIO(b"changed"), "uploads/1/fa_a/a.txt")
+    assert storage.read_object_head(uri) == b"bytes"
+    with storage.materialize_object(uri) as path:
+        from pathlib import Path
 
-        from app.core.storage import _fallback_local_save, parse_local_uri
-
-        content = b"test audio data 12345"
-        file_obj = BytesIO(content)
-        relative = "uploads/test_file.wav"
-
-        result_uri = _fallback_local_save(file_obj, relative)
-
-        assert result_uri == "local://uploads/test_file.wav"
-        saved = parse_local_uri(result_uri)
-        assert saved.is_file()
-        assert saved.read_bytes() == content
-
-
-def test_fallback_local_save_creates_nested_dirs(tmp_path):
-    """_fallback_local_save 应自动创建不存在的父目录。"""
-    with patch("app.core.storage.settings") as mock_settings:
-        mock_settings.STORAGE_DIR = str(tmp_path)
-
-        from app.core.storage import _fallback_local_save, parse_local_uri
-
-        file_obj = BytesIO(b"data")
-        result_uri = _fallback_local_save(file_obj, "a/b/c/deep_file.bin")
-
-        assert result_uri == "local://a/b/c/deep_file.bin"
-        assert parse_local_uri(result_uri).is_file()
+        assert Path(path).read_bytes() == b"bytes"
+    assert not Path(path).exists()
+    storage.delete_object(uri)
+    storage.delete_object(uri)
+    assert storage.head_object(uri) is None
+    assert not list(root.rglob(".upload-*"))
 
 
-def test_upload_owned_key_falls_back_on_client_error(tmp_path):
-    """当 S3 upload_fileobj 抛出 ClientError 时，应降级到本地存储并返回
-    实际落点的 local:// URI —— 调用方必须持久化这个返回值（UP-8）。"""
-    from botocore.exceptions import ClientError
+@pytest.mark.parametrize(
+    "key", ["../x", "/x", "a/../x", "a//x", "a/./x", "a\\x", "a\x00x"]
+)
+def test_reject_traversal(key):
+    with pytest.raises(ValueError):
+        storage.upload_file_to_owned_key(BytesIO(b"x"), key)
 
-    with (
-        patch("app.core.storage.s3_client") as mock_s3,
-        patch("app.core.storage.settings") as mock_settings,
-    ):
-        mock_settings.STORAGE_DIR = str(tmp_path)
-        mock_s3.upload_fileobj.side_effect = ClientError(
-            {"Error": {"Code": "NoSuchBucket", "Message": "test"}}, "PutObject"
+
+def test_reject_symlink(root):
+    (root / "real").mkdir()
+    (root / "link").symlink_to(root / "real", target_is_directory=True)
+    with pytest.raises(ValueError):
+        storage.upload_file_to_owned_key(BytesIO(b"x"), "link/a.txt")
+
+
+def test_s3_optional_create_only_and_no_fallback(monkeypatch, root):
+    monkeypatch.setattr(storage.settings, "STORAGE_BACKEND", "s3")
+    client = MagicMock()
+    monkeypatch.setattr(storage, "s3_client", client)
+    uri = storage.upload_file_to_owned_key(BytesIO(b"x"), "uploads/1/fa_a/a.txt")
+    assert uri.startswith("s3://")
+    assert client.put_object.call_args.kwargs["IfNoneMatch"] == "*"
+    client.put_object.side_effect = ClientError(
+        {"Error": {"Code": "ServiceUnavailable"}}, "PutObject"
+    )
+    with pytest.raises(ClientError):
+        storage.upload_file_to_owned_key(BytesIO(b"x"), "uploads/1/fa_b/a.txt")
+    assert not list(root.iterdir())
+
+
+def test_s3_persisted_uri_ignores_default_and_closes_body(monkeypatch):
+    client = MagicMock()
+    monkeypatch.setattr(storage, "s3_client", client)
+    client.head_object.return_value = {"ContentLength": 5, "ContentType": "text/plain"}
+    body = BytesIO(b"bytes")
+    client.get_object.return_value = {"Body": body}
+    uri = f"s3://{storage.settings.S3_BUCKET_NAME}/uploads/1/fa_a/a.txt"
+    assert storage.head_object(uri)["size_bytes"] == 5
+    assert storage.read_object_head(uri) == b"bytes"
+    assert body.closed
+
+
+def test_storage_outage_is_not_missing(monkeypatch):
+    client = MagicMock()
+    monkeypatch.setattr(storage, "s3_client", client)
+    client.head_object.side_effect = ClientError(
+        {"Error": {"Code": "503"}}, "HeadObject"
+    )
+    with pytest.raises(ClientError):
+        storage.head_object(
+            f"s3://{storage.settings.S3_BUCKET_NAME}/uploads/1/fa_a/a.txt"
         )
 
-        from app.core.storage import upload_file_to_owned_key
 
-        result = upload_file_to_owned_key(BytesIO(b"data"), "uploads/1/fa_x/file.wav")
+def test_create_only_s3_signing_client(monkeypatch):
+    signer = MagicMock()
+    monkeypatch.setattr(storage, "s3_signing_client", signer)
+    storage.generate_presigned_upload_url_for_key("uploads/1/fa_a/a.txt")
+    assert (
+        signer.generate_presigned_url.call_args.kwargs["Params"]["IfNoneMatch"] == "*"
+    )
 
-        assert result == "local://uploads/1/fa_x/file.wav"
+
+def test_missing_s3_configuration_never_initializes_client(monkeypatch):
+    monkeypatch.setattr(storage.settings, "AWS_ENDPOINT_URL", "")
+    monkeypatch.setattr(
+        storage.boto3,
+        "client",
+        lambda *a, **k: pytest.fail("must not probe any endpoint"),
+    )
+    client = storage._LazyS3Client()
+    with pytest.raises(storage.StorageConfigurationError, match="AWS_ENDPOINT_URL"):
+        client.head_object(Bucket="unused", Key="unused")
 
 
-def test_upload_owned_key_success_returns_s3_uri():
-    """S3 上传成功时应返回 s3:// URI。"""
-    with patch("app.core.storage.s3_client") as mock_s3:
-        mock_s3.upload_fileobj.return_value = None  # 成功不抛异常
+def test_special_files_rejected_without_blocking(root):
+    import os
 
-        from app.core.storage import upload_file_to_owned_key
+    os.mkfifo(root / "fifo")
+    with pytest.raises(ValueError, match="regular"):
+        storage.head_object("local://fifo")
 
-        result = upload_file_to_owned_key(BytesIO(b"data"), "uploads/1/fa_x/rec.wav")
 
-        assert result.startswith("s3://")
-        assert result.endswith("uploads/1/fa_x/rec.wav")
+def test_empty_s3_head_handles_invalid_range(monkeypatch):
+    client = MagicMock()
+    monkeypatch.setattr(storage, "s3_client", client)
+    client.get_object.side_effect = ClientError(
+        {"Error": {"Code": "InvalidRange"}}, "GetObject"
+    )
+    client.head_object.return_value = {"ContentLength": 0}
+    uri = f"s3://{storage.settings.S3_BUCKET_NAME}/uploads/1/fa_a/empty.txt"
+    assert storage.read_object_head(uri) == b""
+    client.head_object.return_value = {"ContentLength": 3}
+    with pytest.raises(ClientError):
+        storage.read_object_head(uri)

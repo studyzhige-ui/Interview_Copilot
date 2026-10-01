@@ -12,7 +12,8 @@ from app.schemas.capabilities import (
     SkillResourcesReplaceRequest,
     SkillUpdateRequest,
 )
-from app.services.capabilities import mcp_server_service, skill_service
+from app.capabilities.application import mcp_server_service
+from app.capabilities.application import skill_service
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
 
@@ -34,7 +35,7 @@ def get_edition_policy():
 @router.get("/skills")
 def list_skills(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return {"skills": skill_service.list_skills(db, current_user.id)}
 
@@ -43,7 +44,7 @@ def list_skills(
 def create_skill(
     payload: SkillCreateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         return skill_service.create_skill(
@@ -58,7 +59,7 @@ def update_skill(
     skill_id: int,
     payload: SkillUpdateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = skill_service.update_skill(
@@ -79,7 +80,7 @@ def update_skill(
 def delete_skill(
     skill_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     if not skill_service.delete_skill(db, current_user.id, skill_id):
         raise HTTPException(status_code=404, detail="Skill not found")
@@ -90,7 +91,7 @@ def delete_skill(
 def list_skill_resources(
     skill_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     resources = skill_service.list_resources(
         db,
@@ -107,7 +108,7 @@ def replace_skill_resources(
     skill_id: int,
     payload: SkillResourcesReplaceRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = skill_service.replace_resources(
@@ -126,7 +127,7 @@ def replace_skill_resources(
 @router.get("/mcp-servers")
 def list_mcp_servers(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     servers = mcp_server_service.list_servers(db, current_user.id)
     for server in servers:
@@ -140,7 +141,7 @@ def list_mcp_servers(
 def create_mcp_server(
     payload: MCPServerConfigRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         return mcp_server_service.create_server(
@@ -157,7 +158,7 @@ async def update_mcp_server(
     server_id: int,
     payload: MCPServerConfigRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = mcp_server_service.update_server(
@@ -179,7 +180,7 @@ async def set_mcp_server_enabled(
     server_id: int,
     payload: CapabilityEnabledRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     result = mcp_server_service.set_enabled(
         db, current_user.id, server_id, payload.enabled
@@ -194,7 +195,7 @@ async def set_mcp_server_enabled(
 async def test_mcp_server(
     server_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     row = mcp_server_service.get_server(db, current_user.id, server_id)
     if row is None:
@@ -233,7 +234,7 @@ async def test_mcp_server(
 async def delete_mcp_server(
     server_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     if not mcp_server_service.delete_server(db, current_user.id, server_id):
         raise HTTPException(status_code=404, detail="MCP server not found")

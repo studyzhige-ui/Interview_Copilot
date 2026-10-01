@@ -32,6 +32,7 @@ Wire format (Stage-G — unified across chat + agent paths):
 from __future__ import annotations
 
 import logging
+import json
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -76,14 +77,14 @@ def get_turn_tool_call_audit(
     turn_id: str,
     call_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Read the deep audit layer for the same durable live/replay call id."""
 
-    from app.services.chat.tool_call_audit_service import (
+    from app.conversation.application.tool_call_audit_service import (
         ToolCallAuditNotFoundError,
-        get_tool_call_audit,
     )
+    from app.conversation.application.tool_call_audit_service import get_tool_call_audit
 
     user_pk = resolve_user_pk(db, current_user.username)
     try:
@@ -120,10 +121,12 @@ def create_chat_attachment_draft(
     session_id: str,
     body: AttachmentDraftCreateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
-    from app.services.chat.attachment_ingress_service import (
+    from app.conversation.application.attachment_ingress_service import (
         AttachmentIngressError,
+    )
+    from app.conversation.application.attachment_ingress_service import (
         create_attachment_draft,
     )
 
@@ -146,13 +149,18 @@ def create_chat_attachment_draft(
     projection = db.get(KnowledgeDocument, row.source_document_id)
     if projection is None:
         raise HTTPException(status_code=500, detail="Attachment projection missing")
+    from app.rag.application.document_commands import record_ingestion_dispatch
+
     try:
         task = dispatch_document_ingestion(projection.id)
-        projection.task_id = task.id
+        projection = record_ingestion_dispatch(
+            db, document_id=projection.id, task_id=task.id
+        )
     except Exception:  # noqa: BLE001
         logger.exception("attachment ingestion dispatch failed: %s", projection.id)
-        projection.status = "failed"
-        projection.error_message = "后台处理队列暂时不可用，请稍后重试。"
+        projection = record_ingestion_dispatch(
+            db, document_id=projection.id, error="后台处理队列暂时不可用，请稍后重试。"
+        )
     db.commit()
     db.refresh(projection)
     return _attachment_draft_view(row, projection)
@@ -166,10 +174,12 @@ def get_chat_attachment_draft(
     session_id: str,
     draft_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
-    from app.services.chat.attachment_ingress_service import (
+    from app.conversation.application.attachment_ingress_service import (
         AttachmentIngressError,
+    )
+    from app.conversation.application.attachment_ingress_service import (
         get_attachment_draft,
     )
 
@@ -198,10 +208,12 @@ def remove_chat_attachment_draft(
     session_id: str,
     draft_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
-    from app.services.chat.attachment_ingress_service import (
+    from app.conversation.application.attachment_ingress_service import (
         AttachmentIngressError,
+    )
+    from app.conversation.application.attachment_ingress_service import (
         remove_attachment_draft,
     )
 
@@ -233,9 +245,9 @@ def get_turn_interaction(
     session_id: str,
     turn_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
-    from app.services.chat.interaction_service import get_pending_interaction
+    from app.conversation.application.interaction_service import get_pending_interaction
 
     user_pk = resolve_user_pk(db, current_user.username)
     turn = db.get(ConversationTurn, turn_id)
@@ -246,7 +258,7 @@ def get_turn_interaction(
         return None
     view = AgentInteractionView.model_validate(row)
     if row.kind == "client_readiness":
-        from app.services.chat.client_action_service import (
+        from app.conversation.application.client_action_service import (
             sanitized_interaction_request,
         )
 
@@ -264,21 +276,23 @@ def resolve_turn_interaction(
     interaction_id: str,
     body: ResolveInteractionRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
-    from app.services.chat.interaction_service import (
+    from app.conversation.application.interaction_service import (
         InteractionConflictError,
+    )
+    from app.conversation.application.interaction_service import (
         InteractionNotFoundError,
+    )
+    from app.conversation.application.interaction_service import (
         InteractionOwnershipError,
-        resolve_interaction,
     )
-    from app.services.chat.turn_event_buffer import turn_event_buffer
-    from app.services.chat.turn_executor import (
-        cancel_pending_turn,
-        fail_pending_turn,
-        resume_waiting_turn,
-        schedule_turn,
-    )
+    from app.conversation.application.interaction_service import resolve_interaction
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_executor import cancel_pending_turn
+    from app.conversation.application.turn_executor import fail_pending_turn
+    from app.conversation.application.turn_executor import resume_waiting_turn
+    from app.conversation.application.turn_executor import schedule_turn
 
     user_pk = resolve_user_pk(db, current_user.username)
     turn = db.get(ConversationTurn, turn_id)
@@ -389,8 +403,12 @@ def resolve_turn_interaction(
         schedule_turn(turn_id)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Could not resume conversation turn %s", turn_id)
-        fail_pending_turn(db, turn_id, user_pk, "后台任务队列暂时不可用")
-        raise HTTPException(status_code=503, detail="无法恢复本轮执行") from exc
+        if interaction.kind != "fact_confirmation":
+            fail_pending_turn(db, turn_id, user_pk, "后台任务队列暂时不可用")
+        raise HTTPException(
+            status_code=503,
+            detail="决定已保存；队列暂不可用，系统将恢复同一请求，请勿重复确认",
+        ) from exc
     return ResolveInteractionResponse(
         interaction=AgentInteractionView.model_validate(interaction),
         turn_status="pending",
@@ -399,14 +417,36 @@ def resolve_turn_interaction(
 
 
 def _turn_terminal_state(turn_id: str) -> tuple[str | None, str | None]:
+    status, error, _ = _turn_stream_state(turn_id)
+    return status, error
+
+
+def _turn_stream_state(turn_id: str) -> tuple[str | None, str | None, int | None]:
     from app.db.database import SessionLocal
 
     session = SessionLocal()
     try:
         row = session.get(ConversationTurn, turn_id)
-        return (row.status, row.error) if row else (None, None)
+        return (
+            (row.status, row.error, int(row.dispatch_generation or 1))
+            if row
+            else (None, None, None)
+        )
     finally:
         session.close()
+
+
+def _event_matches_generation(event_json: str, generation: int | None) -> bool:
+    # Legacy untagged frames are valid only for the first pass. A stale worker's
+    # terminal event must never close a newer generation's stream after recovery.
+    try:
+        envelope = json.loads(event_json)
+        return (
+            isinstance(envelope, dict)
+            and envelope.get("dispatch_generation", 1) == generation
+        )
+    except (TypeError, ValueError):
+        return False
 
 
 def _recovery_events(status: str, error: str | None) -> list[str]:
@@ -441,7 +481,7 @@ def _interaction_event(turn_id: str) -> str | None:
             return None
         request = row.request_json
         if row.kind == "client_readiness":
-            from app.services.chat.client_action_service import (
+            from app.conversation.application.client_action_service import (
                 sanitized_interaction_request,
             )
 
@@ -477,7 +517,7 @@ def create_chat_turn(
     session_id: str,
     body: ChatTurnRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_pk = resolve_user_pk(db, current_user.username)
     row = db.get(Conversation, session_id)
@@ -485,13 +525,11 @@ def create_chat_turn(
         raise HTTPException(
             status_code=404, detail="Session not found or access denied"
         )
-    from app.services.chat.turn_event_buffer import turn_event_buffer
-    from app.services.chat.turn_executor import (
-        SubmissionConflictError,
-        admit_submission,
-        fail_pending_turn,
-        schedule_turn,
-    )
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_executor import SubmissionConflictError
+    from app.conversation.application.turn_executor import admit_submission
+    from app.conversation.application.turn_executor import fail_pending_turn
+    from app.conversation.application.turn_executor import schedule_turn
 
     try:
         result = admit_submission(
@@ -576,7 +614,7 @@ def create_chat_turn(
 def list_pending_submissions(
     session_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_pk = resolve_user_pk(db, current_user.username)
     conversation = db.get(Conversation, session_id)
@@ -658,12 +696,10 @@ def edit_pending_submission(
     submission_id: str,
     body: PendingSubmissionUpdateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
-    from app.services.chat.turn_executor import (
-        SubmissionConflictError,
-        update_pending_submission,
-    )
+    from app.conversation.application.turn_executor import SubmissionConflictError
+    from app.conversation.application.turn_executor import update_pending_submission
 
     user_pk = resolve_user_pk(db, current_user.username)
     _owned_conversation_or_404(db, session_id, user_pk)
@@ -698,13 +734,11 @@ def withdraw_pending_submission_endpoint(
     submission_id: str,
     expected_version: int = Query(ge=1),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
-    from app.services.chat.turn_executor import (
-        SubmissionConflictError,
-        schedule_turn,
-        withdraw_pending_submission,
-    )
+    from app.conversation.application.turn_executor import SubmissionConflictError
+    from app.conversation.application.turn_executor import schedule_turn
+    from app.conversation.application.turn_executor import withdraw_pending_submission
 
     user_pk = resolve_user_pk(db, current_user.username)
     _owned_conversation_or_404(db, session_id, user_pk)
@@ -724,7 +758,7 @@ def withdraw_pending_submission_endpoint(
             schedule_turn(next_turn_id)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Could not dispatch Turn %s after withdraw", next_turn_id)
-            from app.services.chat.turn_executor import fail_pending_turn
+            from app.conversation.application.turn_executor import fail_pending_turn
 
             fail_pending_turn(db, next_turn_id, user_pk, "后台任务队列暂时不可用")
             raise HTTPException(
@@ -734,8 +768,11 @@ def withdraw_pending_submission_endpoint(
 
 
 def _dispatch_admission_result(db: Session, user_pk: int, result):
-    from app.services.chat.turn_event_buffer import turn_event_buffer
-    from app.services.chat.turn_executor import fail_pending_turn, schedule_turn
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_executor import (
+        fail_pending_turn,
+        schedule_turn,
+    )
 
     if not result.should_dispatch:
         return
@@ -761,12 +798,10 @@ def retry_pending_submission_endpoint(
     submission_id: str,
     body: PendingSubmissionCommandRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
-    from app.services.chat.turn_executor import (
-        SubmissionConflictError,
-        retry_pending_submission,
-    )
+    from app.conversation.application.turn_executor import SubmissionConflictError
+    from app.conversation.application.turn_executor import retry_pending_submission
 
     user_pk = resolve_user_pk(db, current_user.username)
     _owned_conversation_or_404(db, session_id, user_pk)
@@ -807,13 +842,11 @@ def interrupt_turn_for_submission(
     turn_id: str,
     body: _InterruptRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
-    from app.services.chat.turn_executor import (
-        SubmissionConflictError,
-        cancel_pending_turn,
-        request_turn_interrupt,
-    )
+    from app.conversation.application.turn_executor import SubmissionConflictError
+    from app.conversation.application.turn_executor import cancel_pending_turn
+    from app.conversation.application.turn_executor import request_turn_interrupt
 
     user_pk = resolve_user_pk(db, current_user.username)
     _owned_conversation_or_404(db, session_id, user_pk)
@@ -856,7 +889,7 @@ def stream_chat_turn_events(
     turn = db.get(ConversationTurn, turn_id)
     if turn is None or turn.conversation_id != session_id or turn.user_id != user_pk:
         raise HTTPException(status_code=404, detail="Turn not found or access denied")
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     async def event_generator():
         import asyncio
@@ -864,14 +897,20 @@ def stream_chat_turn_events(
 
         cursor = after or last_event_id or "0-0"
         while True:
+            delivery_unavailable = False
             try:
                 events = await turn_event_buffer.read(turn_id, cursor)
-            except (RedisError, ConnectionError, TimeoutError):
-                # Durable state remains authoritative when event delivery fails.
+            except (RedisError, TimeoutError, ConnectionError):
                 events = []
-                await asyncio.sleep(1)
+                delivery_unavailable = True
+            # Re-read AFTER the blocking Redis read: the lease can change while
+            # waiting. PG is the authority; Redis contains only delivery hints.
+            status, error, generation = await asyncio.to_thread(
+                _turn_stream_state, turn_id
+            )
+            if status is None:
+                return
             if not events:
-                status, error = await asyncio.to_thread(_turn_terminal_state, turn_id)
                 if status == "waiting":
                     interaction_event = await asyncio.to_thread(
                         _interaction_event, turn_id
@@ -892,10 +931,21 @@ def stream_chat_turn_events(
                     for event_json in _recovery_events(status, error):
                         yield f"data: {event_json}\n\n"
                     return
+                if delivery_unavailable:
+                    yield (
+                        "data: "
+                        + HarnessEvent.status(
+                            "事件连接暂不可用；已保存的任务未被取消，请重新连接读取状态。"
+                        ).to_json()
+                        + "\n\n"
+                    )
+                    return
                 yield ": keepalive\n\n"
                 continue
             for event_id, event_json in events:
                 cursor = event_id
+                if not _event_matches_generation(event_json, generation):
+                    continue
                 yield f"id: {event_id}\ndata: {event_json}\n\n"
                 if turn_event_buffer.is_done(event_json):
                     return
@@ -912,7 +962,7 @@ def cancel_chat_turn(
     session_id: str,
     turn_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_pk = resolve_user_pk(db, current_user.username)
     turn = db.get(ConversationTurn, turn_id)
@@ -920,7 +970,7 @@ def cancel_chat_turn(
         raise HTTPException(status_code=404, detail="Turn not found or access denied")
     if turn.status not in {"pending", "running", "waiting"}:
         return {"turn_id": turn_id, "status": turn.status, "cancelled": False}
-    from app.services.chat.turn_executor import cancel_pending_turn
+    from app.conversation.application.turn_executor import cancel_pending_turn
 
     cancelled_before_start = cancel_pending_turn(db, turn_id, user_pk)
     return {

@@ -6,7 +6,8 @@ import uuid
 import pytest
 
 from app.agent_runtime.tool_policy import ToolEffect
-from app.agent_runtime.tool_registry import AgentToolContext, registry
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.builtin_tools import registry
 from app.models.agent_task import AgentTask
 from app.models.agent_execution import AgentToolCall
 from app.models.chat import Conversation
@@ -157,7 +158,7 @@ def test_completion_gate_checks_only_current_plan_and_unresolved_tool_calls(
 ):
     from app.conversation import engine as conversation_engine
     from app.schemas.agent_task import CreateAgentTaskRequest
-    from app.services.chat.agent_task_service import create_agent_task
+    from app.conversation.application.agent_task_service import create_agent_task
 
     user, conversation, turn = _seed(db_session)
     create_agent_task(

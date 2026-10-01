@@ -1,3 +1,4 @@
+import { isSupabaseAuth, isLocalUnlockSession } from '@/lib/supabaseAuth';
 import { useEffect, useRef, useState } from 'react';
 import { LogOut, ChevronDown, UserRound } from 'lucide-react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
@@ -5,7 +6,7 @@ import { workspaceFor } from './navigation';
 import { useAuthStore } from '@/store/authStore';
 import { Avatar } from '@/components/ui/Avatar';
 
-export function TopBar({ pageTitle }: { pageTitle?: string }) {
+export function TopBar({ pageTitle, onOpenCopilot }: { pageTitle?: string; onOpenCopilot?: () => void }) {
   const subjectId = useAuthStore((s) => s.subjectId);
   const me = useAuthStore((s) => s.me);
   const fetchMe = useAuthStore((s) => s.fetchMe);
@@ -37,7 +38,10 @@ export function TopBar({ pageTitle }: { pageTitle?: string }) {
       {!!area?.tabs.length && <nav className="workspace-tabs" aria-label={`${area.label}导航`}>
         {area.tabs.map((tab) => <NavLink key={tab.to} to={tab.to}>{tab.label}</NavLink>)}
       </nav>}
-      {pathname !== '/general-chat' && <Link to="/general-chat" className="workspace-copilot-shortcut">打开 Copilot</Link>}
+      {pathname !== '/general-chat' && (onOpenCopilot
+        ? <button type="button" onClick={onOpenCopilot} className="workspace-copilot-shortcut">打开 Copilot</button>
+        : <Link to="/general-chat" className="workspace-copilot-shortcut">打开 Copilot</Link>)}
+      {isSupabaseAuth() && <Link to="/auth" className="text-xs text-stone-500">{isLocalUnlockSession() ? '本地已解锁 · 账号登录' : '账号与本地解锁'}</Link>}
       <div className="ml-auto relative" ref={ref}>
         <button
           aria-expanded={open}
@@ -70,10 +74,10 @@ export function TopBar({ pageTitle }: { pageTitle?: string }) {
             </button>
             <button
               onClick={async () => {
-                // Await so the backend revocation lands before the page nav
-                // cancels the in-flight POST. logout() always resolves.
+                // Clear local access immediately; SPA navigation lets bounded
+                // best-effort credential revocation continue in the background.
                 await logout();
-                window.location.href = '/auth';
+                navigate('/auth', { replace: true });
               }}
               className="w-full flex items-center gap-2 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50"
             >

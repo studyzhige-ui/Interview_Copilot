@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 
 from app.agent_runtime.tool_policy import ToolEffect
-from app.agent_runtime.tool_registry import AgentToolContext, registry
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.builtin_tools import registry
 from app.agent_runtime.tools.gmail_observation import _task_authorizes_review
 from app.agent_runtime.turn_tool_catalog import (
     cloud_sustainable_automation_tool_names,

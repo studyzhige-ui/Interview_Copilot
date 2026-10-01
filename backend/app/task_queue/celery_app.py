@@ -3,7 +3,12 @@ from threading import Lock
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import task_prerun, worker_process_init, worker_shutdown
+from celery.signals import (
+    task_prerun,
+    worker_process_init,
+    worker_process_shutdown,
+    worker_shutdown,
+)
 
 from app.core.config import settings
 
@@ -248,9 +253,7 @@ def _ensure_worker_runtime(
 
     with _runtime_lock:
         if voice and not _voice_runtime_ready:
-            from app.services.voice.whisperx_engine import (
-                init_whisper_model,
-            )
+            from app.media.application.whisperx_engine import init_whisper_model
 
             init_whisper_model()
             _voice_runtime_ready = True
@@ -307,3 +310,12 @@ def close_worker_resources(**_kwargs):
     shutdown_worker_runtime()
     sync_redis_client.close()
     engine.dispose()
+
+
+@worker_process_shutdown.connect
+@worker_shutdown.connect
+def close_retrieval_workers(**_kwargs):
+    """Stop admissions and cancel only queued RAG work on orderly shutdown."""
+    from app.rag.retrieval.workers import close_pools
+
+    close_pools()

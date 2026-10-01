@@ -43,7 +43,9 @@ def _load_tokenizer() -> Any:
         path = resolve_local_snapshot(cfg.model)
         if not path:
             return None
-        return AutoTokenizer.from_pretrained(path)
+        return AutoTokenizer.from_pretrained(
+            path, local_files_only=True, trust_remote_code=False
+        )
     except Exception as exc:  # noqa: BLE001 — any load failure → estimate
         logger.warning("Embedding tokenizer load failed (%s); using estimate.", exc)
         return None

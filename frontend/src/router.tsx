@@ -1,3 +1,4 @@
+import { isSupabaseAuth } from '@/lib/supabaseAuth';
 import { Suspense, lazy } from 'react';
 import { Navigate, Outlet, createBrowserRouter } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
@@ -68,6 +69,9 @@ const CopilotPreferencesPage = lazy(() =>
   import('@/pages/settings/CopilotPreferencesPage').then((m) => ({ default: m.CopilotPreferencesPage })),
 );
 
+const InterviewHubPage = lazy(() => import('@/pages/interviews/InterviewHubPage').then((m) => ({ default: m.InterviewHubPage })));
+const ActivityCenterPage = lazy(() => import('@/pages/activities/ActivityCenterPage').then((m) => ({ default: m.ActivityCenterPage })));
+
 const TodayPage = lazy(() => import('@/pages/today/TodayPage').then((m) => ({ default: m.TodayPage })));
 
 /** Lightweight fallback while a chunk loads. Kept centred + brand-coloured. */
@@ -96,7 +100,7 @@ function AuthGuard() {
 
 function GuestGuard() {
   const isAuthed = useAuthStore((s) => s.isAuthed);
-  if (isAuthed) return <Navigate to="/today" replace />;
+  if (isAuthed && !isSupabaseAuth()) return <Navigate to="/today" replace />;
   return <LazyOutlet />;
 }
 
@@ -110,6 +114,8 @@ export const router = createBrowserRouter([
     children: [
       { path: '/', element: <Navigate to="/today" replace /> },
       { path: '/today', element: <TodayPage /> },
+      { path: '/interviews', element: <InterviewHubPage /> },
+      { path: '/activity', element: <ActivityCenterPage /> },
       { path: '/review', element: <ReviewPage /> },
       { path: '/mock', element: <MockPage /> },
       { path: '/general-chat', element: <GeneralChatPage /> },

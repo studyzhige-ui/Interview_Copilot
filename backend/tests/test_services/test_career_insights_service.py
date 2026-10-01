@@ -16,19 +16,15 @@ from app.schemas.career_insights import (
 )
 from app.schemas.job_opportunity import NextActionCreate, NextActionEdit
 from app.schemas.offer import OfferSourceInput, OfferTermsInput
-from app.services.career_process_service import (
-    NextActionTransitionError,
-    create_next_action,
-    edit_next_action,
-)
-from app.services.funnel_analysis_service import analyze_funnel
-from app.services.offer_analysis_service import compare_offers
-from app.services.offer_service import record_current_offer
-from app.services.reminder_service import (
-    build_next_action_agenda,
-    deliver_due_reminders,
-    update_notification_preference,
-)
+from app.career.application.process import NextActionTransitionError
+from app.career.application.process import create_next_action
+from app.career.application.process import edit_next_action
+from app.career.application.funnel import analyze_funnel
+from app.career.application.offer_analysis import compare_offers
+from app.career.application.offers import record_current_offer
+from app.career.application.reminders import build_next_action_agenda
+from app.career.application.reminders import deliver_due_reminders
+from app.career.application.reminders import update_notification_preference
 
 
 def _user(db_session, username: str = "insights") -> User:

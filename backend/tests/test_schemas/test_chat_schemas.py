@@ -45,7 +45,11 @@ def test_mock_start_request_requires_resume_and_meaningful_jd():
 def test_mock_answer_request_requires_concurrency_token():
     with pytest.raises(ValidationError):
         MockAnswerRequest(answer_text="回答")
-    request = MockAnswerRequest(answer_text="回答", question_message_id=42)
+    request = MockAnswerRequest(
+        request_id="00000000-0000-4000-8000-000000000001",
+        answer_text="回答",
+        question_message_id=42,
+    )
     assert request.question_message_id == 42
 
 

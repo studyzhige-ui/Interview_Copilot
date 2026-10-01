@@ -5,13 +5,13 @@ import pytest
 
 from app.rag.domain.models import RetrievalResult
 from app.rag.grounding.builder import grounding_builder
-from app.services.chat.context_assembly_pipeline import (
-    SLOT_ORDER,
-    AssembledContext,
+from app.conversation.application.context_assembly_pipeline import SLOT_ORDER
+from app.conversation.application.context_assembly_pipeline import AssembledContext
+from app.conversation.application.context_assembly_pipeline import (
     CurrentInputTooLargeError,
-    PromptRenderer,
-    TokenBudget,
 )
+from app.conversation.application.context_assembly_pipeline import PromptRenderer
+from app.conversation.application.context_assembly_pipeline import TokenBudget
 
 
 def _build_grounding(chunks, *, token_budget=TokenBudget.RETRIEVED_CONTEXT_BUDGET):
@@ -154,8 +154,10 @@ def test_debrief_reference_auto_inject_fires_only_in_debrief_mode(monkeypatch):
     sessions (general / mock_interview) must NEVER trigger the SQL
     fetch — otherwise we leak reference material into chats that
     aren't supposed to see it."""
-    from app.services.chat import context_assembly_pipeline as pipeline_mod
-    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+    from app.conversation.application import context_assembly_pipeline as pipeline_mod
+    from app.conversation.application.context_assembly_pipeline import (
+        ContextAssemblyPipeline,
+    )
 
     fetch_calls: list[tuple[str, str]] = []
 
@@ -164,7 +166,7 @@ def test_debrief_reference_auto_inject_fires_only_in_debrief_mode(monkeypatch):
         return f"[Manifest for {interview_id}]"
 
     # Patch the lazy import target.
-    import app.services.chat.interview_reference as ir_mod
+    import app.conversation.application.interview_reference as ir_mod
 
     monkeypatch.setattr(ir_mod, "build_interview_reference", fake_build)
 
@@ -222,8 +224,10 @@ def test_debrief_reference_auto_inject_fires_only_in_debrief_mode(monkeypatch):
 def test_assemble_loads_all_turns_after_cursor(monkeypatch):
     """The pipeline loads ALL turns after the compaction cursor, not a
     fixed 20-turn window. This is the incremental-append model."""
-    from app.services.chat import context_assembly_pipeline as pipeline_mod
-    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+    from app.conversation.application import context_assembly_pipeline as pipeline_mod
+    from app.conversation.application.context_assembly_pipeline import (
+        ContextAssemblyPipeline,
+    )
 
     turns = [
         {"seq": i, "role": "User" if i % 2 else "Agent", "content": f"msg {i}"}
@@ -256,8 +260,10 @@ def test_assemble_loads_all_turns_after_cursor(monkeypatch):
 
 
 def test_current_admitted_input_is_never_silently_truncated(monkeypatch):
-    from app.services.chat import context_assembly_pipeline as pipeline_mod
-    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+    from app.conversation.application import context_assembly_pipeline as pipeline_mod
+    from app.conversation.application.context_assembly_pipeline import (
+        ContextAssemblyPipeline,
+    )
 
     class FakeTranscript:
         def get_session_meta(self, _session_id):
@@ -286,8 +292,10 @@ def test_current_admitted_input_is_never_silently_truncated(monkeypatch):
 
 
 def test_oversized_current_input_fails_explicitly(monkeypatch):
-    from app.services.chat import context_assembly_pipeline as pipeline_mod
-    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+    from app.conversation.application import context_assembly_pipeline as pipeline_mod
+    from app.conversation.application.context_assembly_pipeline import (
+        ContextAssemblyPipeline,
+    )
 
     class FakeTranscript:
         def get_session_meta(self, _session_id):
@@ -316,8 +324,10 @@ def test_oversized_current_input_fails_explicitly(monkeypatch):
 
 def test_no_compaction_when_under_threshold(monkeypatch):
     """Short conversations should pass through without compaction."""
-    from app.services.chat import context_assembly_pipeline as pipeline_mod
-    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+    from app.conversation.application import context_assembly_pipeline as pipeline_mod
+    from app.conversation.application.context_assembly_pipeline import (
+        ContextAssemblyPipeline,
+    )
 
     updates: list[dict] = []
     turns = [
@@ -444,8 +454,10 @@ def test_grounding_stops_at_budget():
 
 
 def test_assemble_answer_context_populates_sources(monkeypatch):
-    from app.services.chat import context_assembly_pipeline as pipeline_mod
-    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+    from app.conversation.application import context_assembly_pipeline as pipeline_mod
+    from app.conversation.application.context_assembly_pipeline import (
+        ContextAssemblyPipeline,
+    )
 
     class FakeTranscript:
         def get_session_meta(self, session_id):
@@ -476,8 +488,10 @@ def test_assemble_answer_context_populates_sources(monkeypatch):
 
 
 def test_source_read_status_is_dynamic_data_and_rendered_once(monkeypatch):
-    from app.services.chat import context_assembly_pipeline as pipeline_mod
-    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+    from app.conversation.application import context_assembly_pipeline as pipeline_mod
+    from app.conversation.application.context_assembly_pipeline import (
+        ContextAssemblyPipeline,
+    )
 
     class FakeTranscript:
         def get_session_meta(self, _session_id):

@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from alembic import command
 from app.models.memory_pipeline import MemoryExtraction
-from app.services import memory_pipeline as pipeline
+from app.memory import consolidation as pipeline
 from tests.test_db.test_alembic_migrations import fresh_pg_db, _make_alembic_config  # noqa: F401
 from tests.test_services.test_memory_pipeline import source
 
@@ -18,7 +18,7 @@ from tests.test_services.test_memory_pipeline import source
 def test_retention_read_filter_on_postgres(fresh_pg_db, monkeypatch):  # noqa: F811
     from app.db.types import utc_now
     from app.models.long_term_memory import LongTermAgentMemory
-    from app.services import memory_recall
+    from app.memory import recall as memory_recall
     from tests.test_services.test_memory_pipeline import model
 
     command.upgrade(_make_alembic_config(fresh_pg_db), "head")

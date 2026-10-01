@@ -42,11 +42,12 @@ RUN python -m venv /opt/venv && \
 # Stage 2: Lean runtime image
 FROM python:3.13.14-slim AS runtime
 
-# libpq is needed at runtime for psycopg2; curl is the healthcheck client;
+# libpq is needed at runtime for psycopg2; FFmpeg decodes bounded source clips;
+# curl is the healthcheck client;
 # gosu (~1MB) lets entrypoint drop privileges *after* fixing /app/data
 # ownership — useful when a bind-mounted volume comes in owned by host UID.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libpq5 curl gosu && \
+    apt-get install -y --no-install-recommends libpq5 ffmpeg curl gosu && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Non-root runtime user ────────────────────────────────────────────────
@@ -93,8 +94,10 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/api/v1/health/ready || exit 1
+# This image is shared by HTTP, Celery, Beat and migrations. Keep role-specific
+# readiness in Compose: only the API serves the HTTP health endpoint. A disabled
+# inherited image healthcheck creates a NONE descriptor that some Compose
+# versions cannot treat as running during `up --wait`.
 
 # Entry point bootstraps data dir + drops privileges. CMD is whatever
 # server (uvicorn / gunicorn / celery) the compose service wants.

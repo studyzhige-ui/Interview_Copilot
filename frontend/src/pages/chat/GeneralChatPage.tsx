@@ -17,8 +17,8 @@
  * browser back/forward stack can navigate.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, X as XIcon, MessageSquare } from 'lucide-react';
 import { Spinner } from '@/components/ui/Spinner';
@@ -32,7 +32,7 @@ import {
   listChatSessions,
   renameChatSession,
 } from '@/api/chat';
-import type { ConversationDeletionImpact } from '@/types/api';
+import type { ProductObjectReference, ConversationDeletionImpact } from '@/types/api';
 import { useToastOnError } from '@/hooks/useToastOnError';
 import { ChatPanel } from '@/pages/review/chat/ChatPanel';
 import { CopilotStatusSummary } from './CopilotStatusSummary';
@@ -49,13 +49,23 @@ import {
 // cache namespace for every chat-session list in the app.
 const SESSIONS_KEY = ['chat', 'sessions', { type: 'general' }] as const;
 
-export function GeneralChatPage() {
+interface Props {
+  embedded?: boolean;
+  objectReference?: ProductObjectReference | null;
+  onObjectReferenceConsumed?: () => void;
+}
+
+export function GeneralChatPage({ embedded = false, objectReference = null, onObjectReferenceConsumed }: Props = {}) {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeId = searchParams.get('session');
-  const starterId = readStarter(searchParams.get('start'));
+  const location = useLocation();
+  const latestLocation = useRef(location);
+  useLayoutEffect(() => { latestLocation.current = location; }, [location]);
+  const [embeddedSessionId, setEmbeddedSessionId] = useState<string | null>(null);
+  const activeId = embedded ? embeddedSessionId : searchParams.get('session');
+  const starterId = embedded ? null : readStarter(searchParams.get('start'));
   const starter = starterId ? collaborationStarters[starterId] : null;
-  const setActiveId = (id: string) => setSearchParams((previous) => {
+  const setActiveId = (id: string) => embedded ? setEmbeddedSessionId(id) : setSearchParams((previous) => {
     const next = new URLSearchParams(previous);
     next.set('session', id);
     next.delete('start');
@@ -68,12 +78,13 @@ export function GeneralChatPage() {
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const productObjectReference = useMemo(
-    () => readCopilotObjectHandoff(searchParams),
-    [searchParams],
+    () => embedded ? objectReference : readCopilotObjectHandoff(searchParams),
+    [embedded, objectReference, searchParams],
   );
   const clearProductObjectReference = useCallback(() => {
-    setSearchParams(clearCopilotObjectHandoff(searchParams), { replace: true });
-  }, [searchParams, setSearchParams]);
+    if (embedded) onObjectReferenceConsumed?.();
+    else setSearchParams(clearCopilotObjectHandoff(searchParams), { replace: true });
+  }, [embedded, onObjectReferenceConsumed, searchParams, setSearchParams]);
 
   const { data: sessions = [], isPending: loading, error, refetch } = useQuery({
     queryKey: SESSIONS_KEY,
@@ -191,16 +202,26 @@ export function GeneralChatPage() {
       // Clean up the per-session localStorage drafts/mode so we don't
       // leak keys (same helper ChatPanel uses on its own delete path).
       clearPersistedSessionState(id);
-      // Selection fallback is handled by the keep-selection-valid effect
-      // above once the cached list no longer contains the active id.
       setSessions((s) => s.filter((x) => x.session_id !== id));
+      if (embedded) {
+        setEmbeddedSessionId((current) => current === id ? null : current);
+      } else {
+        // The user may have switched sessions while deletion was in flight.
+        // Only clear the exact deleted selection, preserving other URL context.
+        const current = latestLocation.current;
+        const next = new URLSearchParams(current.search);
+        if (current.pathname === '/general-chat' && next.get('session') === id) {
+          next.delete('session');
+          setSearchParams(next, { replace: true });
+        }
+      }
       setPendingDelete(null);
     } catch (e) {
       toast.error(extractErr(e, '删除对话失败'));
     } finally {
       setDeletingChat(false);
     }
-  }, [pendingDelete, setSessions]);
+  }, [embedded, pendingDelete, setSearchParams, setSessions]);
 
   const commitRename = useCallback(async () => {
     if (!renaming) return;
@@ -221,7 +242,7 @@ export function GeneralChatPage() {
   const activeSession = sessions.find((s) => s.session_id === selectedId);
 
   return (
-    <div className="copilot-page">
+    <div className={embedded ? "copilot-page copilot-embedded" : "copilot-page"}>
       {/* Left sidebar: session list */}
       <aside className="copilot-session-list">
         <div className="h-14 px-4 flex items-center justify-between border-b border-stone-100">
@@ -340,7 +361,7 @@ export function GeneralChatPage() {
           <div>
             <span className="today-dateline">与你一起推进求职</span>
             <h2>{starter?.title ?? '今天，想先完成什么？'}</h2>
-            <p>{starter?.detail ?? '描述一个具体目标，例如修改简历或准备面试。你可以随时补充资料，协作记录会保存在左侧。'}</p>
+            <p>{starter?.detail ?? '描述一个具体目标，例如修改简历或准备面试。你可以随时补充资料，协作记录会保存在对话列表中。'}</p>
             {starter && <p>接下来会为你准备一份可编辑的起步消息。确认后发送，再一起补充需要的信息。</p>}
             <button className="today-primary-link" disabled={creating} onClick={onNew}>{creating ? '正在创建…' : starter ? '开始这项准备' : '开始新对话'}</button>
             {productObjectReference && (

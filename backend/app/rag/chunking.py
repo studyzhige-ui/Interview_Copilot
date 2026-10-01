@@ -68,17 +68,22 @@ def _table_aware_nodes(document: Document, token_budget: int) -> list:
 
 
 def _code_splitter(language: str) -> _LlamaCodeSplitter:
-    """Build a CodeSplitter with an explicitly-constructed tree-sitter Parser.
+    """Use installed native grammar wheels, never a runtime download registry."""
+    from tree_sitter import Language, Parser
 
-    ``tree_sitter_language_pack.get_parser()`` returns the pack's own bundled
-    Parser type, which fails LlamaIndex CodeSplitter's
-    ``isinstance(_, tree_sitter.Parser)`` check. Building the Parser ourselves
-    from the pack's Language + the pip ``tree_sitter`` satisfies it and keeps
-    AST-aware code chunking working."""
-    from tree_sitter import Parser
-    from tree_sitter_language_pack import get_language
-
-    parser = Parser(get_language(language))
+    # These four explicit imports match the supported code formats. The generic
+    # language pack lazily downloads grammars, including on offline first use.
+    if language == "python":
+        from tree_sitter_python import language as grammar
+    elif language == "java":
+        from tree_sitter_java import language as grammar
+    elif language == "cpp":
+        from tree_sitter_cpp import language as grammar
+    elif language == "c":
+        from tree_sitter_c import language as grammar
+    else:
+        raise ValueError("unsupported_local_code_grammar")
+    parser = Parser(Language(grammar()))
     return _LlamaCodeSplitter(
         language=language,
         chunk_lines=40,
@@ -166,8 +171,7 @@ class JsonSplitter:
         return JSONNodeParser().get_nodes_from_documents([document]), False
 
 
-# .c reuses the cpp grammar (existing behaviour).
-_CODE_LANGS = {".py": "python", ".java": "java", ".cpp": "cpp", ".c": "cpp"}
+_CODE_LANGS = {".py": "python", ".java": "java", ".cpp": "cpp", ".c": "c"}
 
 
 class CodeSplitter:

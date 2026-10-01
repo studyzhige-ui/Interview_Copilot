@@ -1,10 +1,13 @@
 """Interview analysis and record HTTP endpoints.
 
 Thin router: auth, request validation, and HTTP status mapping only.
-Business logic lives in ``app.services.interview`` (analysis_intake for
+Business logic lives in ``app.interviews.application`` (analysis_intake for
 the /analyze flow, record_admin for owned-record maintenance,
 interview_record_service for record persistence).
 """
+
+from app.api.command_errors import command_errors
+
 
 import asyncio
 import json
@@ -21,7 +24,6 @@ from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
-from app.db.types import utc_now
 from app.models.interview_qa import InterviewQA
 from app.models.user import User
 from app.schemas.interview import (
@@ -29,30 +31,28 @@ from app.schemas.interview import (
     InterviewRecordListItem,
     InterviewRecordUpdateRequest,
     QAEditRequest,
+    QACorrectionPage,
     SaveQARequest,
 )
-from app.services.analytics.diagnostics_report_service import (
-    ABILITY_SCORE_SCALE_VERSION,
-    generate_comprehensive_report,
-)
-from app.services.interview import analysis_intake, record_admin
-from app.services.interview.interview_record_service import (
-    STATUS_ANALYZING,
-    STATUS_COMPLETED,
-    STATUS_EXTRACTING,
-    STATUS_FAILED,
-    STATUS_PENDING,
-    STATUS_PROCESSING_REVIEW,
-    STATUS_REVIEW_FAILED,
-    STATUS_REVIEW_READY,
-    STATUS_TRANSCRIBING,
+from app.observability.diagnostics_report_service import ABILITY_SCORE_SCALE_VERSION
+from app.observability.diagnostics_report_service import generate_comprehensive_report
+from app.interviews.application import analysis_intake
+from app.interviews.application import record_admin
+from app.interviews.application.interview_record_service import STATUS_ANALYZING
+from app.interviews.application.interview_record_service import STATUS_COMPLETED
+from app.interviews.application.interview_record_service import STATUS_EXTRACTING
+from app.interviews.application.interview_record_service import STATUS_FAILED
+from app.interviews.application.interview_record_service import STATUS_PENDING
+from app.interviews.application.interview_record_service import STATUS_PROCESSING_REVIEW
+from app.interviews.application.interview_record_service import STATUS_REVIEW_FAILED
+from app.interviews.application.interview_record_service import STATUS_REVIEW_READY
+from app.interviews.application.interview_record_service import STATUS_TRANSCRIBING
+from app.interviews.application.interview_record_service import (
     InterviewOpportunityNotFoundError,
-    interview_record_service,
 )
-from app.services.uploads.file_asset_service import (
-    UPLOAD_STATUS_CONSUMED,
-    get_owned_file_asset,
-)
+from app.interviews.application.interview_record_service import interview_record_service
+from app.files.application.file_asset_service import UPLOAD_STATUS_CONSUMED
+from app.files.application.file_asset_service import get_owned_file_asset
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ async def analyze_interview_endpoint(
     request: Request,
     response: Response,
     body: AnalyzeRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Create an InterviewRecord from an uploaded audio file and dispatch the
@@ -149,7 +149,7 @@ async def reanalyze_interview_record(
             "重建 QA；默认只重新批改"
         ),
     ),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Re-run the analysis pipeline for a failed or completed upload record
@@ -181,7 +181,7 @@ async def reanalyze_interview_record(
 @router.post("/analyze/{record_id}/cancel")
 def cancel_analysis(
     record_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Revoke a running analysis task. Used when the user discards the draft
@@ -245,7 +245,7 @@ def list_interview_records(
 @router.get("/interview-records/{record_id}")
 def get_interview_record(
     record_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     record = interview_record_service.get(record_id, current_user.username)
@@ -280,7 +280,7 @@ def get_interview_record(
         "transcript_structure": transcript.get("structure_json"),
         "transcript_quality": transcript.get("quality_json"),
         "analysis": analysis,
-        "qa": _serialize_qa_rows(db, qa_rows),
+        "qa": _serialize_qa_rows(db, qa_rows, owner_id=record.user_id),
         "error_message": record.error_message,
         "created_at": record.created_at.isoformat() if record.created_at else "",
         "updated_at": record.updated_at.isoformat() if record.updated_at else "",
@@ -299,11 +299,12 @@ def _safe_json_loads(value: Optional[str]) -> Optional[object]:
         return None
 
 
-def _serialize_qa_rows(db: Session, qa_rows: list[InterviewQA]) -> list[dict]:
+def _serialize_qa_rows(
+    db: Session, qa_rows: list[InterviewQA], *, owner_id: int
+) -> list[dict]:
     """Serialize QA rows with voice-answer playback URLs batch-minted in ONE
-    asset query (a 30-question record used to open 30 sessions). local://
-    deployments get no URL — playback degrades gracefully."""
-    from app.services.uploads.file_asset_service import presigned_get_urls
+    asset query, with explicit owner/purpose scope for both storage providers."""
+    from app.files.application.file_asset_service import presigned_get_urls
 
     urls = presigned_get_urls(
         db,
@@ -312,13 +313,40 @@ def _serialize_qa_rows(db: Session, qa_rows: list[InterviewQA]) -> list[dict]:
             for qa in qa_rows
             if qa.answer_audio_file_asset_id
         ],
+        owner_id=owner_id,
+        purpose="mock_audio_clip",
     )
-    return [_serialize_qa(qa, audio_urls=urls) for qa in qa_rows]
+    from app.models.knowledge import KnowledgeDocument
+    from app.models.interview_record import InterviewRecord
+
+    document_statuses = (
+        dict(
+            db.query(KnowledgeDocument.id, KnowledgeDocument.status)
+            .join(InterviewQA, InterviewQA.saved_document_id == KnowledgeDocument.id)
+            .join(InterviewRecord, InterviewRecord.id == InterviewQA.record_id)
+            .filter(
+                InterviewQA.id.in_([qa.id for qa in qa_rows]),
+                KnowledgeDocument.user_id == InterviewRecord.user_id,
+                KnowledgeDocument.deleted_at.is_(None),
+            )
+            .all()
+        )
+        if qa_rows
+        else {}
+    )
+    return [
+        {
+            **_serialize_qa(qa, audio_urls=urls),
+            "saved_document_status": document_statuses.get(qa.saved_document_id),
+        }
+        for qa in qa_rows
+    ]
 
 
 def _serialize_qa(qa: InterviewQA, audio_urls: dict[str, str] | None = None) -> dict:
     return {
         "id": qa.id,
+        "version": qa.version,
         "order_idx": qa.order_idx,
         "phase": qa.phase,
         "phase_label": qa.phase_label,
@@ -332,14 +360,18 @@ def _serialize_qa(qa: InterviewQA, audio_urls: dict[str, str] | None = None) -> 
         "critique": qa.critique,
         "improved_answer": qa.improved_answer,
         "key_points": _safe_json_loads(qa.key_points_json) or [],
+        "assessment": qa.answer_quality_json,
         "answer_input_mode": qa.answer_input_mode,
         "question_audio_url": qa.question_audio_url,
         # MOCK-7: voice answers store the clip's asset id; presigned GETs are
         # batch-minted per detail read (persisted URLs would expire). NB the
         # URL dies after ~30min — a long-open review page needs a refresh.
+        # Canonical identity is authoritative: a denied/deleted asset must
+        # never regain playback through a preserved legacy URL.
         "answer_audio_url": (
-            (audio_urls or {}).get(qa.answer_audio_file_asset_id or "")
-            or qa.answer_audio_url
+            (audio_urls or {}).get(qa.answer_audio_file_asset_id)
+            if qa.answer_audio_file_asset_id
+            else qa.answer_audio_url
         ),
         "answer_audio_file_asset_id": qa.answer_audio_file_asset_id,
         "source_segment_start": qa.source_segment_start,
@@ -372,7 +404,7 @@ def update_interview_record(
     record_id: str,
     payload: InterviewRecordUpdateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     record = record_admin.get_owned_record(db, record_id, current_user.username)
     if record is None:
@@ -407,7 +439,7 @@ def delete_interview_record(
     record_id: str,
     cascade_knowledge: bool = Query(False),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Hard-delete an interview record and every trace tied to it.
 
@@ -447,40 +479,20 @@ def edit_interview_qa(
     qa_id: str,
     payload: QAEditRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
-    """Edit a single InterviewQA row by id."""
-    qa = record_admin.get_owned_qa(
-        db,
-        user_pk=resolve_user_pk(db, current_user.username),
-        record_id=record_id,
-        qa_id=qa_id,
-    )
-    if qa is None:
-        raise HTTPException(status_code=404, detail="QA row not found")
-
-    if payload.question is not None:
-        qa.question = payload.question
-    if payload.answer is not None:
-        qa.answer = payload.answer
-    if payload.critique is not None:
-        qa.critique = payload.critique
-    if payload.improved_answer is not None:
-        qa.improved_answer = payload.improved_answer
-    if (payload.question is not None or payload.answer is not None) and isinstance(
-        qa.source_provenance_json, dict
-    ):
-        provenance = dict(qa.source_provenance_json)
-        provenance["manual_override"] = {
-            "question": payload.question is not None,
-            "answer": payload.answer is not None,
-            "updated_at": utc_now().isoformat(),
-        }
-        qa.source_provenance_json = provenance
-    db.add(qa)
-    db.commit()
-    db.refresh(qa)
-    return {"status": "success", "qa": _serialize_qa_rows(db, [qa])[0]}
+    with command_errors():
+        qa = record_admin.edit_owned_qa(
+            db,
+            record_id=record_id,
+            qa_id=qa_id,
+            payload=payload,
+            current_user=current_user,
+        )
+    return {
+        "status": "success",
+        "qa": _serialize_qa_rows(db, [qa], owner_id=current_user.id)[0],
+    }
 
 
 @router.post("/interview-records/{record_id}/qa/{qa_id}/save-to-knowledge")
@@ -492,7 +504,7 @@ async def save_qa_to_knowledge_endpoint(
     qa_id: str,
     body: SaveQARequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Publish a QA's improved answer to the knowledge base (RFC §6.9).
 
@@ -512,10 +524,8 @@ async def save_qa_to_knowledge_endpoint(
     record = record_admin.get_owned_record(db, record_id, current_user.username)
     if record is None:
         raise HTTPException(status_code=404, detail="Interview record not found")
-    from app.services.knowledge.qa_publish_service import (
-        DEFAULT_CATEGORY,
-        save_qa_to_knowledge,
-    )
+    from app.rag.application.library.qa_publish_service import DEFAULT_CATEGORY
+    from app.rag.application.library.qa_publish_service import save_qa_to_knowledge
 
     try:
         doc = await save_qa_to_knowledge(
@@ -526,8 +536,12 @@ async def save_qa_to_knowledge_endpoint(
             category=(body.category or "").strip() or DEFAULT_CATEGORY,
         )
     except Exception as exc:  # noqa: BLE001
+        from app.core.command_errors import CommandError
         from app.core.error_messages import humanize_error
 
+        if isinstance(exc, CommandError):
+            with command_errors():
+                raise exc
         raise HTTPException(
             status_code=500,
             detail=f"保存到知识库失败：{humanize_error(exc)}",
@@ -536,6 +550,7 @@ async def save_qa_to_knowledge_endpoint(
         "status": "success",
         "document_id": doc.id,
         "saved_document_id": qa.saved_document_id,
+        "document_status": doc.status,
     }
 
 
@@ -544,7 +559,7 @@ def unsave_qa_from_knowledge_endpoint(
     record_id: str,
     qa_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Remove the knowledge document previously saved from this QA."""
     user_pk = resolve_user_pk(db, current_user.username)
@@ -553,7 +568,7 @@ def unsave_qa_from_knowledge_endpoint(
     )
     if qa is None:
         raise HTTPException(status_code=404, detail="QA row not found")
-    from app.services.knowledge.qa_publish_service import unsave_qa_from_knowledge
+    from app.rag.application.library.qa_publish_service import unsave_qa_from_knowledge
 
     removed = unsave_qa_from_knowledge(db, user_pk=user_pk, qa=qa)
     return {"status": "success", "removed": removed}
@@ -739,3 +754,26 @@ async def interview_record_events_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get(
+    "/interview-records/{record_id}/corrections", response_model=QACorrectionPage
+)
+def get_interview_corrections(
+    record_id: str,
+    before: str | None = Query(None, max_length=36),
+    limit: int = Query(30, ge=1, le=100),
+    db: Session = Depends(get_db, scope="function"),
+    current_user: User = Depends(get_current_user),
+):
+    from app.core.user_identity import resolve_user_pk
+    from app.interviews.application.corrections import list_corrections
+
+    with command_errors():
+        return list_corrections(
+            db,
+            record_id=record_id,
+            user_pk=resolve_user_pk(db, current_user.username),
+            before=before,
+            limit=limit,
+        )

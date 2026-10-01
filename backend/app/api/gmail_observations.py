@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import logging
 
+from app.career.application.interview_invitation_operations import (
+    InterviewInvitationOperationError,
+)
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -20,12 +24,10 @@ from app.schemas.gmail_observation import (
     GmailObservationSyncView,
     GmailObservationView,
 )
-from app.services import (
-    gmail_integration_service,
-    gmail_observation_service,
-    gmail_observation_sync_service,
-)
-from app.services.career_process_service import CareerProcessError
+from app.integrations.gmail import contract as gmail_integration_service
+from app.integrations.gmail import observations as gmail_observation_service
+from app.integrations.gmail import sync as gmail_observation_sync_service
+from app.career.application.process import CareerProcessError
 
 
 router = APIRouter(tags=["gmail-observations"])
@@ -125,7 +127,7 @@ def get_gmail_observations(
     statuses: list[str] = Query(default=[]),
     limit: int = Query(default=100, ge=1, le=200),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     allowed = {
         "unreviewed",
@@ -152,7 +154,7 @@ def get_gmail_observations(
 )
 async def sync_gmail_observations(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     adapter=Depends(get_gmail_provider_adapter),
 ):
     return await _perform_sync(
@@ -169,7 +171,7 @@ async def sync_gmail_observations(
 async def rebaseline_gmail_observations(
     body: GmailObservationRebaseline,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     adapter=Depends(get_gmail_provider_adapter),
 ):
     del body  # Pydantic has already required explicit confirm_gap=true.
@@ -200,7 +202,7 @@ def get_gmail_review_cards(
     task_id: str,
     statuses: list[str] = Query(default=[]),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     allowed = {"pending", "approved", "rejected", "skipped"}
     selected = set(statuses)
@@ -226,7 +228,7 @@ def resolve_gmail_review_card(
     card_id: str,
     body: GmailObservationCardResolve,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = gmail_observation_service.resolve_review_card(
@@ -239,6 +241,7 @@ def resolve_gmail_review_card(
         db.commit()
         return GmailObservationResolutionView(
             outcome=result.outcome,
+            invitation_handoff=result.invitation_handoff,
             observation=gmail_observation_service.get_observation(
                 db,
                 user_pk=current_user.id,
@@ -255,6 +258,7 @@ def resolve_gmail_review_card(
     except (
         gmail_observation_service.GmailObservationError,
         CareerProcessError,
+        InterviewInvitationOperationError,
     ) as exc:
         db.rollback()
         if isinstance(exc, gmail_observation_service.GmailObservationError):
@@ -270,7 +274,7 @@ def retract_gmail_observation(
     observation_id: str,
     body: GmailObservationRetract,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         gmail_observation_service.retract_applied_observation(

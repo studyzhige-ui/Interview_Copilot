@@ -14,7 +14,7 @@ def _register_handlers() -> None:
 
 def _drain(job_types: Collection[str], *, limit: int) -> dict[str, int]:
     from app.db.database import SessionLocal
-    from app.services.outbox import run_due_outbox_jobs
+    from app.platform.outbox import run_due_outbox_jobs
 
     _register_handlers()
     with SessionLocal() as db:
@@ -33,7 +33,7 @@ def drain_index_outbox_jobs():
     """Run Milvus/embedding synchronization without waiting for LLM jobs."""
     from app.db.database import SessionLocal
     from app.rag.index.reconciliation import enqueue_stale_documents
-    from app.services.outbox import INDEX_JOB_TYPES
+    from app.platform.outbox import INDEX_JOB_TYPES
 
     with SessionLocal() as db:
         enqueued = enqueue_stale_documents(db, limit=100)
@@ -49,7 +49,7 @@ def drain_index_outbox_jobs():
 )
 def drain_cleanup_outbox_jobs():
     """Delete orphaned blobs without loading AI runtimes."""
-    from app.services.outbox import CLEANUP_JOB_TYPES
+    from app.platform.outbox import CLEANUP_JOB_TYPES
 
     return _drain(CLEANUP_JOB_TYPES, limit=25)
 

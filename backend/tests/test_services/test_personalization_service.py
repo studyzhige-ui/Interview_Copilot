@@ -6,7 +6,7 @@ from app.models.chat import Conversation, ConversationMessage
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
 from app.schemas.personalization import CopilotPreferenceUpdate, ScopedGuidanceUpdate
-from app.services import personalization_service
+from app.career.application import personalization as personalization_service
 
 
 class _SessionLease:

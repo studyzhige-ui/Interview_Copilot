@@ -12,7 +12,8 @@ from app.conversation import context_manager as manager
 from app.conversation import context_store as store
 from app.core.context_budget import ContextCapacityError, request_tokens
 from app.core.model_provider_adapter import ProviderStreamEvent, ProviderUsage
-from app.services.chat.context_assembly_pipeline import AssembledContext, PromptRenderer
+from app.conversation.application.context_assembly_pipeline import AssembledContext
+from app.conversation.application.context_assembly_pipeline import PromptRenderer
 
 
 def profile():
@@ -26,7 +27,7 @@ def checkpoint_db(db_session, monkeypatch):
     from tests.conftest import NoCloseSession
     from app.models.chat import Conversation
     from app.models.user import User
-    from app.services.chat import chat_history_service
+    from app.conversation.application import chat_history_service
 
     user = User(username="window-owner", hashed_password="x")
     db_session.add(user)
@@ -39,7 +40,7 @@ def checkpoint_db(db_session, monkeypatch):
 
     monkeypatch.setattr(store, "SessionLocal", factory)
     monkeypatch.setattr(chat_history_service, "SessionLocal", factory)
-    monkeypatch.setattr("app.services.personalization_service.SessionLocal", factory)
+    monkeypatch.setattr("app.career.application.personalization.SessionLocal", factory)
     return db_session
 
 
@@ -177,7 +178,9 @@ def test_stale_checkpoint_leaves_live_projection_untouched(checkpoint_db, monkey
 
 def test_checkpoint_replay_reads_only_tail_and_keeps_dynamic_prefix(checkpoint_db):
     from app.models.chat import ConversationMessage
-    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+    from app.conversation.application.context_assembly_pipeline import (
+        ContextAssemblyPipeline,
+    )
 
     # Existing legacy cursor must not hide original history during bootstrap.
     from app.models.chat import Conversation

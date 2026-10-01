@@ -1,3 +1,5 @@
+import { ActivityFeed } from '@/pages/activities/ActivityCenterPage';
+import { PendingConfirmations } from './PendingConfirmations';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -8,7 +10,6 @@ import { copilotObjectHandoffHref } from '@/lib/copilotObjectReference';
 import type { NextActionAgendaItem } from '@/types/career';
 import { getWorkspaceOverview } from '@/api/workspace';
 import { GettingStarted } from './GettingStarted';
-import { RecentActivity } from './RecentActivity';
 
 type View = 'attention' | 'upcoming' | 'suggested';
 const views: Array<{ id: View; label: string }> = [
@@ -60,6 +61,8 @@ export function TodayPage() {
     {workspace.isPending ? <p role="status">正在读取你的准备进度…</p> : workspace.isError
       ? <LoadError subject="协作进度" pending={workspace.isFetching} retry={() => { void workspace.refetch(); }} />
       : <GettingStarted overview={workspace.data} />}
+    <PendingConfirmations />
+    <ActivityFeed limit={5} />
     {!isStarting && <div className="today-layout">
       <section className="today-agenda" aria-labelledby="agenda-heading">
         <div className="today-section-heading"><h2 id="agenda-heading">你的安排</h2><CalendarDays size={18} /></div>
@@ -104,7 +107,6 @@ export function TodayPage() {
         <Link className="today-section-footer" to="/career-process">全部求职机会 <ArrowRight size={15} /></Link>
       </aside>
     </div>}
-    <RecentActivity />
     {!isStarting && <section className="today-next" aria-label="继续准备">
       <div><span className="today-dateline">每一次准备，都算数</span><h2>为下一次机会做好准备</h2></div>
       <Link to="/mock"><span><strong>练一次面试</strong><small>带着简历和岗位要求，进入模拟问答</small></span><ArrowUpRight size={19} /></Link>

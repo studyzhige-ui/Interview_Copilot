@@ -13,7 +13,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "backend"))
 
 from app.db.database import SessionLocal  # noqa: E402
-from app.services.legacy_memory_migration import migrate_legacy_memory  # noqa: E402
+from app.maintenance.memory_migration import migrate_legacy_memory  # noqa: E402
 
 
 def main() -> int:

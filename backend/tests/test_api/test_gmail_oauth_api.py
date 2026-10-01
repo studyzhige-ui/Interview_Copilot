@@ -22,10 +22,10 @@ from app.models.gmail_integration import (
     GmailOAuthState,
 )
 from app.models.user import User
-from app.services.gmail_integration_service import GMAIL_READONLY_SCOPE
-from app.services.gmail_integration_service import GmailIntegrationError
-from app.services.google_gmail_connector import GoogleGmailConnector
-from app.services.gmail_credential_store import InMemoryGmailCredentialStore
+from app.integrations.gmail.contract import GMAIL_READONLY_SCOPE
+from app.integrations.gmail.contract import GmailIntegrationError
+from app.integrations.gmail.connector import GoogleGmailConnector
+from app.integrations.gmail.credentials import InMemoryGmailCredentialStore
 from tests.conftest import NoCloseSession
 
 
