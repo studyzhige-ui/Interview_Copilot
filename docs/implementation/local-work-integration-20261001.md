@@ -31,7 +31,9 @@
 
 [逐文件迁入审计](local-work-integration-20261001.json) 覆盖检查点的全部 333 项变更，记录原路径、当前模块路径、处理决策与原因。其“保留远端”包含已发布的加固、注释/路径重命名与被规范检索架构取代的旧接口，不能解释为丢弃整个本地模块。
 
-评测比较脚本遵守当前 `reindex_document(document_id)` 自行管理短事务的合同；显式 `--user` 同时用于建库和评测行路由。评测代码指纹包含 broker 推理模块，版本记录包含 jieba，避免旧评分实现的证据被当作新实现结果。
+评测比较脚本遵守当前 `reindex_document(document_id)` 自行管理短事务的合同；显式 `--user` 同时用于建库和评测行路由。运行 `compare_local_models.py` 前，需在隔离评测环境按选定 profile 准备并启动匹配的 broker：模型 ID、revision、维度、token 上限和有效指令必须与当前评测进程一致。
+
+评测代码指纹包含 broker 推理模块，版本记录包含 jieba，避免旧评分实现的证据被当作新实现结果。
 
 ## 使用新增能力
 
@@ -61,6 +63,15 @@ Qwen3 embedding 通过实际本地 `config.json` 识别；没有显式设置 que
 
 ## 验证
 
-迁入后的最终验证证据将在 Linux 隔离回归完成后补充。已完成阶段检查：修复后 Linux 定向回归 46 passed；上下文 161 passed；新增 Qwen/词法与代次合同 12 passed；MTRAG 离线 unittest 21 passed。Windows 上原远端的 Linux-only 配置、文件替换/symlink 测试不能作为后端验收门，使用 Linux 容器覆盖这些合同。
+[最终验收记录](../reports/local-work-integration-2026-10-01/validation.json) 对应源码提交 `633f66e`，后续只增加本说明与验收记录。
+
+- Linux 全量后端：**2506 passed、14 skipped、0 failed**（625.55s），使用独立 PostgreSQL/Redis，覆盖迁移、租户隔离、真实 worker 中断恢复和使用量记账。
+- 修复后的 Linux 定向回归：**46 passed**。
+- `RAG_LEXICAL_ANALYZER=jieba_search` 下真实 PostgreSQL 检索及词法合同：**12 passed**。
+- MTRAG 离线 unittest：**21 passed**；模型比较 CLI `--help` 通过。
+- 固定 Ruff 0.16.2：全范围 lint 通过、924 文件格式检查通过；Git 差异检查通过。
+- 原 main/暂存区保留，全部非忽略工作文件再次核对与检查点一致。
+
+Windows 阶段的上下文 161 passed、Qwen/词法与代次合同 12 passed 是补充证据。原远端的 Linux-only 配置、文件替换/symlink 测试不能作为 Windows 后端验收门，本次已使用 Linux 全量回归覆盖这些合同。
 
 全量测试跳过的独立验收覆盖：9 个真实浏览器场景、1 个下载语料合同、1 个真实 embedding/reranker 场景、1 个可选 aiortc/WebRTC 场景、2 个 S3 HTTP 场景。GPU 质量、真实 Supabase 登录/邮件与本地业务数据迁移均未在本次代码迁入中验收。

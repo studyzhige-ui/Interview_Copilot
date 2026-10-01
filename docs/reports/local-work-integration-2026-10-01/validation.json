@@ -1,0 +1,81 @@
+{
+  "date": "2026-10-01",
+  "source_commit": "633f66e05a7a75ad802cc8e09df280e7342e783f",
+  "remote_baseline": "34c4de6d3cd85262c7ef61bf98903a918519aac5",
+  "checkpoint": "a364152ac962df3e67baa9b807f5d8727139d915",
+  "branch": "codex/integrate-local-work-20261001",
+  "suites": {
+    "full_backend": {
+      "total": 2520,
+      "passed": 2506,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 14,
+      "junit_path": "data/runtime/integration-20261001/linux-results.xml",
+      "case_time_sum_seconds": 608.166,
+      "wall_seconds": 625.53
+    },
+    "repair_preflight": {
+      "total": 46,
+      "passed": 46,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "junit_path": "data/runtime/integration-20261001/linux-preflight.xml",
+      "case_time_sum_seconds": 2.459,
+      "wall_seconds": 8.122
+    },
+    "jieba_postgres": {
+      "total": 12,
+      "passed": 12,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "junit_path": "data/runtime/integration-20261001/jieba-results.xml",
+      "case_time_sum_seconds": 30.43,
+      "wall_seconds": 30.783
+    }
+  },
+  "lint": {
+    "tool": "ruff==0.16.2",
+    "check": "passed",
+    "format_check": "924 files passed"
+  },
+  "offline_mtrag": {
+    "passed": 21,
+    "command": "python -m unittest evaluation.mtrag.test_contract evaluation.mtrag.test_metrics evaluation.mtrag.test_optimize_m3 evaluation.mtrag.test_quality_m3 -q"
+  },
+  "compare_models_cli": "--help passed; no model inference performed",
+  "environment": {
+    "python": "3.13",
+    "os": "Linux in disposable Docker container",
+    "core_and_dev_dependencies": "constrained by current pyproject.toml",
+    "postgres": "15.18 with pgvector 0.8.6",
+    "redis": "8.10.0",
+    "network": "isolated loopback namespace; no host ports",
+    "business_data_accessed": false
+  },
+  "coverage_limits": [
+    "Nine browser acceptance tests require an explicit browser campaign.",
+    "Downloaded release corpus and real embedding/reranker tests were not executed.",
+    "Native WebRTC requires optional aiortc; S3 HTTP requires a disposable fixture.",
+    "No real GPU/model quality, Supabase mail/login acceptance or business database migration was performed."
+  ],
+  "initial_failures": {
+    "passed": 2503,
+    "failed": 2,
+    "skipped": 14,
+    "causes": [
+      "read_file schema whitelist needed the new scoped source_turn_id parameter.",
+      "Stat-only evidence-source validation missed same-size same-timestamp byte mutation."
+    ],
+    "repair_commit": "c4973a1"
+  },
+  "original_checkout": {
+    "head": "f9bf80ae70e13b235da487ba7ca224a7b85bdfeb",
+    "branch": "main",
+    "staged_paths": 0,
+    "working_files_match_checkpoint": true
+  },
+  "artifact_note": "Final source differs from this tested commit only in integration documentation and validation evidence."
+}
