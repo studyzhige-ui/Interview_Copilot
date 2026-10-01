@@ -428,6 +428,7 @@ class ContextAssemblyPipeline:
             sanitized.append(
                 {
                     "seq": seq,
+                    "turn_id": message.get("turn_id"),
                     "_position": position,
                     "role": role,
                     "content": content,

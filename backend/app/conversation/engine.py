@@ -435,7 +435,7 @@ class ConversationEngine:
         #
         # L2 (agent) mode skips engine-side RAG: the agent retrieves knowledge
         # on demand via the ``search_knowledge`` tool, so injecting it here
-        # would be redundant and double-pay the Milvus + rerank cost. It also
+        # would be redundant and double-pay the pgvector + rerank cost. It also
         # lengthens the cache-stable prompt prefix — RAG chunks were the
         # per-turn-variable part of the agent's grounding. L1 (chat) keeps it.
         knowledge_task = (

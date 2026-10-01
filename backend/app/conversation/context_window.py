@@ -8,6 +8,7 @@ See third_party/codex-context for the unmodified compaction templates/license.
 from __future__ import annotations
 from dataclasses import replace
 
+from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
@@ -17,14 +18,13 @@ from app.core.context_messages import normalize_tool_pairs
 from app.core.context_wire import wire
 from app.core.tokens import token_count, truncate_to_tokens
 from app.core.config import settings
+from app.conversation.context_reduction import result_reference, split_recent
 
 UPSTREAM_REVISION = "83dc7d11e873f43533dc898d50fae71cf4d55dc5"
 # Source distributions and Docker both carry these files beside the package.
 _TEMPLATES = Path(__file__).with_name("context_templates")
 COMPACT_PROMPT = (_TEMPLATES / "prompt.md").read_text(encoding="utf-8").strip()
 SUMMARY_PREFIX = (_TEMPLATES / "summary_prefix.md").read_text(encoding="utf-8").strip()
-USER_RETAIN_TOKENS = 20_000
-TOOL_OUTPUT_TOKENS = 10_000
 
 
 def item(message: dict, kind: str, *, identity: str | None = None, **metadata) -> dict:
@@ -52,11 +52,44 @@ def admit(messages: list[dict], *, tool_limit: int | None = None) -> list[dict]:
             else settings.CONTEXT_TOOL_OUTPUT_TOKENS
         ),
     )
+    read_call_ids = {
+        call.get("id")
+        for message in messages
+        for call in message.get("tool_calls", [])
+        if (call.get("function") or {}).get("name")
+        in {"read_file", "read_interaction_history"}
+    }
     result = []
     for message in messages:
         if message.get("role") == "tool" and isinstance(message.get("content"), str):
             content = message["content"]
             if token_count(content) > tool_limit:
+                reference = (
+                    None
+                    if message.get("tool_call_id") in read_call_ids
+                    else result_reference(
+                        message,
+                        preview_tokens=min(
+                            settings.CONTEXT_TOOL_PREVIEW_TOKENS, tool_limit // 2
+                        ),
+                    )
+                )
+                if reference is not None and token_count(reference) <= tool_limit:
+                    result.append(
+                        {
+                            **message,
+                            "content": reference,
+                            "_context": {
+                                **message["_context"],
+                                "tool_projection": "reference",
+                            },
+                        }
+                    )
+                    continue
+                # Never slice an existing readable reference into an invalid one.
+                if message.get("_context", {}).get("tool_projection"):
+                    result.append(message)
+                    continue
                 marker = (
                     "\n[Tool output truncated; excerpts only. Read the durable result "
                     f"by call_id={message.get('tool_call_id', '')} for omitted data.]\n"
@@ -117,31 +150,25 @@ def remove_oldest_group(messages: list[dict]) -> list[dict]:
     return output
 
 
-def replacement_history(
-    messages: list[dict], summary: str, *, user_limit: int = USER_RETAIN_TOKENS
-) -> list[dict]:
-    """Codex local-compaction shape: recent real users, then handoff summary."""
-    users, remaining = [], user_limit
-    for message in reversed(messages):
-        if kind(message) != "user" or message.get("role") != "user":
-            continue
-        content = str(message.get("content") or "")
-        if not remaining:
-            break
-        clipped = truncate_to_tokens(content, remaining)
-        users.append({**message, "content": clipped})
-        remaining -= token_count(clipped)
-    users.reverse()
-    users.append(
-        item({"role": "user", "content": SUMMARY_PREFIX + "\n\n" + summary}, "summary")
-    )
-    return users
+def replacement_history(recent: list[dict], summary: str) -> list[dict]:
+    """Earlier-history handoff followed by the already-selected exact suffix."""
+    return [
+        item({"role": "user", "content": SUMMARY_PREFIX + "\n\n" + summary}, "summary"),
+        *deepcopy(recent),
+    ]
 
 
 async def compact(
-    messages: list[dict], *, client, profile, output_tokens: int = 4096
+    messages: list[dict],
+    *,
+    client,
+    profile,
+    output_tokens: int = 4096,
+    tool_schemas: list[dict] | None = None,
+    reserved_messages: list[dict] | None = None,
+    finalize: Callable[[list[dict]], list[dict]] | None = None,
 ) -> tuple[list[dict], dict]:
-    """Same selected model, original prompt, no JSON schema or worker model.
+    """Summarize the older prefix with the selected model and original prompt.
 
     Only a completed response replaces history. Overflow trims a temporary
     summarizer input at paired item boundaries; failures preserve live history.
@@ -154,9 +181,20 @@ async def compact(
 
     systems = [m for m in messages if m.get("role") == "system"]
     original = [m for m in messages if m.get("role") != "system"]
-    source = admit(original)
     output = min(output_tokens, int(profile.max_output_tokens or output_tokens))
     budget = RequestBudget.resolve(profile.context_window, output)
+    reserved_messages = reserved_messages or []
+    # Reserve output for the new summary AND the caller's exact dynamic data.
+    # The final guard below includes tools, restored task/runtime and framing.
+    fixed = request_tokens(
+        [*(finalize(systems) if finalize is not None else systems), *reserved_messages],
+        tool_schemas,
+    )
+    tail_limit = min(
+        settings.CONTEXT_RECENT_TOKENS,
+        max(0, (budget.compact_at - fixed - output - 512) // 3),
+    )
+    source, recent = split_recent(admit(original), token_limit=tail_limit)
     prompt = {"role": "user", "content": COMPACT_PROMPT}
     removed = 0
     while source:
@@ -184,23 +222,24 @@ async def compact(
             summary = "".join(text).strip()
             if not summary or stop not in {"stop", "end_turn"}:
                 raise ContextCapacityError("压缩未完整结束，原上下文已保留。")
-            retained_limit = min(
-                USER_RETAIN_TOKENS,
-                max(
-                    0,
-                    budget.input_limit
-                    - request_tokens(systems)
-                    - token_count(summary)
-                    - 512,
-                ),
+            replacement = [*systems, *replacement_history(recent, summary)]
+            if finalize is not None:
+                replacement = finalize(replacement)
+            final_tokens = request_tokens(
+                [*replacement, *reserved_messages], tool_schemas
             )
-            replacement = replacement_history(
-                original, summary, user_limit=retained_limit
-            )
-            return [*systems, *replacement], {
+            if final_tokens >= budget.input_limit:
+                raise ContextCapacityError(
+                    "压缩后必要上下文仍超出窗口，原上下文已保留。"
+                )
+            return replacement, {
                 "status": "completed",
+                "strategy": "prefix_summary_recent_tail",
                 "source_revision": UPSTREAM_REVISION,
                 "summary_tokens": token_count(summary),
+                "retained_messages": len(recent),
+                "retained_tokens": request_tokens(recent) if recent else 0,
+                "final_request_tokens": final_tokens,
                 "trimmed_input_groups": removed,
                 "model": profile.model,
                 "prompt_tokens": getattr(usage, "prompt_tokens", 0),

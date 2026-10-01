@@ -264,7 +264,21 @@ class TranscriptService:
                 .order_by(ConversationMessage.seq.asc())
                 .all()
             )
-            return [self._message_to_dict(row) for row in rows]
+            from app.models.conversation_turn import ConversationTurn
+
+            turns = (
+                db.query(ConversationTurn.id, ConversationTurn.assistant_message_seq)
+                .filter(
+                    ConversationTurn.conversation_id == session_id,
+                    ConversationTurn.assistant_message_seq > after_seq,
+                )
+                .all()
+            )
+            turn_by_seq = {seq: turn_id for turn_id, seq in turns}
+            return [
+                self._message_to_dict(row, turn_id=turn_by_seq.get(row.seq))
+                for row in rows
+            ]
         finally:
             db.close()
 

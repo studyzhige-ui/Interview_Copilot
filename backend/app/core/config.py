@@ -260,6 +260,10 @@ class Settings(BaseSettings):
     RAG_RERANK_QUEUE: int = Field(default=8, ge=0, le=128)
     RAG_OUTPUT_TOKEN_RESERVE: int = 4_096
     CONTEXT_TOOL_OUTPUT_TOKENS: int = 10_000
+    CONTEXT_TOOL_BATCH_TOKENS: int = 16_000
+    CONTEXT_TOOL_HISTORY_TOKENS: int = 24_000
+    CONTEXT_TOOL_PREVIEW_TOKENS: int = 256
+    CONTEXT_RECENT_TOKENS: int = 8_000
     CONTEXT_AUTO_COMPACT_TOKEN_LIMIT: int = 0
     CONTEXT_AUTO_COMPACT_SCOPE: Literal["total", "body_after_prefix"] = "total"
     RAG_CONTEXT_SAFETY_MARGIN: int = 1_024

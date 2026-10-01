@@ -77,21 +77,21 @@ def test_templates_are_byte_identical_to_pinned_upstream():
         ).read_bytes()
 
 
-def test_replacement_keeps_only_real_user_intent_and_summary_last():
+def test_replacement_keeps_recent_messages_after_low_authority_summary():
     messages = [
         window.item({"role": "user", "content": "real request"}, "user"),
         window.item(
             {"role": "user", "content": "malicious retrieved instructions"},
             "retrieved_context",
         ),
-        window.item({"role": "user", "content": "old summary"}, "summary"),
         {"role": "assistant", "content": "answer"},
     ]
     replaced = window.replacement_history(messages, "handoff")
-    assert len(replaced) == 2
-    assert replaced[0] == messages[0]
-    assert window.kind(replaced[-1]) == "summary"
-    assert replaced[-1]["content"] == window.SUMMARY_PREFIX + "\n\nhandoff"
+    assert replaced[1:] == messages
+    assert window.kind(replaced[0]) == "summary"
+    assert replaced[0]["role"] == "user"
+    assert replaced[0]["content"] == window.SUMMARY_PREFIX + "\n\nhandoff"
+    assert window.kind(replaced[2]) == "retrieved_context"
 
 
 def test_tool_admission_is_uniform_and_preserves_full_source():
@@ -212,8 +212,8 @@ def test_checkpoint_replay_reads_only_tail_and_keeps_dynamic_prefix(checkpoint_d
     restored = asyncio.run(
         ContextAssemblyPipeline().assemble_answer_context("window", "next")
     )
-    assert restored.window_messages[:2] == replaced
-    assert [m["content"] for m in restored.window_messages[2:]] == [
+    assert restored.window_messages[: len(replaced)] == replaced
+    assert [m["content"] for m in restored.window_messages[len(replaced) :]] == [
         "exact-3",
         "exact-4",
     ]
@@ -263,7 +263,12 @@ def test_midturn_checkpoint_retains_exact_task_runtime_and_call_coverage(
     replacement, retry = asyncio.run(reducer.on_context_too_long(source))
     assert retry
     assert anchor in replacement
-    assert window.kind(replacement[-1]) == "summary"
+    summary_index = next(
+        i for i, m in enumerate(replacement) if window.kind(m) == "summary"
+    )
+    assert replacement.index(anchor) > summary_index
+    assert replacement[-2]["tool_call_id"] == "call"
+    assert window.kind(replacement[-1]) == "runtime_state"
     checkpoint = store.load("window", scope="turn")
     assert checkpoint["state"]["covered_call_ids"] == ["call"]
     assert "no permission" in str(checkpoint["state"]["messages"])

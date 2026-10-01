@@ -17,6 +17,7 @@ from typing import Any
 from app.core.context_budget import ContextCapacityError, request_tokens
 from app.core.context_messages import normalize_tool_pairs
 from app.conversation.context_window import admit, item, kind
+from app.conversation.context_reduction import tool_message
 from app.core.tokens import token_count
 from app.rag.grounding.builder import grounding_builder
 
@@ -106,11 +107,11 @@ def reconstruct_history_messages(turns: list[dict]) -> list[dict[str, Any]]:
                 # the first result so later text/tool cycles stay distinct.
                 flush_assistant()
                 messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": block.get("tool_use_id", ""),
-                        "content": str(block.get("content") or ""),
-                    }
+                    tool_message(
+                        block.get("tool_use_id", ""),
+                        str(block.get("content") or ""),
+                        block.get("source_turn_id") or turn.get("turn_id"),
+                    )
                 )
         flush_assistant()
 

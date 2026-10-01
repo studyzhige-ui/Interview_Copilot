@@ -217,6 +217,7 @@ def _load_tool_resume_snapshot(
             "prior": [
                 {
                     "call_id": row.call_id,
+                    "turn_id": row.turn_id,
                     "tool_name": row.tool_name,
                     "arguments": dict(row.arguments_json or {}),
                     "result": dict(row.result_json or {}),
@@ -228,6 +229,7 @@ def _load_tool_resume_snapshot(
             ],
             "waiting": {
                 "call_id": waiting.call_id,
+                "turn_id": waiting.turn_id,
                 "tool_name": waiting.tool_name,
                 "arguments": dict(waiting.arguments_json or {}),
             },
@@ -258,6 +260,8 @@ def _append_replayed_tool(
     blocks: list[dict[str, Any]],
     call: dict[str, Any],
 ) -> None:
+    from app.conversation.context_reduction import tool_message
+
     call_id = str(call["call_id"])
     tool_name = str(call["tool_name"])
     arguments = dict(call.get("arguments") or {})
@@ -279,7 +283,7 @@ def _append_replayed_tool(
                     }
                 ],
             },
-            {"role": "tool", "tool_call_id": call_id, "content": result_text},
+            tool_message(call_id, result_text, call.get("turn_id")),
         ]
     )
     blocks.extend(
@@ -293,6 +297,7 @@ def _append_replayed_tool(
             {
                 "type": "tool_result",
                 "tool_use_id": call_id,
+                "source_turn_id": call.get("turn_id"),
                 "is_error": bool(result.get("error")),
                 "latency_ms": float(call.get("duration_ms") or 0),
                 "summary": _result_summary(result),
@@ -321,6 +326,7 @@ def _load_completed_tool_tail(turn_id: str, user_pk: int) -> list[dict]:
         return [
             {
                 "call_id": row.call_id,
+                "turn_id": row.turn_id,
                 "tool_name": row.tool_name,
                 "arguments": dict(row.arguments_json or {}),
                 "result": dict(row.result_json or {}),
@@ -681,6 +687,7 @@ class AgentLoopStrategy:
                         else cancelled_by_id.get(call_id)
                     )
                     if replay is not None:
+                        replay = {**replay, "turn_id": ctx.turn_id}
                         _append_replayed_tool(messages, blocks, replay)
                         budget.tool_call_ids.add(call_id)
             else:
@@ -1749,11 +1756,9 @@ class AgentLoopStrategy:
                 )
                 if incident:
                     replan_message = incident
-                tool_msg = {
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": result_text,
-                }
+                from app.conversation.context_reduction import tool_message
+
+                tool_msg = tool_message(tc.id, result_text, ctx.turn_id)
                 messages.append(tool_msg)
                 turn_tool_messages.append(tool_msg)
 
@@ -1775,6 +1780,7 @@ class AgentLoopStrategy:
                     {
                         "type": "tool_result",
                         "tool_use_id": tc.id,
+                        "source_turn_id": ctx.turn_id,
                         "is_error": tool_error,
                         "latency_ms": latency_ms,
                         "summary": _result_summary(observation),

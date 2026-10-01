@@ -48,9 +48,14 @@ class ReadFileArgs(BaseModel):
         max_length=128,
         description=(
             "Exact Tool Call ID shown inside a <tool-result-reference> block. "
-            "Reads the canonical redacted result from the current Turn and "
+            "Reads the canonical redacted result from the current Turn (or source_turn_id) and "
             "takes precedence over attachment_ref_id."
         ),
+    )
+    source_turn_id: str = Field(
+        default="",
+        max_length=128,
+        description="Source Turn ID from a tool-result-reference; permits paging an older result in this same conversation.",
     )
     offset: int = Field(
         default=0,
@@ -157,7 +162,7 @@ def _read_canonical_tool_result(
             db.query(AgentToolCall)
             .filter(
                 AgentToolCall.call_id == args.tool_call_id,
-                AgentToolCall.turn_id == ctx.turn_id,
+                AgentToolCall.turn_id == (args.source_turn_id or ctx.turn_id),
                 AgentToolCall.session_id == ctx.session_id,
                 AgentToolCall.user_id == user_pk,
             )
@@ -184,6 +189,7 @@ def _read_canonical_tool_result(
             args,
             {
                 "tool_call_id": row.call_id,
+                "source_turn_id": row.turn_id,
                 "tool_name": row.tool_name,
                 "result_status": row.status,
                 "read_mode": "canonical_tool_result",
@@ -380,7 +386,7 @@ registry.register(
             "Read a scoped attachment or canonical Tool result with paging. "
             "For an attached file, pass its validated attachment_ref_id from "
             "the [Attachments] manifest. For an oversized Tool result, pass the "
-            "exact tool_call_id from its <tool-result-reference> block."
+            "exact tool_call_id and source_turn_id from its <tool-result-reference> block."
         ),
         args_model=ReadFileArgs,
         handler=_read_file_handler,

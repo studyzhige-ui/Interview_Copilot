@@ -8,6 +8,7 @@ from copy import deepcopy
 from app.core.context_budget import ContextCapacityError, RequestBudget, request_tokens
 from app.conversation import context_store
 from app.conversation.context_window import compact, admit, kind
+from app.conversation.context_reduction import reduce_tool_results
 
 
 async def prepare(
@@ -31,24 +32,45 @@ async def prepare(
     budget = RequestBudget.resolve(
         profile.context_window, assembled.output_token_reserve
     )
-    history = assembled.window_messages
+    history = assembled.window_messages or []
+    reduced, reduction = reduce_tool_results(
+        candidate.with_leading_system_message(), input_limit=budget.input_limit
+    )
+    history = reduced[1 : 1 + len(history)]
     prefix = request_tokens(
         [{"role": "system", "content": candidate.system}], tool_schemas
     )
-    if history and (
+    needs_summary = history and (
         force
         or budget.should_compact(
-            request_tokens(candidate.with_leading_system_message(), tool_schemas),
+            request_tokens(reduced, tool_schemas),
             prefix,
         )
-    ):
+    )
+    report = dict(assembled.context_report.get("compaction", {}))
+    replacement = history
+    if needs_summary:
         replaced, report = await compact(
             [{"role": "system", "content": candidate.system}, *history],
             client=client,
             profile=profile,
             output_tokens=assembled.output_token_reserve,
+            tool_schemas=tool_schemas,
+            reserved_messages=reduced[1 + len(history) :],
         )
         replacement = [m for m in replaced if m.get("role") != "system"]
+    if needs_summary or reduction["status"] == "reduced":
+        report["tool_reduction"] = reduction
+        pending = deepcopy(assembled)
+        pending.window_messages = replacement
+        pending.context_report["compaction"] = report
+        # Validate the actual envelope before publishing a durable replacement.
+        projection = compose_provider_context(
+            pending,
+            renderer=renderer,
+            system_prompt=system_prompt,
+            tool_schemas=tool_schemas,
+        )
         # Publish only after the checkpoint is durable and fenced.
         saved = await asyncio.to_thread(
             context_store.save,
@@ -64,9 +86,9 @@ async def prepare(
             raise ContextCapacityError(
                 "上下文已被另一执行更新，请重试；原始历史仍然保留。"
             )
-        assembled.window_messages = replacement
-        assembled.checkpoint_version = saved["version"]
-        assembled.context_report["compaction"] = report
+        pending.checkpoint_version = saved["version"]
+        assembled.__dict__.update(pending.__dict__)
+        return projection
     return compose_provider_context(
         assembled,
         renderer=renderer,

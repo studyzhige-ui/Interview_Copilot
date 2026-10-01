@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from app.core.context_budget import RequestBudget, request_tokens, ContextCapacityError
 from app.conversation.context_window import admit, compact, item
+from app.conversation.context_reduction import reduce_tool_results
 
 
 class ActiveTurnContextReducer:
@@ -55,14 +56,62 @@ class ActiveTurnContextReducer:
 
     async def compress(self, messages):
         projected = admit(messages)
+        projected, reduction = reduce_tool_results(
+            projected, input_limit=self.request_budget.input_limit
+        )
         prefix = request_tokens(
             [m for m in projected if m.get("role") == "system"], self.tool_schemas
         )
-        if self.request_budget.should_compact(self._measure_tokens(projected), prefix):
-            projected = await self._compact(projected)
+        if (
+            self.request_budget.should_compact(self._measure_tokens(projected), prefix)
+            or request_tokens(projected, self.tool_schemas) >= self.blocking_limit
+        ):
+            projected = await self._compact(projected, reduction=reduction)
+        elif reduction["status"] == "reduced":
+            await self._publish(
+                projected, {"status": "reduced", "tool_reduction": reduction}
+            )
         return projected, self.is_at_blocking_limit(self._measure_tokens(projected))
 
-    async def _compact(self, messages):
+    def _restore_task(self, replacement):
+        replacement = list(replacement)
+        anchor_id = (self.task_anchor or {}).get("_context", {}).get("id")
+        initial_ids = {m.get("_context", {}).get("id") for m in self.initial_context}
+        replacement = [
+            m
+            for m in replacement
+            if m.get("_context", {}).get("kind") != "runtime_state"
+            and m.get("_context", {}).get("id") not in initial_ids - {None}
+        ]
+        if self.task_anchor is not None:
+            index = next(
+                (
+                    i
+                    for i, m in enumerate(replacement)
+                    if anchor_id and m.get("_context", {}).get("id") == anchor_id
+                ),
+                None,
+            )
+            if index is None:
+                index = next(
+                    (
+                        i + 1
+                        for i, m in enumerate(replacement)
+                        if m.get("_context", {}).get("kind") == "summary"
+                    ),
+                    len(replacement),
+                )
+                replacement[index:index] = [self.task_anchor]
+            else:
+                replacement[index] = self.task_anchor
+            replacement[index:index] = self.initial_context
+        if self.runtime_state:
+            replacement.append(
+                item({"role": "user", "content": self.runtime_state}, "runtime_state")
+            )
+        return replacement
+
+    async def _compact(self, messages, *, reduction=None):
         if self.client is None:
             from app.core.llm_client_factory import build_provider_client_for_role
 
@@ -74,22 +123,21 @@ class ActiveTurnContextReducer:
             client=self.client,
             profile=self.profile,
             output_tokens=self.output_tokens,
+            tool_schemas=self.tool_schemas,
+            finalize=self._restore_task,
         )
-        # The active task is exact, not the possibly clipped retained-user slice.
+        if reduction is not None:
+            report["tool_reduction"] = reduction
+        await self._publish(replacement, report, source=messages)
+        self._usage_prompt_tokens = None
+        self._usage_request_estimate = None
+        return replacement
+
+    async def _publish(self, replacement, report, *, source=None):
+        if request_tokens(replacement, self.tool_schemas) >= self.blocking_limit:
+            raise ContextCapacityError("必要上下文仍超出窗口，未发布替换检查点。")
+        messages = source if source is not None else replacement
         anchor_id = (self.task_anchor or {}).get("_context", {}).get("id")
-        if self.task_anchor is not None:
-            replacement = [
-                m
-                for m in replacement
-                if not (anchor_id and m.get("_context", {}).get("id") == anchor_id)
-            ]
-            insertion = max(1, len(replacement) - 1)  # before final summary
-            replacement[insertion:insertion] = [*self.initial_context, self.task_anchor]
-        if self.runtime_state:
-            replacement.insert(
-                len(replacement) - 1,
-                item({"role": "user", "content": self.runtime_state}, "runtime_state"),
-            )
         anchor_index = next(
             (
                 i
@@ -128,9 +176,6 @@ class ActiveTurnContextReducer:
             self.checkpoint_version = saved["version"]
             self.assembled.context_report["compaction"] = report
         self.covered_call_ids = covered
-        self._usage_prompt_tokens = None
-        self._usage_request_estimate = None
-        return replacement
 
     async def on_context_too_long(self, messages):
         if self.has_attempted_reactive_compact:
