@@ -8,7 +8,7 @@ const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 async function main() {
   const asar = await import('@electron/asar');
   const archive = path.join(release, 'win-unpacked/resources/app.asar');
-  const packaged = asar.listPackage(archive);
+  const packaged = asar.listPackage(archive).map(name => name.replaceAll('\\', '/'));
   const required = ['main.cjs', 'runtime/compose.cjs', 'permissions.cjs', 'auth-callback.cjs', 'product-preload.cjs', 'runtime-preload.cjs', 'setup/index.html'];
   for (const name of required) {
     assert.ok(packaged.includes('/' + name), `Missing packaged ${name}`);
