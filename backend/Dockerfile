@@ -94,8 +94,10 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/api/v1/health/ready || exit 1
+# This image is shared by HTTP, Celery, Beat and migrations. Keep role-specific
+# readiness in Compose: only the API serves the HTTP health endpoint. A disabled
+# inherited image healthcheck creates a NONE descriptor that some Compose
+# versions cannot treat as running during `up --wait`.
 
 # Entry point bootstraps data dir + drops privileges. CMD is whatever
 # server (uvicorn / gunicorn / celery) the compose service wants.

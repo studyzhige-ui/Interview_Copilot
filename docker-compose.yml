@@ -20,11 +20,9 @@ x-backend-service: &backend-service
   environment: *backend-environment
   volumes:
     - ./data:/app/data
-  # The shared image defaults to an HTTP API healthcheck. Workers, Beat, and
-  # one-shot migrations do not listen on port 8080, so disable it here and
-  # opt the API service back in below.
-  healthcheck:
-    disable: true
+  # Role-specific health checks belong to the API/DB/Redis services below.
+  # Workers and Beat are running services, not HTTP servers; migrations must
+  # finish successfully before their dependents may start.
   networks:
     - copilot_net
 
