@@ -23,6 +23,8 @@ dependencies = [
     "boto3==1.43.67",
     # PostgreSQL vector projection; local ML libraries stay in their own environment.
     "pgvector==0.5.0",
+    # Optional Chinese lexical profile runs in API/worker, outside the ML child.
+    "jieba==0.42.1",
     # Configuration and security
     "python-dotenv==1.2.2",
     "pydantic[email]==2.13.4",

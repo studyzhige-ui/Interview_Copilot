@@ -23,6 +23,10 @@ def socket_path():
 
 
 def _binding(role, model, dimension):
+    from app.core.hf_runtime import resolve_local_snapshot
+    from .qwen_rag import embedding_query_prefix, reranker_contract
+
+    path = resolve_local_snapshot(model) or model
     return binding_for(
         role,
         model,
@@ -31,8 +35,11 @@ def _binding(role, model, dimension):
         settings.LOCAL_EMBED_MAX_TOKENS
         if role == "embedding"
         else settings.RAG_RERANK_INPUT_TOKENS,
-        settings.LOCAL_EMBED_QUERY_PREFIX if role == "embedding" else "",
+        embedding_query_prefix(path, settings.LOCAL_EMBED_QUERY_PREFIX)
+        if role == "embedding"
+        else "",
         settings.LOCAL_EMBED_TEXT_PREFIX if role == "embedding" else "",
+        adapter_contract=reranker_contract(path) if role == "reranking" else None,
     )
 
 

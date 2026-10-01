@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     # One PostgreSQL store; all new indexes use pgvector and scoped BM25.
     RAG_SIMILARITY_METRIC: Literal["IP", "COSINE", "L2"] = "IP"
     RAG_INDEX_NAMESPACE: str = "interview_copilot_rag"
+    RAG_LEXICAL_ANALYZER: Literal["cjk_bigrams", "jieba_search"] = "cjk_bigrams"
     RAG_INDEX_STATEMENT_TIMEOUT_MS: int = Field(5000, ge=100, le=60000)
     RAG_INDEX_LOCK_TIMEOUT_MS: int = Field(3000, ge=100, le=60000)
     RAG_INDEX_MAX_DOCUMENT_CHUNKS: int = Field(10000, ge=1, le=100000)

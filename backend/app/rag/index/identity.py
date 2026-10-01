@@ -14,7 +14,7 @@ import re
 from dataclasses import asdict, dataclass
 
 from app.core.config import settings
-from app.rag.index.lexical import ANALYZER_VERSION
+from app.rag.index.lexical import ANALYZER_VERSION, current_analyzer_contract
 
 INDEX_SCHEMA_VERSION = "knowledge-pgvector-v3"
 PARSER_CONTRACT_VERSION = "canonical-document-v3-isolated-cpu"
@@ -64,17 +64,9 @@ class IndexIdentity:
 def _embedding_adapter() -> str:
     if settings.EMBEDDING_PROVIDER != "local":
         return "provider-native-v1"
-    from app.local_inference.config import binding_for
+    from app.local_inference.rag import _binding
 
-    return binding_for(
-        "embedding",
-        settings.EMBEDDING_MODEL,
-        settings.MODEL_REVISIONS_JSON.get(settings.EMBEDDING_MODEL),
-        settings.EMBEDDING_DIM,
-        settings.LOCAL_EMBED_MAX_TOKENS,
-        settings.LOCAL_EMBED_QUERY_PREFIX,
-        settings.LOCAL_EMBED_TEXT_PREFIX,
-    )
+    return _binding("embedding", settings.EMBEDDING_MODEL, settings.EMBEDDING_DIM)
 
 
 def current_index_identity() -> IndexIdentity:
@@ -97,7 +89,7 @@ def current_index_identity() -> IndexIdentity:
         rerank_input_tokens=int(settings.RAG_RERANK_INPUT_TOKENS),
         query_token_reserve=int(settings.RAG_QUERY_TOKEN_RESERVE),
         retrieval_text_contract=RETRIEVAL_TEXT_VERSION,
-        analyzer_contract=ANALYZER_VERSION,
+        analyzer_contract=current_analyzer_contract(),
         dense_index_type="EXACT",
     )
 

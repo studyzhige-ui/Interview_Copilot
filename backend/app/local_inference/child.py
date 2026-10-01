@@ -24,8 +24,7 @@ from app.local_inference.protocol import (  # noqa: E402
 )
 
 
-class InputTooLong(ValueError):
-    pass
+from app.local_inference.errors import InputTooLong  # noqa: E402
 
 
 def load_model(spec):
@@ -42,11 +41,16 @@ def load_model(spec):
 
         return load(spec)
     import torch
-    from sentence_transformers import CrossEncoder, SentenceTransformer
 
     torch.set_num_threads(4)
     if spec.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("cuda_unavailable")
+    from app.local_inference.qwen_rag import is_qwen3, Qwen3Reranker
+
+    if spec.role == "reranking" and is_qwen3(spec.model_path):
+        return Qwen3Reranker(spec)
+    from sentence_transformers import CrossEncoder, SentenceTransformer
+
     common = dict(device=spec.device, local_files_only=True, trust_remote_code=False)
     if spec.role == "embedding":
         model = SentenceTransformer(spec.model_path, **common)
@@ -77,6 +81,8 @@ def infer(model, spec, task):
         from app.local_inference.qwen_synthesis import infer as infer_synthesis
 
         return infer_synthesis(model, spec, task)
+    from app.local_inference.qwen_rag import Qwen3Reranker
+
     texts = task["texts"]
     with torch.inference_mode():
         if spec.role == "embedding":
@@ -97,6 +103,8 @@ def infer(model, spec, task):
                 show_progress_bar=False,
                 convert_to_numpy=True,
             ).tolist()
+        elif isinstance(model, Qwen3Reranker):
+            result = model.scores(task["query"], texts)
         else:
             query = task["query"]
             lengths = model.tokenizer(

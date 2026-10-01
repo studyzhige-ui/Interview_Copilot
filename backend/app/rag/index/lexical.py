@@ -12,10 +12,35 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
+from functools import lru_cache
 from collections import Counter
 from collections.abc import Mapping, Sequence
 
 ANALYZER_VERSION = "cjk-bigram-identifiers-bm25-v1"
+JIEBA_ANALYZER_VERSION = "postgres-jieba-0.42.1-search-bm25-1.2-0.75-v1"
+
+
+def current_analyzer_contract() -> str:
+    from app.core.config import settings
+
+    return (
+        JIEBA_ANALYZER_VERSION
+        if settings.RAG_LEXICAL_ANALYZER == "jieba_search"
+        else ANALYZER_VERSION
+    )
+
+
+@lru_cache(maxsize=1)
+def _jieba_tokenizer():
+    import jieba
+
+    if jieba.__version__ != "0.42.1":
+        raise ValueError("jieba_analyzer_version_mismatch")
+    tokenizer = jieba.Tokenizer()
+    tokenizer.initialize()
+    return tokenizer
+
+
 BM25_K1 = 1.2
 BM25_B = 0.75
 MAX_TEXT_BYTES = 128_000
@@ -40,6 +65,16 @@ def term_counts(text: str, *, query: bool = False) -> dict[str, int]:
         MAX_QUERY_BYTES if query else MAX_TEXT_BYTES
     ):
         raise ValueError("lexical input exceeds the declared byte capacity")
+    if current_analyzer_contract() == JIEBA_ANALYZER_VERSION:
+        normalized = unicodedata.normalize("NFKC", text).casefold()
+        counts = Counter(
+            token
+            for token in _jieba_tokenizer().cut_for_search(normalized, HMM=False)
+            if token.strip() and any(character.isalnum() for character in token)
+        )
+        if query and len(counts) > MAX_QUERY_TERMS:
+            raise ValueError("too many distinct lexical query terms")
+        return dict(counts)
     counts: Counter[str] = Counter()
     for match in _PARTS.finditer(unicodedata.normalize("NFKC", text)):
         raw = match.group()
