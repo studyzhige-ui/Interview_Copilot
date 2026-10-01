@@ -72,6 +72,10 @@ jobs:
       IC_DESKTOP_ACCEPTANCE: "1"
       IC_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
+      - name: Report the unresolved storage acceptance blocker
+        run: |
+          echo "::error::Storage acceptance is blocked: the historical MinIO images are unavailable and vendor security advisories remain unresolved. An approved storage remedy must be implemented before this gate can pass."
+          exit 1
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
