@@ -64,9 +64,17 @@ class IndexIdentity:
 def _embedding_adapter() -> str:
     if settings.EMBEDDING_PROVIDER != "local":
         return "provider-native-v1"
-    from app.local_inference.rag import _binding
+    from app.local_inference.config import binding_for
 
-    return _binding("embedding", settings.EMBEDDING_MODEL, settings.EMBEDDING_DIM)
+    return binding_for(
+        "embedding",
+        settings.EMBEDDING_MODEL,
+        settings.MODEL_REVISIONS_JSON.get(settings.EMBEDDING_MODEL),
+        settings.EMBEDDING_DIM,
+        settings.LOCAL_EMBED_MAX_TOKENS,
+        settings.LOCAL_EMBED_QUERY_PREFIX,
+        settings.LOCAL_EMBED_TEXT_PREFIX,
+    )
 
 
 def current_index_identity() -> IndexIdentity:

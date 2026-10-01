@@ -1,5 +1,7 @@
 # MTRAG 检索评测统一配置
 
+本目录保留历史 BGE/Qwen 对照实验，独立于产品 RAG 主线。主线模型为 BGE；此目录中的 Qwen 路径和实验适配器不表示主线支持或使用 Qwen 检索模型。
+
 本目录独立于旧题库、生产环境 `.env` 的 RAG 设置和旧 release 评测脚本。
 `defaults.json` 是本次实验唯一默认配置；只从环境或项目 `.env` 读取
 `DEEPSEEK_API_KEY`，不在文件或报告中保存密钥。

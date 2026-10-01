@@ -12,7 +12,7 @@
     "retain_remote_migration_history": 4,
     "ported_context": 14,
     "adapted_to_canonical_identity": 1,
-    "adapted_to_broker": 2,
+    "checkpoint_only_experiment": 2,
     "preserved_historical_implementation": 3,
     "preserved_evaluation": 144,
     "ported_evaluation_contract": 1
@@ -478,7 +478,7 @@
       "source_status": "M",
       "destination_path": "backend/app/rag/index/identity.py",
       "decision": "adapted_to_canonical_identity",
-      "reason": "Keep canonical generations; use the actual broker embedding binding and selected lexical analyzer in the index fingerprint."
+      "reason": "Keep remote BGE broker embedding binding; only the selectable lexical analyzer changes generation identity."
     },
     {
       "source_path": "backend/app/rag/index/knowledge.py",
@@ -518,9 +518,9 @@
     {
       "source_path": "backend/app/rag/qwen_local.py",
       "source_status": "A",
-      "destination_path": "backend/app/local_inference/qwen_rag.py",
-      "decision": "adapted_to_broker",
-      "reason": "Model-specific retrieval semantics live in the isolated ML child; the API uses accounted broker proxies."
+      "destination_path": null,
+      "decision": "checkpoint_only_experiment",
+      "reason": "Qwen retrieval belongs to the historical comparison experiment; product RAG remains BGE. The prior production port was withdrawn."
     },
     {
       "source_path": "backend/app/rag/reranker_registry.py",
@@ -938,9 +938,9 @@
     {
       "source_path": "backend/tests/test_rag/test_qwen_local.py",
       "source_status": "A",
-      "destination_path": "backend/tests/test_local_inference/test_qwen_rag.py",
-      "decision": "adapted_to_broker",
-      "reason": "Model-specific retrieval semantics live in the isolated ML child; the API uses accounted broker proxies."
+      "destination_path": null,
+      "decision": "checkpoint_only_experiment",
+      "reason": "Qwen retrieval belongs to the historical comparison experiment; product RAG remains BGE. The prior production port was withdrawn."
     },
     {
       "source_path": "backend/tests/test_rag/test_retriever_scope.py",
@@ -2360,5 +2360,13 @@
       ],
       "reason": "Full regression revealed stat-only same-size source mutation detection and an outdated read_file schema assertion; bounded content hashing and scoped schema validation repair both."
     }
-  ]
+  ],
+  "scope_correction": {
+    "product_rag_models": [
+      "BAAI/bge-m3",
+      "BAAI/bge-reranker-v2-m3"
+    ],
+    "qwen_retrieval": "checkpoint and standalone evaluation history only; production port withdrawn",
+    "hnsw": "Local prior physical-table implementation used hnsw. Remote baseline uses EXACT. This does not mean the HNSW algorithm is obsolete; production latency/recall equivalence was not validated."
+  }
 }

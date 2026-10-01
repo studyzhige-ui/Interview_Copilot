@@ -12,15 +12,7 @@ from .protocol import LOCAL_EMBEDDING_CONTRACT, ROLES, loads
 
 
 def binding_for(
-    role,
-    model_id,
-    revision,
-    dimension,
-    max_tokens,
-    query_prefix="",
-    text_prefix="",
-    *,
-    adapter_contract=None,
+    role, model_id, revision, dimension, max_tokens, query_prefix="", text_prefix=""
 ) -> str:
     # Execution details (device, cache, interpreter) do not change semantic identity.
     # Changing an instruction or adapter contract DOES require a new index.
@@ -28,7 +20,7 @@ def binding_for(
     from .speaker_audio import DIARIZATION_CONTRACT
     from .synthesis_audio import SYNTHESIS_CONTRACT
 
-    contract = adapter_contract or {
+    contract = {
         "transcription": ASR_CONTRACT,
         "alignment": ALIGN_CONTRACT,
         "diarization": DIARIZATION_CONTRACT,
@@ -95,15 +87,6 @@ class ModelSpec:
             value = getattr(self, name)
             if not isinstance(value, str) or len(value) > 2048:
                 raise ValueError("invalid_prompt_prefix")
-        if self.role == "embedding":
-            from .qwen_rag import embedding_query_prefix
-
-            object.__setattr__(
-                self,
-                "query_prefix",
-                embedding_query_prefix(self.model_path, self.query_prefix),
-            )
-
         if self.role in {
             "reranking",
             "transcription",
@@ -121,8 +104,6 @@ class ModelSpec:
 
     @property
     def binding(self):
-        from .qwen_rag import reranker_contract
-
         return binding_for(
             self.role,
             self.model_id,
@@ -131,9 +112,6 @@ class ModelSpec:
             self.max_tokens,
             self.query_prefix,
             self.text_prefix,
-            adapter_contract=reranker_contract(self.model_path)
-            if self.role == "reranking"
-            else None,
         )
 
 

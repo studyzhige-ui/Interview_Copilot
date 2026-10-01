@@ -77,5 +77,5 @@
     "staged_paths": 0,
     "working_files_match_checkpoint": true
   },
-  "artifact_note": "Final source differs from this tested commit only in integration documentation and validation evidence."
+  "artifact_note": "Historical full validation of source commit 633f66e. The subsequent BGE scope correction withdraws Qwen production retrieval; corrected-source evidence is recorded separately."
 }

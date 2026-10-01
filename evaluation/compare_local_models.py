@@ -1,4 +1,4 @@
-"""Calibration-only local model comparison with measured retrieval stages.
+"""Calibration-only production BGE comparison with measured retrieval stages.
 
 Reuse the frozen planner snapshot; never call the planner or open the held-out split.
 Run only against an isolated evaluation database. --rebuild replaces the selected
@@ -23,13 +23,8 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=["bge", "qwen"], required=True)
+    parser.add_argument("--profile", choices=["bge"], default="bge")
     parser.add_argument("--rerank-input-tokens", type=int, default=512)
-    parser.add_argument(
-        "--qwen-root",
-        type=Path,
-        help="Existing Qwen model directory in the current Linux/WSL environment",
-    )
     parser.add_argument("--user", default="release_eval_20260923")
     parser.add_argument("--rebuild", action="store_true")
     parser.add_argument(
@@ -53,18 +48,8 @@ def main():
     settings.RAG_CHUNK_OVERLAP = 64
     settings.RAG_CANDIDATE_COUNT = 20
     settings.RAG_FINAL_COUNT = 3
-    if args.profile == "qwen":
-        if args.qwen_root is None and not settings.MODEL_ROOT_DIR:
-            parser.error("Qwen profile requires --qwen-root or MODEL_ROOT_DIR")
-        from app.core.model_assets import local_path
-
-        model_root = local_path(args.qwen_root or settings.MODEL_ROOT_DIR).resolve()
-        settings.MODEL_ROOT_DIR = str(model_root)
-        settings.EMBEDDING_MODEL = "Qwen3-Embedding-0.6B"
-        settings.RERANKER_MODEL = "Qwen3-Reranker-0.6B"
-    else:
-        settings.EMBEDDING_MODEL = "BAAI/bge-m3"
-        settings.RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+    settings.EMBEDDING_MODEL = "BAAI/bge-m3"
+    settings.RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
     if not settings.DATABASE_URL.rsplit("/", 1)[-1].startswith("rag_compare"):
         raise ValueError("This diagnostic must use an isolated rag_compare database")
 

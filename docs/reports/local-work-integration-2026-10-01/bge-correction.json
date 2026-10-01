@@ -1,0 +1,48 @@
+{
+  "date": "2026-10-01",
+  "scope": "Production RAG remains BGE; withdraw newly introduced Qwen retrieval adapter and retain standalone experiment history.",
+  "parent_commit": "b4df4824f97293848af0c239e0b98439d3ef31b3",
+  "source_sha256_utf8_lf": {
+    "backend/app/local_inference/child.py": "f1ea356aca9434c760ef7a3870524c8e95468eb30b4ed12381c11e5b35e96bf2",
+    "backend/app/local_inference/config.py": "b141213fb64bdc20b83a2e893807f7d147e327bf3aef12312418fb852eb74266",
+    "backend/app/local_inference/errors.py": "7a27cda937d51a13a6f7209f5d8f85c09b9a8d9dfd32c99c91ec1be291cb28f8",
+    "backend/app/local_inference/rag.py": "67daf265d6cbc9b2b3e965344c63f8cb959d06ad9744e6688fd14e6656549e7c",
+    "backend/app/rag/index/identity.py": "699cafe600e48e6c51edffc4bdf22ba4782ec27d8109fac7ddd4828529c99f68",
+    "evaluation/compare_local_models.py": "d2fa36288c0266b77290e60007f8b71ad0e7eb3668053edbf1aa0bd6ec0e246e"
+  },
+  "removed_files": [
+    "backend/app/local_inference/qwen_rag.py",
+    "backend/tests/test_local_inference/test_qwen_rag.py"
+  ],
+  "results": {
+    "bge_correction_regression": {
+      "passed": 532,
+      "failed": 0,
+      "skipped": 17,
+      "skip_reasons": {
+        "requires local FFmpeg on POSIX": 15,
+        "Requires actual local embedding/reranker models; not executed by unit or database-only CI.": 1,
+        "release corpus is downloaded by the explicit evaluation setup": 1
+      },
+      "wall_seconds": 60.028,
+      "junit_path": "data/runtime/bge-correction-20261001/linux-results.xml"
+    },
+    "jieba_postgres": {
+      "passed": 12,
+      "failed": 0,
+      "skipped": 0,
+      "skip_reasons": {},
+      "wall_seconds": 30.522,
+      "junit_path": "data/runtime/bge-correction-20261001/jieba-results.xml"
+    }
+  },
+  "lint": {
+    "tool": "ruff==0.16.2",
+    "check": "passed",
+    "format_check": "922 files passed"
+  },
+  "cli": "BGE --help passed; --profile qwen rejected with exit code 2.",
+  "full_suite_note": "The previous 2506-pass full suite corresponds to source commit 633f66e. This scope correction used focused regression rather than repeating the entire suite.",
+  "hnsw_note": "HNSW optimization remains in checkpoint a364152; current remote EXACT backend has not been validated as performance-equivalent on actual corpus.",
+  "business_database_modified": false
+}

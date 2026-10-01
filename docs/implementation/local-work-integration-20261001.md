@@ -9,6 +9,10 @@
 
 检查点用临时 Git index 保存全部非忽略文件（333 个变更文件），核对其内容与原工作区一致；原 main、index 和工作区保留。`.env`、模型权重、下载语料、缓存和业务数据库仍在原位置，不包含在代码检查点中。本次没有操作业务数据或发布远端分支。
 
+## 主线范围
+
+产品 RAG 主线模型保持 `BAAI/bge-m3` 和 `BAAI/bge-reranker-v2-m3`。本地检查点包含 BGE/Qwen 对比实验；此前把该实验的 Qwen 检索适配迁入产品运行模块，扩大了迁入范围。本次纠正撤回新增的 Qwen RAG 模块及其 config/child/代理绑定改动，独立评测和历史报告仍留档。`compare_local_models.py` 只接受 BGE profile。
+
 ## 设计层差异与处理
 
 原本地工作区混合了已发布 main 的安全加固与独有的上下文、检索和评测工作。直接合并会同时恢复旧 service 路径、旧 outbox 任务名和旧检索表，造成模块所有权与迁移合同冲突。此次先以 `812bf76` 区分已发布的加固，再按远端的实际模块路径迁入独有行为。
@@ -16,16 +20,16 @@
 | 模块 | 迁入结果 |
 | --- | --- |
 | 上下文 | 聚合工具结果预算、可恢复跨 Turn 引用、前缀摘要与近期完整交互、检查点幂等恢复迁入共享上下文层；Chat 服务调用转到 `conversation/application`。 |
-| Qwen | 查询专用指令、训练过的 causal yes/no 评分迁入 `local_inference`；API/worker 保留 broker 代理和统一用量记账，不加载 GPU 模型。推理绑定和 embedding 索引指纹记录实际指令/适配合同。 |
+| 模型 | 保持远端 BGE 的 broker 配置、推理、指令和绑定合同。本次新增的 Qwen 检索运行适配已撤回；实验保存在检查点和独立评测中。 |
 | 中文词法检索 | 本地 jieba 0.42.1 search-mode 合同接入 `rag/index/lexical.py`，使用远端统一检索表、租户和可见性过滤。默认保留远端 CJK 分析器，选择 jieba 会生成独立代次。 |
 | 评测 | MTRAG、职业资料/专业资料候选集、模型比较工具与历史报告保存；模型比较入口转到 `hybrid_index`，评测 lint/格式对齐远端 CI。独立实验模型适配器保留固定实验语义。 |
 | 已发布加固、前端 | 原本地认证、内存生命周期、取消、outbox 租约和前端交互修复已经纳入远端历史，不重复恢复旧接口。 |
-| 旧存储/迁移 | 本地 `rag_vec_*` 表/HNSW 架构、`knowledge_index_*` 任务名、0047/0048 和 0049→0048 迁移连接保留在检查点；现分支采用远端的规范检索代次、`retrieval_*` 任务和已发布迁移历史。不能将旧迁移粘入当前链。 |
+| 本地原检索实现与迁移 | 本地 `rag_vec_*` 表/HNSW 架构、`knowledge_index_*` 任务名、0047/0048 和 0049→0048 迁移连接保留在检查点；现分支采用远端的规范检索代次、`retrieval_*` 任务和已发布迁移历史。不能将旧迁移粘入当前链。 |
 
 ## 可审查提交与文件审计
 
 - `9d7adbb`：上下文预算、可恢复结果引用和摘要/近期窗口。
-- `2e78fb5`：broker 内 Qwen adapter、jieba 可选合同与索引语义指纹。
+- `2e78fb5`：jieba 可选合同；此提交中 Qwen 检索运行适配已由本次纠正撤回。
 - `c4973a1`：全量回归发现的音频源字节校验与 scoped read 接口回归修复。
 - 评测、历史证据和迁入审计作为最后一个模块提交。
 
@@ -41,9 +45,13 @@
 
 选择本地中文分析器可设 `RAG_LEXICAL_ANALYZER=jieba_search`，并按正常代次重建流程验证。该选项改变词法合同，不承诺旧报告的召回率在新规范检索库中逐项复现。默认 `cjk_bigrams` 保留远端行为。
 
-Qwen3 embedding 通过实际本地 `config.json` 识别；没有显式设置 query prefix 时使用本地检查点的查询指令，文档前缀仍由现有配置控制。配置准备工具、ModelSpec、API 代理和索引身份使用同一有效前缀。Qwen3 reranking 使用 causal LM 的 yes/no 概率，不创建分类头，binding 与旧 CrossEncoder 不同。加载仍只读已验证本地资产，禁止下载和远端代码执行。
+BGE 运行合同保持远端基线。音频源验证增加两次有容量上限的流式读取，其真实端到端 I/O 延迟未单独测量。
 
-重排 token 硬上限包括指令模板和所有特殊 token，超限在模型 forward 前显式拒绝。使用 512 token 上限时，需要据实际 tokenizer 为模板和查询留足预算，例如为新建 Qwen 索引显式选择较小 chunk（256）与较大 query reserve（192）；这些参数不是质量结论，既有冻结语料不能暗中重新切分。真实权重、GPU、延迟和检索质量仍需单独实测。音频源验证增加两次有容量上限的流式读取，其真实端到端 I/O 延迟未单独测量。
+## HNSW 与精确检索
+
+HNSW 是向量近邻搜索索引，与 BGE 模型分别属于检索和向量生成环节。本地检查点的 `PGVECTOR_DENSE_INDEX_TYPE` 默认 `hnsw`，在按代次创建的 `rag_vec_*` 表上支持 HNSW；远端基线使用共享规范表并将 dense index 合同固定为 `EXACT`。迁入工作树沿用的是远端精确检索路径。
+
+此前“旧 HNSW”的表述只指本地原有表和索引实现，不表示 HNSW 算法过时。HNSW 用近似搜索换取速度；精确检索逐一比较符合范围的向量，向量规模较大时可能更慢。原实现与远端实现的实际延迟/召回差异没有在真实语料上验证，不能当作性能等价迁移。业务库和已有数据库索引没有被本次操作修改。[pgvector 官方索引说明](https://github.com/pgvector/pgvector#hnsw)。
 
 ## 数据库与历史证据边界
 
@@ -53,8 +61,6 @@ Qwen3 embedding 通过实际本地 `config.json` 识别；没有显式设置 que
 
 ## 验证中确认的根因
 
-迁入初版的 Qwen 模块从推理 child 引用 token 异常，形成 `config → qwen_rag → child → config` 依赖环。异常移到共享 `local_inference/errors.py` 后，架构依赖检查通过；child 保留同名导出，原调用方合同不变。
-
 临时 Linux 环境另有独立问题：基础镜像使用 `/opt/venv`，新建嵌套 venv 的 `--system-site-packages` 不会自动继承该路径；仅调整主进程 sys.path 也不能覆盖 worker/CLI 子进程。验证 venv 通过 `.pth` 读取基础依赖，固定的新依赖安装到自己的目录，并通过 `PYTHONPATH` 指向本工作树。所需 FFmpeg 只装入一次性容器。基础与 dev 依赖版本已逐项对照 pyproject，差异为空。
 
 数据库/Redis 只在本次容器的共享网络命名空间内提供 loopback 服务，满足真实 Celery 故障恢复测试的测试库安全合同。数据、进程和依赖均与业务运行实例隔离，测试结束按专属标签清理。
@@ -63,7 +69,7 @@ Qwen3 embedding 通过实际本地 `config.json` 识别；没有显式设置 que
 
 ## 验证
 
-[最终验收记录](../reports/local-work-integration-2026-10-01/validation.json) 对应源码提交 `633f66e`，后续只增加本说明与验收记录。
+[此前迁入版本验收记录](../reports/local-work-integration-2026-10-01/validation.json) 对应源码提交 `633f66e`。该版本包含后来撤回的 Qwen 检索代码；其全量结果作为历史验证证据保留，不直接代表纠正后的源码版本。[BGE 范围纠正验收](../reports/local-work-integration-2026-10-01/bge-correction.json)：Linux 推理、RAG、架构、评测、脚本、配置和真实 PostgreSQL 合同定向回归 **532 passed、17 skipped、0 failed**；jieba/PostgreSQL **12 passed**。Ruff 0.16.2 lint 通过，922 文件格式检查通过；主线比较 CLI 拒绝 Qwen profile。本次纠正未重复完整后端套件。
 
 - Linux 全量后端：**2506 passed、14 skipped、0 failed**（625.55s），使用独立 PostgreSQL/Redis，覆盖迁移、租户隔离、真实 worker 中断恢复和使用量记账。
 - 修复后的 Linux 定向回归：**46 passed**。
