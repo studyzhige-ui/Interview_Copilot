@@ -1,0 +1,20 @@
+{
+  "indexes": [
+    {
+      "table": "rag_vec_b375eefe39429cbb0e753e4e",
+      "rows": 1588,
+      "input_sha256": "0ac45e3bebacdeaa81d912948951b3f184d00549b1e795568e815b4255e6d162"
+    },
+    {
+      "table": "rag_vec_b38cd4759bead104dfd9375a",
+      "rows": 1588,
+      "input_sha256": "0ac45e3bebacdeaa81d912948951b3f184d00549b1e795568e815b4255e6d162"
+    },
+    {
+      "table": "rag_vec_dadbd37d2db67a798305bc8a",
+      "rows": 1588,
+      "input_sha256": "0ac45e3bebacdeaa81d912948951b3f184d00549b1e795568e815b4255e6d162"
+    }
+  ],
+  "identical_input_rows": true
+}

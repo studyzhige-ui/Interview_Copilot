@@ -1,0 +1,2 @@
+npm notice run interview-copilot-frontend@0.1.0 lint
+npm notice run eslint src --max-warnings 0

@@ -1,0 +1,476 @@
+[
+  {
+    "source_id": "mcp-tools",
+    "question": "Under the MCP tools specification, what can servers expose to language models?",
+    "start": "The Model Context Protocol (MCP) allows servers to expose tools",
+    "end": "language models."
+  },
+  {
+    "source_id": "mcp-tools",
+    "question": "How are individual MCP tools identified and described?",
+    "start": "Each tool is uniquely identified by",
+    "end": "describing its schema."
+  },
+  {
+    "source_id": "mcp-tools",
+    "question": "Which request does an MCP client send to discover available tools?",
+    "start": "To discover available tools, clients send a",
+    "end": "request."
+  },
+  {
+    "source_id": "aliyun-agent-zh",
+    "question": "阿里云百炼列出的三种核心应用构建模式是什么？",
+    "start": "三种 核心应用构建模式：",
+    "end": "高代码应用 。"
+  },
+  {
+    "source_id": "aliyun-agent-zh",
+    "question": "百炼智能体应用如何理解用户意图并完成任务？",
+    "start": "由提示词驱动，能够自主理解用户意图",
+    "end": "外部工具来完成任务。"
+  },
+  {
+    "source_id": "aliyun-agent-zh",
+    "question": "百炼工作流应用如何组织多步骤复杂任务？",
+    "start": "通过可视化节点编排，",
+    "end": "可复现的执行链路。"
+  },
+  {
+    "source_id": "infection-management-zh",
+    "question": "《医院感染管理办法》如何定义医院感染管理？",
+    "start": "医院感染管理是各级卫生行政部门",
+    "end": "制活动。"
+  },
+  {
+    "source_id": "infection-management-zh",
+    "question": "《医院感染管理办法》对住院床位总数在100张以上的医院设置感染管理组织有何要求？",
+    "start": "住院床位总数在100 张以上的医院应当",
+    "end": "门。"
+  },
+  {
+    "source_id": "nist-csf",
+    "question": "What is the stated purpose of the NIST Cybersecurity Framework?",
+    "start": "Helping organizations to better understand",
+    "end": "cybersecurity risk"
+  },
+  {
+    "source_id": "nist-csf",
+    "question": "Which kinds of organizations is NIST CSF 2.0 intended to help reduce cybersecurity risks?",
+    "start": "For industry, government, and organizations",
+    "end": "cybersecurity risks"
+  },
+  {
+    "source_id": "vue-computed-zh",
+    "question": "Vue 计算属性如何跟踪依赖？",
+    "start": "计算属性会自动追踪响应式依赖。",
+    "end": "响应式依赖。"
+  },
+  {
+    "source_id": "vue-computed-zh",
+    "question": "Vue 的计算属性值在什么情况下重新计算？",
+    "start": "一个计算属性仅会在其响应式依赖更新时才重新计算。",
+    "end": "重新计算。"
+  },
+  {
+    "source_id": "vue-computed-zh",
+    "question": "Vue 文档如何限定计算属性 getter 的职责？",
+    "start": "计算属性的 getter 应只做计算",
+    "end": "没有任何其他的副作用"
+  },
+  {
+    "source_id": "miit-standards-zh",
+    "question": "《2025年工业和信息化标准工作要点》提出制定多少项以上行业标准？",
+    "start": "制定行",
+    "end": "业标准1800 项以上"
+  },
+  {
+    "source_id": "miit-standards-zh",
+    "question": "《2025年工业和信息化标准工作要点》提出如何利用大模型赋能标准化建设？",
+    "start": "探索推进“人工智能+标",
+    "end": "推动标准落地实施。"
+  },
+  {
+    "source_id": "hand-hygiene-zh",
+    "question": "《医务人员手卫生规范》如何定义手卫生？",
+    "start": "为医务人员在从事职业活动过程中的洗手",
+    "end": "总称。"
+  },
+  {
+    "source_id": "hand-hygiene-zh",
+    "question": "《医务人员手卫生规范》规定的洗手过程是什么？",
+    "start": "医务人员用流动水和洗手液",
+    "end": "的过程。"
+  },
+  {
+    "source_id": "hand-hygiene-zh",
+    "question": "《医务人员手卫生规范》对医疗机构的手卫生制度和设施有哪些要求？",
+    "start": "医疗机构应制定并落实手卫生管理制度",
+    "end": "手卫生设施。"
+  },
+  {
+    "source_id": "git-rebase",
+    "question": "What is the basic purpose of git rebase?",
+    "start": "Reapply commits on top of another base tip",
+    "end": "another base tip"
+  },
+  {
+    "source_id": "git-rebase",
+    "question": "What happens when git rebase encounters a merge conflict?",
+    "start": "If there is a merge conflict during this process,",
+    "end": "leave conflict markers."
+  },
+  {
+    "source_id": "git-rebase",
+    "question": "What can interactive rebasing change about the commits being rebased?",
+    "start": "Rebasing interactively means that you have a chance",
+    "end": "unwanted patches)."
+  },
+  {
+    "source_id": "mdn-promises",
+    "question": "How does MDN define a JavaScript Promise?",
+    "start": "is an object representing the eventual completion",
+    "end": "asynchronous operation."
+  },
+  {
+    "source_id": "mdn-promises",
+    "question": "What does the then() function return?",
+    "start": "then()",
+    "end": "different from the original:"
+  },
+  {
+    "source_id": "mdn-promises",
+    "question": "How does promise chaining order asynchronous operations?",
+    "start": "A common need is to execute two or more asynchronous operations",
+    "end": "result from the previous step."
+  },
+  {
+    "source_id": "kubernetes-probes-en",
+    "question": "What does a Kubernetes startup probe verify?",
+    "start": "Startup probes verify whether the application",
+    "end": "is started."
+  },
+  {
+    "source_id": "kubernetes-probes-en",
+    "question": "What does a Kubernetes readiness probe determine?",
+    "start": "Readiness probes determine when a container",
+    "end": "accept traffic."
+  },
+  {
+    "source_id": "kubernetes-probes-en",
+    "question": "What does a Kubernetes liveness probe determine?",
+    "start": "Liveness probes determine when to restart a container.",
+    "end": "container."
+  },
+  {
+    "source_id": "sklearn-cross-validation",
+    "question": "Why is evaluating a model on the same data used for fitting methodologically wrong?",
+    "start": "Learning the parameters of a prediction function",
+    "end": "yet-unseen data."
+  },
+  {
+    "source_id": "sklearn-cross-validation",
+    "question": "What is the purpose of holding out a test set in supervised learning?",
+    "start": "To avoid it, it is common practice",
+    "end": "y_test"
+  },
+  {
+    "source_id": "sklearn-cross-validation",
+    "question": "How can scikit-learn quickly create a random training/test split?",
+    "start": "In scikit-learn a random split into training and test sets",
+    "end": "helper function."
+  },
+  {
+    "source_id": "python-logging",
+    "question": "What is logging used for in Python software?",
+    "start": "Logging is a means of tracking events",
+    "end": "software runs."
+  },
+  {
+    "source_id": "python-logging",
+    "question": "How does Python logging describe the importance assigned to an event?",
+    "start": "Events also have an importance",
+    "end": "severity"
+  },
+  {
+    "source_id": "python-logging",
+    "question": "Which logger methods does the Python Logging HOWTO list for common severity levels?",
+    "start": "debug()",
+    "end": "critical()"
+  },
+  {
+    "source_id": "medlineplus-medication-errors",
+    "question": "Where can medication errors occur, according to MedlinePlus?",
+    "start": "Errors can happen in the hospital",
+    "end": "at home."
+  },
+  {
+    "source_id": "medlineplus-medication-errors",
+    "question": "What information should a patient record in a medicine list?",
+    "start": "Write down all of the medicines that you are taking",
+    "end": "when you take them."
+  },
+  {
+    "source_id": "medlineplus-medication-errors",
+    "question": "What should a patient ask when receiving a prescription?",
+    "start": "When you get a prescription, ask the name of the medicine",
+    "end": "right medicine."
+  },
+  {
+    "source_id": "who-patient-safety",
+    "question": "How does WHO define patient safety?",
+    "start": "Patient safety is",
+    "end": "acceptable minimum.\""
+  },
+  {
+    "source_id": "who-patient-safety",
+    "question": "What are the reported consequences of health care-associated infections?",
+    "start": "health care-associated infections result in",
+    "end": "avoidable deaths"
+  },
+  {
+    "source_id": "who-patient-safety",
+    "question": "What is sepsis according to WHO?",
+    "start": "Sepsis is a serious condition",
+    "end": "an infection."
+  },
+  {
+    "source_id": "py-asyncio",
+    "question": "What exception is raised when an asyncio task is cancelled?",
+    "start": "When a task is cancelled,",
+    "end": "next opportunity."
+  },
+  {
+    "source_id": "postgres-isolation",
+    "question": "How many transaction isolation levels does the SQL standard define?",
+    "start": "standard defines four levels of transaction isolation.",
+    "end": "transaction isolation."
+  },
+  {
+    "source_id": "postgres-isolation",
+    "question": "What outcome does Serializable isolation guarantee for concurrent transactions?",
+    "start": "The most strict is Serializable,",
+    "end": "in some order."
+  },
+  {
+    "source_id": "w3c-non-text-content",
+    "question": "What is the general WCAG requirement for non-text content presented to users?",
+    "start": "non-text content\nthat is presented to the user has a\ntext alternative",
+    "end": "equivalent purpose"
+  },
+  {
+    "source_id": "w3c-non-text-content",
+    "question": "What alternatives does WCAG require for CAPTCHA that uses non-text content?",
+    "start": "If the purpose of non-text content is to confirm",
+    "end": "sensory perception are provided"
+  },
+  {
+    "source_id": "investor-gov-introduction",
+    "question": "What is asset allocation according to Investor.gov?",
+    "start": "Asset allocation involves dividing your investments",
+    "end": "and cash."
+  },
+  {
+    "source_id": "investor-gov-introduction",
+    "question": "Which two strategies does Investor.gov name for managing investing risk?",
+    "start": "Two important strategies for managing investing risk",
+    "end": "asset allocation and diversification."
+  },
+  {
+    "source_id": "ftc-start-security",
+    "question": "Who should receive administrative access under the FTC security guidance?",
+    "start": "Administrative access, which lets a user make system-wide changes",
+    "end": "employees tasked with that job."
+  },
+  {
+    "source_id": "ftc-start-security",
+    "question": "What does the FTC advise businesses to control when storing personal data?",
+    "start": "limit access to the places where personal data is stored",
+    "end": "particular databases."
+  },
+  {
+    "source_id": "owasp-access-control",
+    "question": "What does access control enforce according to OWASP?",
+    "start": "Access control enforces policy",
+    "end": "intended permissions."
+  },
+  {
+    "source_id": "owasp-access-control",
+    "question": "Where should access-control checks be implemented to be effective?",
+    "start": "Access control is only effective",
+    "end": "access control check or metadata."
+  },
+  {
+    "source_id": "owasp-access-control",
+    "question": "What should developers and QA staff include in tests for access control?",
+    "start": "Developers and QA staff should include functional access control",
+    "end": "integration tests."
+  },
+  {
+    "source_id": "rfc-http-semantics",
+    "question": "What does HTTP 404 (Not Found) indicate?",
+    "start": "The 404 (Not Found) status code indicates",
+    "end": "exists."
+  },
+  {
+    "source_id": "rfc-http-semantics",
+    "question": "What does HTTP 200 (OK) indicate?",
+    "start": "The 200 (OK) status code indicates",
+    "end": "succeeded."
+  },
+  {
+    "source_id": "pandas-groupby",
+    "question": "What are the three stages of a pandas group-by operation?",
+    "start": "By “group by” we are referring",
+    "end": "results into a data structure."
+  },
+  {
+    "source_id": "docker-volumes",
+    "question": "What is a Docker volume?",
+    "start": "Volumes are persistent data stores for containers",
+    "end": "Docker."
+  },
+  {
+    "source_id": "react-effects",
+    "question": "What do React Effects let a component synchronize with?",
+    "start": "let you run some code after rendering",
+    "end": "outside of React."
+  },
+  {
+    "source_id": "rfc-http-semantics",
+    "question": "What does HTTP 403 (Forbidden) indicate?",
+    "start": "The 403 (Forbidden) status code indicates",
+    "end": "refuses to fulfill it."
+  },
+  {
+    "source_id": "rfc-http-semantics",
+    "question": "What does HTTP 410 (Gone) indicate?",
+    "start": "The 410 (Gone) status code indicates",
+    "end": "likely to be permanent."
+  },
+  {
+    "source_id": "antimicrobial-use-zh",
+    "question": "《抗菌药物临床应用管理办法》所称抗菌药物包括哪些用途，不包括哪些药物？",
+    "start": "本办法所称抗菌药物是指",
+    "end": "有抗菌作用的中药制剂。"
+  },
+  {
+    "source_id": "antimicrobial-use-zh",
+    "question": "抗菌药物临床应用应遵循什么原则？",
+    "start": "抗菌药物临床应用应当遵循安全",
+    "end": "经济的原则。"
+  },
+  {
+    "source_id": "antimicrobial-use-zh",
+    "question": "抗菌药物临床应用按哪些因素分级，分为哪三级？",
+    "start": "抗菌药物临床应用实行分级管理。",
+    "end": "特殊使用\n\n级。"
+  },
+  {
+    "source_id": "react-state-zh",
+    "question": "React 文档如何定义组件实例的 State？",
+    "start": "State 是屏幕上组件实例内部的状态。",
+    "end": "内部的状态。"
+  },
+  {
+    "source_id": "react-state-zh",
+    "question": "同时渲染同一 React 组件两次时，各副本的 State 是否共享？",
+    "start": "如果你渲染同一个组件两次",
+    "end": "完全隔离的 state"
+  },
+  {
+    "source_id": "kubernetes-deployment-zh",
+    "question": "Kubernetes Deployment 更新时默认至少保持多少比例的所需 Pod 运行？",
+    "start": "Deployment 可确保在更新时仅关闭一定数量的 Pod。",
+    "end": "最大不可用比例为 25%）。"
+  },
+  {
+    "source_id": "kubernetes-deployment-zh",
+    "question": "Kubernetes Deployment 的 pod-template-hash 标签起什么作用？",
+    "start": "此标签可确保 Deployment 的子 ReplicaSet 不重叠。",
+    "end": "不重叠。"
+  },
+  {
+    "source_id": "vue-reactivity-zh",
+    "question": "Vue 响应式对象与普通对象相比，属性访问和修改有什么区别？",
+    "start": "响应式对象是",
+    "end": "触发更新。"
+  },
+  {
+    "source_id": "vue-reactivity-zh",
+    "question": "Vue 的浅层 ref 仅追踪哪种访问？",
+    "start": "对于浅层 ref，只有",
+    "end": "的访问会被追踪。"
+  },
+  {
+    "source_id": "privacy-law-zh",
+    "question": "《个人信息保护法》如何定义个人信息？",
+    "start": "个人信息是以电子或者其他方式记录的",
+    "end": "息。"
+  },
+  {
+    "source_id": "privacy-law-zh",
+    "question": "《个人信息保护法》列举了哪些个人信息处理活动？",
+    "start": "个人信息的处理包括",
+    "end": "删除等。"
+  },
+  {
+    "source_id": "privacy-law-zh",
+    "question": "《个人信息保护法》要求个人信息处理遵循哪些原则？",
+    "start": "处理个人信息应当遵循合法",
+    "end": "诚信原\n\n则"
+  },
+  {
+    "source_id": "aliyun-rag-zh",
+    "question": "阿里云百炼的这份知识库 API 文档适用于哪类知识库？",
+    "start": "本文档仅适用于文档搜索类知识库。",
+    "end": "知识库。"
+  },
+  {
+    "source_id": "aliyun-rag-zh",
+    "question": "阿里云百炼知识库功能分别支持中国站和国际站的哪些地域？",
+    "start": "知识库相关功能在中国站仅支持",
+    "end": "均不支持知识库功能。"
+  },
+  {
+    "source_id": "aliyun-rag-zh",
+    "question": "子账号通过阿里云 API 操作知识库之前需要具备什么权限和业务空间条件？",
+    "start": "子账号\n（主账号不需要）需获取",
+    "end": "操作知识库。"
+  },
+  {
+    "source_id": "owasp-access-control",
+    "question": "What default access-control policy does OWASP recommend for non-public resources?",
+    "start": "Except for public resources, deny by default.",
+    "end": "default."
+  },
+  {
+    "source_id": "owasp-access-control",
+    "question": "When should stateful session identifiers be invalidated?",
+    "start": "Stateful session identifiers should be invalidated",
+    "end": "after logout."
+  },
+  {
+    "source_id": "mcp-tools",
+    "question": "What does the MCP tools specification recommend for human oversight of tool invocations?",
+    "start": "For trust & safety and security, there",
+    "end": "deny tool invocations."
+  },
+  {
+    "source_id": "mcp-tools",
+    "question": "Does MCP tool discovery support pagination?",
+    "start": "This operation supports",
+    "end": "pagination\n."
+  },
+  {
+    "source_id": "py-asyncio",
+    "question": "Does merely calling an asyncio coroutine schedule it to run?",
+    "start": "Note that simply calling a coroutine will not schedule it to",
+    "end": "be executed:"
+  },
+  {
+    "source_id": "kubernetes-probes-en",
+    "question": "When does Kubernetes begin running liveness and readiness probes if a startup probe is configured?",
+    "start": "If a startup probe is configured, Kubernetes does not execute liveness or",
+    "end": "startup probe succeeds,"
+  }
+]

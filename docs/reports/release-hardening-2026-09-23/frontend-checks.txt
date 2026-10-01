@@ -1,0 +1,11 @@
+ Test Files  60 passed (60)
+      Tests  192 passed (192)
+   Duration  7.31s (transform 5.14s, setup 13.70s, import 17.42s, tests 15.05s, environment 63.16s)
+npm notice run interview-copilot-frontend@0.1.0 typecheck
+npm notice run tsc -b --noEmit
+npm notice run interview-copilot-frontend@0.1.0 lint
+npm notice run eslint src --max-warnings 0
+npm notice run interview-copilot-frontend@0.1.0 build
+npm notice run tsc -b && vite build
+vite v8.2.1 building client environment for production...
+✓ built in 418ms

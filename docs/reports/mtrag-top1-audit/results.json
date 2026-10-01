@@ -1,0 +1,97 @@
+{
+  "metric": "Hit@1: first passage ID has official qrel > 0; empty result is miss",
+  "aggregation": "per-query mean, not domain macro",
+  "results": [
+    {
+      "dataset": "mtrag-human",
+      "split": "all",
+      "n": 777,
+      "hits": {
+        "bge_m3_dense": 308,
+        "bm25_bge_m3": 268,
+        "bm25_bge_m3_rerank_bge_m3": 338
+      },
+      "rates": {
+        "bge_m3_dense": 0.3963963963963964,
+        "bm25_bge_m3": 0.34491634491634493,
+        "bm25_bge_m3_rerank_bge_m3": 0.435006435006435
+      },
+      "dense_to_final_pp": 3.8610038610038586,
+      "dense_to_final_relative_percent": 9.740259740259738,
+      "paired_gained": 94,
+      "paired_lost": 64
+    },
+    {
+      "dataset": "mtrag-human",
+      "split": "validation",
+      "n": 317,
+      "hits": {
+        "bge_m3_dense": 124,
+        "bm25_bge_m3": 116,
+        "bm25_bge_m3_rerank_bge_m3": 145
+      },
+      "rates": {
+        "bge_m3_dense": 0.3911671924290221,
+        "bm25_bge_m3": 0.3659305993690852,
+        "bm25_bge_m3_rerank_bge_m3": 0.45741324921135645
+      },
+      "dense_to_final_pp": 6.624605678233436,
+      "dense_to_final_relative_percent": 16.935483870967726,
+      "paired_gained": 45,
+      "paired_lost": 24
+    },
+    {
+      "dataset": "mtragun-human",
+      "split": "all",
+      "n": 332,
+      "hits": {
+        "bge_m3_dense": 157,
+        "bm25_bge_m3": 156,
+        "bm25_bge_m3_rerank_bge_m3": 184
+      },
+      "rates": {
+        "bge_m3_dense": 0.47289156626506024,
+        "bm25_bge_m3": 0.46987951807228917,
+        "bm25_bge_m3_rerank_bge_m3": 0.5542168674698795
+      },
+      "dense_to_final_pp": 8.13253012048193,
+      "dense_to_final_relative_percent": 17.19745222929936,
+      "paired_gained": 55,
+      "paired_lost": 28
+    },
+    {
+      "dataset": "mtragun-human",
+      "split": "validation",
+      "n": 133,
+      "hits": {
+        "bge_m3_dense": 62,
+        "bm25_bge_m3": 65,
+        "bm25_bge_m3_rerank_bge_m3": 79
+      },
+      "rates": {
+        "bge_m3_dense": 0.46616541353383456,
+        "bm25_bge_m3": 0.48872180451127817,
+        "bm25_bge_m3_rerank_bge_m3": 0.5939849624060151
+      },
+      "dense_to_final_pp": 12.781954887218049,
+      "dense_to_final_relative_percent": 27.419354838709697,
+      "paired_gained": 23,
+      "paired_lost": 6
+    }
+  ],
+  "hashes": {
+    "D:\\Projects\\Python\\Interview_Copilot\\data\\evaluation\\mtrag\\tasks.jsonl": "141fa5e97ce177cbd2f62395ce4fff9f62acd40926ab26d883861ceed1a31858",
+    "D:\\Projects\\Python\\Interview_Copilot\\data\\evaluation\\mtrag\\rewritten.jsonl": "9f665ed3c6ea20b3449d5c449883c270eef20c973e6517a39ed469313e01e4e6",
+    "D:\\Projects\\Python\\Interview_Copilot\\data\\evaluation\\mtrag\\optimization-m3-v1\\split.json": "7b209504b91f106e4154c1a7f8e15aeda02e8cf54491ec76771989dcfec361e6",
+    "D:\\Projects\\Python\\Interview_Copilot\\data\\evaluation\\mtrag\\runs\\bge_m3_dense.jsonl": "7e95f212fcb0a33b7a370efcfd3c7077a6c78bad4ab764551e369161f182a6ca",
+    "D:\\Projects\\Python\\Interview_Copilot\\data\\evaluation\\mtrag\\runs\\bm25_bge_m3.jsonl": "7c5d72bb5ca91d288039a1b28e366a6d3e3afb530b37a9b080d2786bb4bd10bf",
+    "D:\\Projects\\Python\\Interview_Copilot\\data\\evaluation\\mtrag\\runs\\bm25_bge_m3_rerank_bge_m3.jsonl": "02fe20a896add082271f53c475fcd4b290c1e1703cc94992e7694fa1b4b7f759"
+  },
+  "limitations": [
+    "Exact dense search, not PostgreSQL HNSW",
+    "English ASCII BM25 analyzer, not Chinese jieba",
+    "No confidence threshold or multi-intent decomposition",
+    "Only queries with public positive qrels",
+    "Existing internal validation has been inspected; not blind; datasets overlap"
+  ]
+}

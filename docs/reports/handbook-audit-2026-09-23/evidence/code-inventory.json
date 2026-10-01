@@ -1,0 +1,784 @@
+{
+  "counts": {
+    "files": 382,
+    "lines": 93706
+  },
+  "largest_files": [
+    [
+      1947,
+      "backend/app/services/career_process_service.py"
+    ],
+    [
+      1830,
+      "backend/app/agent_runtime/tools/career_domains.py"
+    ],
+    [
+      1734,
+      "backend/app/conversation/agent_strategy.py"
+    ],
+    [
+      1706,
+      "backend/app/services/chat/turn_executor.py"
+    ],
+    [
+      1576,
+      "backend/app/services/persistent_task_service.py"
+    ],
+    [
+      1540,
+      "backend/app/career/application/interview_invitation_operations.py"
+    ],
+    [
+      1452,
+      "backend/app/agent_runtime/tool_call_executor.py"
+    ],
+    [
+      1336,
+      "backend/app/services/chat/attachment_source_service.py"
+    ],
+    [
+      1254,
+      "backend/app/agent_runtime/tools/career.py"
+    ],
+    [
+      1230,
+      "backend/app/services/career_profile_service.py"
+    ],
+    [
+      1128,
+      "backend/app/services/chat/shared_source_acquisition.py"
+    ],
+    [
+      1098,
+      "backend/app/services/google_gmail_connector.py"
+    ],
+    [
+      987,
+      "backend/app/rag/application/attachment_sources.py"
+    ],
+    [
+      975,
+      "backend/app/services/gmail_observation_service.py"
+    ],
+    [
+      973,
+      "backend/app/services/artifact_service.py"
+    ],
+    [
+      927,
+      "backend/app/api/chat/streaming.py"
+    ],
+    [
+      921,
+      "backend/app/agent_runtime/turn_tool_catalog.py"
+    ],
+    [
+      902,
+      "backend/app/services/interview/transcript_structure_service.py"
+    ],
+    [
+      886,
+      "backend/app/services/oauth_plugin_connector.py"
+    ],
+    [
+      855,
+      "backend/app/services/ability_signal_service.py"
+    ],
+    [
+      787,
+      "backend/app/services/interview/interview_record_service.py"
+    ],
+    [
+      743,
+      "backend/app/conversation/engine.py"
+    ],
+    [
+      741,
+      "backend/app/api/interviews/records.py"
+    ],
+    [
+      732,
+      "backend/app/services/interview/analysis/service.py"
+    ],
+    [
+      723,
+      "backend/app/services/memory_pipeline.py"
+    ]
+  ],
+  "largest_functions": [
+    [
+      474,
+      "backend/app/conversation/agent_strategy.py",
+      1258,
+      "_execute_tools"
+    ],
+    [
+      402,
+      "backend/app/conversation/agent_strategy.py",
+      431,
+      "execute"
+    ],
+    [
+      317,
+      "backend/app/rag/application/attachment_sources.py",
+      619,
+      "load_attachment_sources"
+    ],
+    [
+      283,
+      "backend/app/conversation/chat_strategy.py",
+      84,
+      "execute"
+    ],
+    [
+      271,
+      "backend/app/conversation/engine.py",
+      320,
+      "_prepare"
+    ],
+    [
+      258,
+      "backend/app/conversation/agent_strategy.py",
+      836,
+      "_loop"
+    ],
+    [
+      248,
+      "backend/app/agent_runtime/tool_call_executor.py",
+      314,
+      "execute_tool_call"
+    ],
+    [
+      247,
+      "backend/app/career/application/interview_invitation_operations.py",
+      987,
+      "confirm_interview_invitation"
+    ],
+    [
+      243,
+      "backend/app/worker/tasks/ingestion.py",
+      50,
+      "process_document_ingestion"
+    ],
+    [
+      240,
+      "backend/app/agent_runtime/tools/mock_interview.py",
+      141,
+      "_run_start_mock"
+    ],
+    [
+      211,
+      "backend/app/rag/retrieval/pipeline.py",
+      96,
+      "retrieve"
+    ],
+    [
+      208,
+      "backend/app/services/chat/turn_executor.py",
+      1400,
+      "execute_turn"
+    ],
+    [
+      203,
+      "backend/app/career/application/activity_projection.py",
+      88,
+      "list_career_activity"
+    ],
+    [
+      196,
+      "backend/app/agent_runtime/turn_tool_catalog.py",
+      168,
+      "create"
+    ],
+    [
+      190,
+      "backend/app/services/career_profile_service.py",
+      513,
+      "resolve_profile_candidate_items"
+    ],
+    [
+      186,
+      "backend/app/services/chat/context_assembly_pipeline.py",
+      402,
+      "_assemble"
+    ],
+    [
+      185,
+      "backend/app/services/interview/transcript_structure_service.py",
+      691,
+      "_build_qa_pairs"
+    ],
+    [
+      184,
+      "backend/app/services/chat/product_object_reference.py",
+      176,
+      "_resolve_one"
+    ],
+    [
+      180,
+      "backend/app/services/offer_analysis_service.py",
+      38,
+      "compare_offers"
+    ],
+    [
+      180,
+      "backend/app/services/career_process_service.py",
+      148,
+      "create_job_opportunity"
+    ],
+    [
+      178,
+      "backend/app/services/chat/conversation_deletion_service.py",
+      97,
+      "delete_conversation"
+    ],
+    [
+      175,
+      "backend/app/services/chat/shared_source_acquisition.py",
+      193,
+      "acquire_shared_read_only_sources"
+    ],
+    [
+      173,
+      "backend/app/services/chat/attachment_ingress_service.py",
+      170,
+      "claim_attachment_drafts"
+    ],
+    [
+      172,
+      "backend/app/services/chat/turn_executor.py",
+      336,
+      "admit_submission"
+    ],
+    [
+      169,
+      "backend/app/services/memory_recall.py",
+      47,
+      "recall"
+    ]
+  ],
+  "async_functions_with_direct_db_calls": [
+    {
+      "file": "backend/app/agent_runtime/tool_call_executor.py",
+      "function": "defer_tool_calls",
+      "line": 636,
+      "db_lines": [
+        735,
+        734,
+        673,
+        654
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tool_call_executor.py",
+      "function": "persist_turn_budget",
+      "line": 1437,
+      "db_lines": [
+        1444,
+        1448
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/turn_tool_catalog.py",
+      "function": "create",
+      "line": 168,
+      "db_lines": [
+        224,
+        197
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/turn_tool_catalog.py",
+      "function": "_load_skill",
+      "line": 730,
+      "db_lines": [
+        755
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/turn_tool_catalog.py",
+      "function": "_persist_snapshot",
+      "line": 805,
+      "db_lines": [
+        858,
+        851
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/turn_tool_catalog.py",
+      "function": "ensure_active_skill_bindings",
+      "line": 864,
+      "db_lines": [
+        883
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/turn_tool_catalog.py",
+      "function": "_persist_loaded_schemas",
+      "line": 889,
+      "db_lines": [
+        908,
+        901
+      ]
+    },
+    {
+      "file": "backend/app/api/external_plugins.py",
+      "function": "complete_plugin_authorization",
+      "line": 144,
+      "db_lines": [
+        172
+      ]
+    },
+    {
+      "file": "backend/app/api/external_plugins.py",
+      "function": "test_plugin",
+      "line": 183,
+      "db_lines": [
+        200
+      ]
+    },
+    {
+      "file": "backend/app/api/external_plugins.py",
+      "function": "revoke_plugin",
+      "line": 205,
+      "db_lines": [
+        223
+      ]
+    },
+    {
+      "file": "backend/app/api/gmail_integration.py",
+      "function": "_cleanup_failed_rebind",
+      "line": 172,
+      "db_lines": [
+        196
+      ]
+    },
+    {
+      "file": "backend/app/api/gmail_integration.py",
+      "function": "complete_gmail_authorization",
+      "line": 245,
+      "db_lines": [
+        299
+      ]
+    },
+    {
+      "file": "backend/app/api/gmail_integration.py",
+      "function": "test_gmail_integration",
+      "line": 337,
+      "db_lines": [
+        352
+      ]
+    },
+    {
+      "file": "backend/app/api/gmail_integration.py",
+      "function": "revoke_gmail_integration",
+      "line": 363,
+      "db_lines": [
+        378
+      ]
+    },
+    {
+      "file": "backend/app/api/gmail_observations.py",
+      "function": "_perform_sync",
+      "line": 76,
+      "db_lines": [
+        92
+      ]
+    },
+    {
+      "file": "backend/app/core/security.py",
+      "function": "get_current_user",
+      "line": 170,
+      "db_lines": [
+        207
+      ]
+    },
+    {
+      "file": "backend/app/services/gmail_integration_service.py",
+      "function": "bind_verified_grant",
+      "line": 101,
+      "db_lines": [
+        146,
+        119
+      ]
+    },
+    {
+      "file": "backend/app/services/gmail_integration_service.py",
+      "function": "test_account",
+      "line": 162,
+      "db_lines": [
+        198
+      ]
+    },
+    {
+      "file": "backend/app/services/gmail_integration_service.py",
+      "function": "revoke_account",
+      "line": 202,
+      "db_lines": [
+        234
+      ]
+    },
+    {
+      "file": "backend/app/services/gmail_integration_service.py",
+      "function": "search_messages",
+      "line": 264,
+      "db_lines": [
+        295
+      ]
+    },
+    {
+      "file": "backend/app/services/gmail_integration_service.py",
+      "function": "fetch_incremental_messages",
+      "line": 310,
+      "db_lines": [
+        346
+      ]
+    },
+    {
+      "file": "backend/app/services/gmail_observation_sync_service.py",
+      "function": "sync_gmail_observations",
+      "line": 94,
+      "db_lines": [
+        110
+      ]
+    },
+    {
+      "file": "backend/app/services/memory_pipeline.py",
+      "function": "extract_turn",
+      "line": 254,
+      "db_lines": [
+        272,
+        308,
+        296,
+        337,
+        328,
+        259,
+        314
+      ]
+    },
+    {
+      "file": "backend/app/services/memory_pipeline.py",
+      "function": "consolidate_user",
+      "line": 499,
+      "db_lines": [
+        524,
+        513,
+        559,
+        539,
+        544
+      ]
+    },
+    {
+      "file": "backend/app/services/memory_recall.py",
+      "function": "recall",
+      "line": 47,
+      "db_lines": [
+        212,
+        66,
+        145,
+        200,
+        158,
+        92,
+        80
+      ]
+    },
+    {
+      "file": "backend/app/services/oauth_plugin_connector.py",
+      "function": "test_external_plugin_account",
+      "line": 600,
+      "db_lines": [
+        623
+      ]
+    },
+    {
+      "file": "backend/app/services/oauth_plugin_connector.py",
+      "function": "revoke_external_plugin_account",
+      "line": 627,
+      "db_lines": [
+        643
+      ]
+    },
+    {
+      "file": "backend/app/services/chat/turn_executor.py",
+      "function": "fail_orphaned_turns",
+      "line": 1617,
+      "db_lines": [
+        1626
+      ]
+    },
+    {
+      "file": "backend/app/services/interview/analysis_orchestrator.py",
+      "function": "_run_async",
+      "line": 66,
+      "db_lines": [
+        70,
+        85
+      ]
+    },
+    {
+      "file": "backend/app/services/interview/analysis_orchestrator.py",
+      "function": "_stage_transcribe",
+      "line": 203,
+      "db_lines": [
+        222
+      ]
+    },
+    {
+      "file": "backend/app/services/interview/mock_flow.py",
+      "function": "submit_answer",
+      "line": 307,
+      "db_lines": [
+        410,
+        454
+      ]
+    },
+    {
+      "file": "backend/app/services/knowledge/qa_publish_service.py",
+      "function": "save_qa_to_knowledge",
+      "line": 33,
+      "db_lines": [
+        75,
+        78,
+        104,
+        95,
+        51
+      ]
+    },
+    {
+      "file": "backend/app/api/chat/client_actions.py",
+      "function": "resolve_client_action",
+      "line": 110,
+      "db_lines": [
+        145
+      ]
+    },
+    {
+      "file": "backend/app/api/chat/sessions.py",
+      "function": "compact_context",
+      "line": 77,
+      "db_lines": [
+        87
+      ]
+    },
+    {
+      "file": "backend/app/api/chat/streaming.py",
+      "function": "create_chat_attachment_draft",
+      "line": 118,
+      "db_lines": [
+        145,
+        155,
+        138
+      ]
+    },
+    {
+      "file": "backend/app/api/chat/streaming.py",
+      "function": "remove_chat_attachment_draft",
+      "line": 196,
+      "db_lines": [
+        221,
+        215
+      ]
+    },
+    {
+      "file": "backend/app/api/chat/streaming.py",
+      "function": "get_turn_interaction",
+      "line": 231,
+      "db_lines": [
+        240
+      ]
+    },
+    {
+      "file": "backend/app/api/chat/streaming.py",
+      "function": "resolve_turn_interaction",
+      "line": 260,
+      "db_lines": [
+        283,
+        288
+      ]
+    },
+    {
+      "file": "backend/app/api/chat/streaming.py",
+      "function": "create_chat_turn",
+      "line": 473,
+      "db_lines": [
+        482
+      ]
+    },
+    {
+      "file": "backend/app/api/chat/streaming.py",
+      "function": "list_pending_submissions",
+      "line": 575,
+      "db_lines": [
+        581,
+        589
+      ]
+    },
+    {
+      "file": "backend/app/api/chat/streaming.py",
+      "function": "stream_chat_turn_events",
+      "line": 848,
+      "db_lines": [
+        857
+      ]
+    },
+    {
+      "file": "backend/app/api/chat/streaming.py",
+      "function": "cancel_chat_turn",
+      "line": 906,
+      "db_lines": [
+        913
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/agent_task.py",
+      "function": "task_create",
+      "line": 53,
+      "db_lines": [
+        71
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/agent_task.py",
+      "function": "task_update",
+      "line": 85,
+      "db_lines": [
+        103
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career.py",
+      "function": "track_search_job",
+      "line": 754,
+      "db_lines": [
+        842
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career.py",
+      "function": "capture_job_description",
+      "line": 863,
+      "db_lines": [
+        891
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career.py",
+      "function": "record_career_event",
+      "line": 905,
+      "db_lines": [
+        975
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career.py",
+      "function": "read_artifacts",
+      "line": 989,
+      "db_lines": [
+        1006
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career.py",
+      "function": "save_artifact",
+      "line": 1055,
+      "db_lines": [
+        1116
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career_domains.py",
+      "function": "read_career_domain_state",
+      "line": 260,
+      "db_lines": [
+        293,
+        306
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career_domains.py",
+      "function": "confirm_career_profile_change",
+      "line": 498,
+      "db_lines": [
+        579,
+        567
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career_domains.py",
+      "function": "review_ability_signals",
+      "line": 667,
+      "db_lines": [
+        706
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career_domains.py",
+      "function": "manage_next_action",
+      "line": 896,
+      "db_lines": [
+        970
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career_domains.py",
+      "function": "analyze_offers",
+      "line": 1235,
+      "db_lines": [
+        1258
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career_domains.py",
+      "function": "manage_persistent_task",
+      "line": 1401,
+      "db_lines": [
+        1508,
+        1437,
+        1464,
+        1485
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/career_domains.py",
+      "function": "record_artifact_submission",
+      "line": 1620,
+      "db_lines": [
+        1647
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/gmail.py",
+      "function": "_gmail_search_messages_handler",
+      "line": 101,
+      "db_lines": [
+        122
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/gmail_observation.py",
+      "function": "review_gmail_observation",
+      "line": 96,
+      "db_lines": [
+        124
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/resume_profile.py",
+      "function": "prepare_resume_profile_candidates",
+      "line": 53,
+      "db_lines": [
+        83
+      ]
+    },
+    {
+      "file": "backend/app/agent_runtime/tools/resume_profile.py",
+      "function": "resolve_resume_profile_candidates",
+      "line": 101,
+      "db_lines": [
+        145,
+        110
+      ]
+    }
+  ],
+  "mutable_defaults": []
+}

@@ -125,6 +125,7 @@ def evaluation_code_sha256() -> str:
         Path(__file__),
         *sorted((PROJECT_ROOT / "evaluation").glob("*.py")),
         *sorted((BACKEND_ROOT / "app" / "rag").rglob("*.py")),
+        *sorted((BACKEND_ROOT / "app" / "local_inference").rglob("*.py")),
         BACKEND_ROOT / "app" / "conversation" / "query_planner.py",
         BACKEND_ROOT / "app" / "core" / "config.py",
         BACKEND_ROOT / "app" / "core" / "llm_client_factory.py",
@@ -142,6 +143,7 @@ def _dependency_versions() -> dict[str, str]:
         "docling",
         "llama-index-core",
         "pgvector",
+        "jieba",
         "pymupdf",
         "sentence-transformers",
         "torch",
@@ -261,6 +263,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     )
     corpus = validate_manifest_files(args.source_dir)
     rows = filter_by_layer(load_dataset(path=args.dataset), "retrieval")
+    rows = [{**row, "user_id": args.user} for row in rows]
     calibration_rows = [row for row in rows if row.get("split") == "calibration"]
     test_rows = [row for row in rows if row.get("split") == "test"]
     prepare_runtime()

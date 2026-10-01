@@ -1,0 +1,74 @@
+{
+  "profile_version": "mtrag-retrieval-v1",
+  "datasets": ["mtrag-human", "mtragun-human"],
+  "corpus": {
+    "unit": "official_passage",
+    "preserve_ids": true,
+    "rechunk": false,
+    "search_scope": "task_domain_full_corpus"
+  },
+  "retrieval": {
+    "per_channel_k": 50,
+    "fused_k": 50,
+    "rerank_k": 50,
+    "output_k": 10,
+    "min_score": null,
+    "score_margin": null,
+    "deduplicate_by": "passage_id",
+    "dense_search": "exact",
+    "similarity": "cosine",
+    "normalize_embeddings": true,
+    "rrf_k": 60,
+    "dense_weight": 1.0,
+    "bm25_weight": 1.0,
+    "bm25_k1": 1.2,
+    "bm25_b": 0.75,
+    "query_variants_per_mode": 1,
+    "intent_decomposition": false
+  },
+  "runtime": {
+    "device": "cuda",
+    "batch_size": 8,
+    "embedding_max_tokens": 512,
+    "reranker_max_tokens": 512,
+    "reranker_query_max_tokens": 96,
+    "report_truncation": true,
+    "use_model_official_adapter": true,
+    "request_concurrency": 1,
+    "stage_timeout_seconds": 120,
+    "on_error": "fail_run"
+  },
+  "models": {
+    "bge_embedding": {
+      "path": "D:/Models/BAAI/bge-small-zh-v1.5",
+      "dimensions": 512
+    },
+    "qwen_embedding": {
+      "path": "D:/Models/Qwen/Qwen3-Embedding-0.6B",
+      "dimensions": 1024
+    },
+    "bge_reranker": {"path": "D:/Models/BAAI/bge-reranker-base"},
+    "qwen_reranker": {"path": "D:/Models/Qwen/Qwen3-Reranker-0.6B"}
+  },
+  "query_modes": ["last_turn", "deepseek_rewrite"],
+  "rewrite": {
+    "provider": "deepseek",
+    "api_base": "https://api.deepseek.com/v1",
+    "model": "deepseek-flash",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "temperature": 0,
+    "thinking": "disabled",
+    "max_tokens": 512,
+    "timeout_seconds": 120,
+    "retries": 0,
+    "response_format": "json_object"
+  },
+  "metrics": {
+    "candidate_recall_at": [50],
+    "ndcg_at": [5, 10],
+    "recall_at": [5, 10],
+    "hit_at": [5, 10],
+    "report_per_dataset_and_domain": true,
+    "exclude_no_positive_qrels": true
+  }
+}

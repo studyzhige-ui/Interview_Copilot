@@ -1,0 +1,34 @@
+........................................................................ [ 58%]
+........................................................................ [ 63%]
+........................................................................ [ 67%]
+........................................................................ [ 72%]
+........................................................................ [ 76%]
+........................................................................ [ 81%]
+........................................................................ [ 85%]
+........................................................................ [ 90%]
+........................................................................ [ 94%]
+........................................................................ [ 99%]
+............                                                             [100%]
+=============================== warnings summary ===============================
+backend/tests/test_core/test_model_runtime.py::test_build_llm_instance_returns_openai_like
+  /opt/venv/lib/python3.13/site-packages/_pytest/assertion/rewrite.py:188: DeprecationWarning: langsmith.wrappers._openai_agents is deprecated and has been moved to langsmith.integrations.openai_agents_sdk. Please update your imports.
+    exec(co, module.__dict__)
+
+backend/tests/test_rag/test_pgvector_hybrid.py::test_chinese_tokenization_and_filter_contract
+  /opt/venv/lib/python3.13/site-packages/jieba/__init__.py:44: SyntaxWarning: invalid escape sequence '\.'
+    re_han_default = re.compile("([\u4E00-\u9FD5a-zA-Z0-9+#&\._%\-]+)", re.U)
+
+backend/tests/test_rag/test_pgvector_hybrid.py::test_chinese_tokenization_and_filter_contract
+  /opt/venv/lib/python3.13/site-packages/jieba/__init__.py:46: SyntaxWarning: invalid escape sequence '\s'
+    re_skip_default = re.compile("(\r\n|\s)", re.U)
+
+backend/tests/test_rag/test_pgvector_hybrid.py::test_chinese_tokenization_and_filter_contract
+  /opt/venv/lib/python3.13/site-packages/jieba/finalseg/__init__.py:78: SyntaxWarning: invalid escape sequence '\.'
+    re_skip = re.compile("([a-zA-Z0-9]+(?:\.\d+)?%?)")
+
+backend/tests/test_services/interview/test_analysis_persistence.py::test_persist_analysis_keeps_zero_and_null_distinct
+  /workspace/backend/app/services/interview/analysis_orchestrator.py:596: SAWarning: nested transaction already deassociated from connection
+    db.commit()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1596 passed, 5 warnings in 117.35s (0:01:57)

@@ -1,0 +1,296 @@
+[
+  {
+    "id": "py-asyncio",
+    "domain": "programming",
+    "language": "en",
+    "publisher": "Python Software Foundation",
+    "url": "https://docs.python.org/3.13/library/asyncio-task.html"
+  },
+  {
+    "id": "react-effects",
+    "domain": "frontend",
+    "language": "en",
+    "publisher": "React",
+    "url": "https://react.dev/learn/synchronizing-with-effects"
+  },
+  {
+    "id": "postgres-isolation",
+    "domain": "database",
+    "language": "en",
+    "publisher": "PostgreSQL Global Development Group",
+    "url": "https://www.postgresql.org/docs/17/transaction-iso.html"
+  },
+  {
+    "id": "langchain-agents",
+    "domain": "agent",
+    "language": "en",
+    "publisher": "LangChain",
+    "url": "https://docs.langchain.com/oss/python/langchain/agents"
+  },
+  {
+    "id": "mcp-tools",
+    "domain": "agent",
+    "language": "en",
+    "publisher": "Model Context Protocol",
+    "url": "https://modelcontextprotocol.io/specification/2025-11-25/server/tools"
+  },
+  {
+    "id": "who-patient-safety",
+    "domain": "medicine",
+    "language": "en",
+    "publisher": "World Health Organization",
+    "url": "https://www.who.int/news-room/fact-sheets/detail/patient-safety"
+  },
+  {
+    "id": "w3c-non-text-content",
+    "domain": "accessibility",
+    "language": "en",
+    "publisher": "World Wide Web Consortium",
+    "url": "https://www.w3.org/WAI/WCAG22/Understanding/non-text-content.html"
+  },
+  {
+    "id": "investor-gov-introduction",
+    "domain": "finance",
+    "language": "en",
+    "publisher": "US Securities and Exchange Commission",
+    "url": "https://www.investor.gov/introduction-investing"
+  },
+  {
+    "id": "vue-reactivity-zh",
+    "domain": "frontend",
+    "language": "zh",
+    "publisher": "Vue.js",
+    "url": "https://cn.vuejs.org/guide/essentials/reactivity-fundamentals"
+  },
+  {
+    "id": "kubernetes-deployment-zh",
+    "domain": "devops",
+    "language": "zh",
+    "publisher": "Kubernetes",
+    "url": "https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/deployment/"
+  },
+  {
+    "id": "aliyun-agent-zh",
+    "domain": "agent",
+    "language": "zh",
+    "publisher": "Alibaba Cloud Model Studio",
+    "url": "https://help.aliyun.com/zh/model-studio/application-introduction"
+  },
+  {
+    "id": "labor-contract-law-zh",
+    "domain": "law",
+    "language": "zh",
+    "publisher": "中华人民共和国国家市场监督管理总局",
+    "url": "https://www.samr.gov.cn/zw/zfxxgk/fdzdgknr/bgt/art/2023/art_0abfdd261c03417b949df19d869add8d.html"
+  },
+  {
+    "id": "civil-code-zh",
+    "domain": "law",
+    "language": "zh",
+    "publisher": "广州市人民政府（转载国家法律法规数据库）",
+    "url": "https://www.gz.gov.cn/attachment/6/6824/6824798/7364356.pdf"
+  },
+  {
+    "id": "antimicrobial-use-zh",
+    "domain": "medicine",
+    "language": "zh",
+    "publisher": "中华人民共和国国家卫生健康委员会",
+    "url": "https://www.nhc.gov.cn/wjw/c100221/202201/413f7b67607949dfa9e3d881313bea5d/files/%E6%8A%97%E8%8F%8C%E8%8D%AF%E7%89%A9%E4%B8%B4%E5%BA%8A%E5%BA%94%E7%94%A8%E7%AE%A1%E7%90%86%E5%8A%9E%E6%B3%95.pdf"
+  },
+  {
+    "id": "infection-management-zh",
+    "domain": "medicine",
+    "language": "zh",
+    "publisher": "中华人民共和国国家卫生健康委员会",
+    "url": "https://www.nhc.gov.cn/wjw/c100221/202201/793c3dae63ca49b08dda27b03f9e8fd6/files/%E5%8C%BB%E9%99%A2%E6%84%9F%E6%9F%93%E7%AE%A1%E7%90%86%E5%8A%9E%E6%B3%95.pdf"
+  },
+  {
+    "id": "hand-hygiene-zh",
+    "domain": "nursing",
+    "language": "zh",
+    "publisher": "中华人民共和国国家卫生健康委员会",
+    "url": "https://www.nhc.gov.cn/fzs/c100048/201912/2d76e0867a514056be5bfc3b21221e7d/files/1733125444510_79069.pdf"
+  },
+  {
+    "id": "docker-volumes",
+    "domain": "devops",
+    "language": "en",
+    "publisher": "Docker",
+    "url": "https://docs.docker.com/engine/storage/volumes/"
+  },
+  {
+    "id": "mdn-promises",
+    "domain": "programming",
+    "language": "en",
+    "publisher": "Mozilla MDN",
+    "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Using_promises"
+  },
+  {
+    "id": "nist-csf",
+    "domain": "security",
+    "language": "en",
+    "publisher": "US National Institute of Standards and Technology",
+    "url": "https://www.nist.gov/cyberframework"
+  },
+  {
+    "id": "kubernetes-probes-en",
+    "domain": "devops",
+    "language": "en",
+    "publisher": "Kubernetes",
+    "url": "https://kubernetes.io/docs/concepts/workloads/pods/probes/"
+  },
+  {
+    "id": "git-rebase",
+    "domain": "programming",
+    "language": "en",
+    "publisher": "Git",
+    "url": "https://git-scm.com/docs/git-rebase"
+  },
+  {
+    "id": "ftc-start-security",
+    "domain": "privacy",
+    "language": "en",
+    "publisher": "US Federal Trade Commission",
+    "url": "https://www.ftc.gov/business-guidance/resources/start-security-guide-business"
+  },
+  {
+    "id": "medlineplus-medication-errors",
+    "domain": "pharmacy",
+    "language": "en",
+    "publisher": "US National Library of Medicine",
+    "url": "https://medlineplus.gov/medicationerrors.html"
+  },
+  {
+    "id": "rfc-http-semantics",
+    "domain": "networking",
+    "language": "en",
+    "publisher": "RFC Editor / IETF",
+    "url": "https://www.rfc-editor.org/rfc/rfc9110.html"
+  },
+  {
+    "id": "react-state-zh",
+    "domain": "frontend",
+    "language": "zh",
+    "publisher": "React",
+    "url": "https://zh-hans.react.dev/learn/state-a-components-memory"
+  },
+  {
+    "id": "vue-computed-zh",
+    "domain": "frontend",
+    "language": "zh",
+    "publisher": "Vue.js",
+    "url": "https://cn.vuejs.org/guide/essentials/computed"
+  },
+  {
+    "id": "kubernetes-probes-zh",
+    "domain": "devops",
+    "language": "zh",
+    "publisher": "Kubernetes",
+    "url": "https://kubernetes.io/zh-cn/docs/concepts/workloads/pods/probes/"
+  },
+  {
+    "id": "food-safety-law-zh",
+    "domain": "food_safety",
+    "language": "zh",
+    "publisher": "中华人民共和国商务部（转载国家法律法规数据库）",
+    "url": "https://policy.mofcom.gov.cn/claw/clawContent.shtml?id=104105"
+  },
+  {
+    "id": "accounting-basic-zh",
+    "domain": "accounting",
+    "language": "zh",
+    "publisher": "中华人民共和国财政部",
+    "url": "https://xj.mof.gov.cn/caizhengjiancha/200805/t20080524_40447.htm"
+  },
+  {
+    "id": "teachers-law-zh",
+    "domain": "education",
+    "language": "zh",
+    "publisher": "中华人民共和国教育部",
+    "url": "https://www.moe.gov.cn/jyb_sjzl/sjzl_zcfg/zcfg_jyfl/tnull_1314.html"
+  },
+  {
+    "id": "miit-standards-zh",
+    "domain": "manufacturing",
+    "language": "zh",
+    "publisher": "中华人民共和国工业和信息化部",
+    "url": "https://www.miit.gov.cn/cms_files/filemanager/1226211233/attach/20253/e0917b45c38344ed8add9cba98cec1ba.pdf"
+  },
+  {
+    "id": "aliyun-rag-zh",
+    "domain": "agent",
+    "language": "zh",
+    "publisher": "Alibaba Cloud Model Studio",
+    "url": "https://help.aliyun.com/zh/model-studio/rag-knowledge-base-api-guide"
+  },
+  {
+    "id": "privacy-law-zh",
+    "domain": "privacy",
+    "language": "zh",
+    "publisher": "浙江省人民政府",
+    "url": "https://zjjcmspublic.oss-cn-hangzhou-zwynet-d01-a.internet.cloud.zj.gov.cn/jcms_files/jcms1/web3250/site/attach/0/dba5604e86e84261a3f68656af8570d0.pdf"
+  },
+  {
+    "id": "safety-production-law-zh",
+    "domain": "occupational_safety",
+    "language": "zh",
+    "publisher": "中华人民共和国应急管理部",
+    "url": "https://www.mem.gov.cn/fw/flfgbz/fg/202107/t20210716_416558.shtml"
+  },
+  {
+    "id": "patent-law-zh",
+    "domain": "intellectual_property",
+    "language": "zh",
+    "publisher": "中华人民共和国国家知识产权局",
+    "url": "https://www.cnipa.gov.cn/art/2020/11/23/art_97_155167.html"
+  },
+  {
+    "id": "sklearn-cross-validation",
+    "domain": "machine_learning",
+    "language": "en",
+    "publisher": "scikit-learn",
+    "url": "https://scikit-learn.org/stable/modules/cross_validation.html"
+  },
+  {
+    "id": "pandas-groupby",
+    "domain": "data_analysis",
+    "language": "en",
+    "publisher": "pandas",
+    "url": "https://pandas.pydata.org/docs/user_guide/groupby.html"
+  },
+  {
+    "id": "python-logging",
+    "domain": "programming",
+    "language": "en",
+    "publisher": "Python Software Foundation",
+    "url": "https://docs.python.org/3.13/howto/logging.html"
+  },
+  {
+    "id": "education-discipline-zh",
+    "domain": "education",
+    "language": "zh",
+    "publisher": "中华人民共和国教育部",
+    "url": "https://www.moe.gov.cn/srcsite/A02/s5911/moe_621/202012/t20201228_507882.html"
+  },
+  {
+    "id": "ecommerce-law-samr-zh",
+    "domain": "ecommerce",
+    "language": "zh",
+    "publisher": "中华人民共和国国家市场监督管理总局",
+    "url": "https://www.samr.gov.cn/zfjcj/tzgg/art/2023/art_d337c3291e8b40459ca03dea54395856.html"
+  },
+  {
+    "id": "owasp-access-control",
+    "domain": "security",
+    "language": "en",
+    "publisher": "OWASP",
+    "url": "https://top10.owasp.org/2025/A01_2025-Broken_Access_Control/"
+  },
+  {
+    "id": "who-food-safety",
+    "domain": "food_safety",
+    "language": "en",
+    "publisher": "World Health Organization",
+    "url": "https://www.who.int/news-room/fact-sheets/detail/food-safety/"
+  }
+]

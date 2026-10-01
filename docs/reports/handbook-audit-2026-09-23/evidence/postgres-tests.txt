@@ -1,0 +1,8 @@
+.........................                                                [100%]
+============================== warnings summary ===============================
+backend/tests/test_rag/test_pgvector_hybrid.py::test_chinese_tokenization_and_filter_contract
+  D:\WorkSoftware\anaconda3\envs\Interview_Copilot\Lib\site-packages\jieba\_compat.py:18: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+    import pkg_resources
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+25 passed, 1 warning in 39.06s

@@ -1,0 +1,7 @@
+{
+  "query_instruction_max_tokens": 70,
+  "document_max_tokens": 561,
+  "template_tokens": 48,
+  "conservative_pair_bound_with_8_boundary_tokens": 687,
+  "budget_1024_covers_bound": true
+}

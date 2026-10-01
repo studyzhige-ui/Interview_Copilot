@@ -12,6 +12,7 @@ docs/prompts/
 # source documents remain runtime data under data/evaluation/.
 rag_eval_corpus/
 .venv/
+.test-deps/
 env/
 venv/
 ENV/
