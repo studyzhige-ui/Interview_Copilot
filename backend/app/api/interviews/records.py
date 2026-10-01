@@ -280,7 +280,7 @@ def get_interview_record(
         "transcript_structure": transcript.get("structure_json"),
         "transcript_quality": transcript.get("quality_json"),
         "analysis": analysis,
-        "qa": _serialize_qa_rows(db, qa_rows),
+        "qa": _serialize_qa_rows(db, qa_rows, owner_id=record.user_id),
         "error_message": record.error_message,
         "created_at": record.created_at.isoformat() if record.created_at else "",
         "updated_at": record.updated_at.isoformat() if record.updated_at else "",
@@ -299,10 +299,11 @@ def _safe_json_loads(value: Optional[str]) -> Optional[object]:
         return None
 
 
-def _serialize_qa_rows(db: Session, qa_rows: list[InterviewQA]) -> list[dict]:
+def _serialize_qa_rows(
+    db: Session, qa_rows: list[InterviewQA], *, owner_id: int
+) -> list[dict]:
     """Serialize QA rows with voice-answer playback URLs batch-minted in ONE
-    asset query (a 30-question record used to open 30 sessions). local://
-    deployments get no URL — playback degrades gracefully."""
+    asset query, with explicit owner/purpose scope for both storage providers."""
     from app.files.application.file_asset_service import presigned_get_urls
 
     urls = presigned_get_urls(
@@ -312,6 +313,8 @@ def _serialize_qa_rows(db: Session, qa_rows: list[InterviewQA]) -> list[dict]:
             for qa in qa_rows
             if qa.answer_audio_file_asset_id
         ],
+        owner_id=owner_id,
+        purpose="mock_audio_clip",
     )
     from app.models.knowledge import KnowledgeDocument
     from app.models.interview_record import InterviewRecord
@@ -363,9 +366,12 @@ def _serialize_qa(qa: InterviewQA, audio_urls: dict[str, str] | None = None) -> 
         # MOCK-7: voice answers store the clip's asset id; presigned GETs are
         # batch-minted per detail read (persisted URLs would expire). NB the
         # URL dies after ~30min — a long-open review page needs a refresh.
+        # Canonical identity is authoritative: a denied/deleted asset must
+        # never regain playback through a preserved legacy URL.
         "answer_audio_url": (
-            (audio_urls or {}).get(qa.answer_audio_file_asset_id or "")
-            or qa.answer_audio_url
+            (audio_urls or {}).get(qa.answer_audio_file_asset_id)
+            if qa.answer_audio_file_asset_id
+            else qa.answer_audio_url
         ),
         "answer_audio_file_asset_id": qa.answer_audio_file_asset_id,
         "source_segment_start": qa.source_segment_start,
@@ -483,7 +489,10 @@ def edit_interview_qa(
             payload=payload,
             current_user=current_user,
         )
-    return {"status": "success", "qa": _serialize_qa_rows(db, [qa])[0]}
+    return {
+        "status": "success",
+        "qa": _serialize_qa_rows(db, [qa], owner_id=current_user.id)[0],
+    }
 
 
 @router.post("/interview-records/{record_id}/qa/{qa_id}/save-to-knowledge")

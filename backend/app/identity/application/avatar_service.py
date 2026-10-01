@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 from app.core.storage import (
     delete_local_uri,
     delete_s3_object,
-    generate_presigned_get_url,
     is_local_uri,
 )
 from app.db.types import utc_now
@@ -44,7 +43,6 @@ _MAGIC_PREFIXES: dict[str, tuple[bytes, ...]] = {
 }
 
 _LOCAL_AVATAR_URI_PREFIX = "local://avatars/"
-_LOCAL_AVATAR_STATIC_PATH = "/api/v1/static/avatars/"
 
 
 def matches_magic(content_type: str, body: bytes) -> bool:
@@ -65,45 +63,51 @@ def read_object_head(storage_uri: str, n: int = 32) -> bytes:
     bytes went straight to object storage, so the server reads the head here to
     confirm the declared image type matches the real content.
     """
-    from app.core.storage import parse_s3_uri, s3_client
+    from app.core.storage import read_object_head as read_head
 
-    bucket, key = parse_s3_uri(storage_uri)
-    obj = s3_client.get_object(Bucket=bucket, Key=key, Range=f"bytes=0-{n - 1}")
-    return obj["Body"].read()
+    return read_head(storage_uri, n) or b""
 
 
 def public_avatar_url(user: User) -> Optional[str]:
-    """Translate the stored ``avatar_url`` to a browser-fetchable URL.
+    """Private uploaded avatars use revocable owner-bound read capabilities.
 
-    Three storage shapes are supported:
-      * ``s3://bucket/...``           → presigned GET URL (15-min TTL); the
-        browser fetches bytes straight from S3 / MinIO.
-      * ``local://avatars/<rel>...``  → ``/api/v1/static/avatars/<rel>`` —
-        S3-fallback storage, served by FastAPI's StaticFiles mount.
-      * ``http(s)://...``              → user-supplied public URL, verbatim.
-      * ``None`` / ``""``              → no avatar.
+    Legacy local avatars without FileAsset rows use the same private endpoint;
+    existing external HTTP avatars remain ordinary externally hosted URLs.
     """
     raw = (user.avatar_url or "").strip()
     if not raw:
         return None
-    if raw.startswith("s3://"):
-        try:
-            return generate_presigned_get_url(raw, expiration=900)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Presign avatar GET failed for user=%s: %s",
-                user.username,
-                exc,
-            )
-            return None
-    if raw.startswith(_LOCAL_AVATAR_URI_PREFIX):
-        # Strip the ``local://avatars/`` prefix and prepend the static mount
-        # so the browser hits FastAPI for the bytes. URL-quote the segments
-        # so spaces / unicode in usernames don't break the route.
-        rel_under_mount = raw[len(_LOCAL_AVATAR_URI_PREFIX) :]
-        from urllib.parse import quote
+    if raw.startswith(("s3://", "local://")):
+        from sqlalchemy.orm import object_session
+        from app.models.file_asset import FileAsset
+        from app.files.application.storage_access import asset_url
 
-        return f"{_LOCAL_AVATAR_STATIC_PATH}{quote(rel_under_mount, safe='/')}"
+        db = object_session(user)
+        if db is None:
+            return None
+        asset = (
+            db.query(FileAsset)
+            .filter(
+                FileAsset.user_id == user.id,
+                FileAsset.storage_uri == raw,
+                FileAsset.purpose == "avatar",
+                FileAsset.deleted_at.is_(None),
+                FileAsset.upload_status.in_(("uploaded", "consumed")),
+                FileAsset.validation_status == "passed",
+            )
+            .first()
+        )
+        if asset is not None:
+            return asset_url(asset, owner=user, operation="read", expiration=900)
+        # Legacy avatars without FileAsset rows are served by an owner-bound
+        # capability, never by a public static mount.
+        if raw.startswith(_LOCAL_AVATAR_URI_PREFIX):
+            from app.files.application.storage_access import legacy_avatar_asset
+
+            return asset_url(
+                legacy_avatar_asset(user), owner=user, operation="read", expiration=900
+            )
+        return None
     if raw.startswith("http://") or raw.startswith("https://"):
         return raw
     # Anything else (e.g. ``local://resumes/...``, a stray absolute path) is

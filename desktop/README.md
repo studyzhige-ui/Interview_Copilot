@@ -1,7 +1,9 @@
 # Windows desktop acceptance build
 
 This is a Windows x64 Electron launcher for the existing local Docker runtime.
-It keeps PostgreSQL/pgvector, Redis, Celery workers, MinIO, local files and BYOK.
+It keeps PostgreSQL/pgvector, Redis, Celery workers, local files and BYOK.
+New files use the private filesystem provider by default. An explicitly configured
+S3 endpoint remains optional; existing URI schemes keep their original provider.
 Supabase handles identity only. The prior static-page prototype is retained as
 `npm run prototype` and is not the production workspace.
 
@@ -19,21 +21,36 @@ requires network access to fetch the pinned base images and dependencies and
 build the app images; it is not a fully offline installer. Large local model
 weights are not included or downloaded automatically.
 
+Before the first workspace is created, the user may choose a local parent folder
+for files and caches. The app creates an exclusive owned child and stores that
+location in protected settings. Existing directories are not silently adopted,
+and existing workspaces cannot be moved by changing this picker. PostgreSQL's
+Docker-managed volume is separate from this file/cache directory.
+
 The launcher always targets the local Windows Docker named pipe, ignores an
 ambient remote Docker context, and restricts Compose interpolation to its own
 configuration. It labels its containers and uses an installation-specific project
-and image names. Database and Redis ports are not exposed to the host; product
-and object URLs are bound to loopback only. Start rejects a port or ownership
+and image names. Database and Redis ports are not exposed to the host; the product
+and scoped file API share one loopback origin. Start rejects a port or ownership
 collision. Stop operates only on verified owned container IDs and never deletes
 volumes. It remains available after partial startup or a version mismatch.
 
 Application data and protected runtime settings live under Electron's per-user
-`userData/local-workspace`; Docker database/object volumes retain the project
+`userData/local-workspace`; Docker database volumes retain the project
 identity. Windows protects the runtime settings using Electron safeStorage
-(DPAPI). This does not encrypt PostgreSQL/object volumes, recordings, or all
+(DPAPI). This does not encrypt PostgreSQL volumes, recordings, or all
 browser session storage. Preserve both the data and original protected settings;
 copying the encrypted settings to a different Windows user/machine is not a
 supported migration method. The app refuses to silently replace unreadable keys.
+First configuration and ownership markers are published atomically; a failed
+first write can clean up only its own temporary file and empty new directory.
+
+The default stack no longer starts historical MinIO images. Their distribution
+and vendor security advisories prevent acceptance of that deployment. Existing
+MinIO volumes are retained, and legacy S3 reads need an explicitly configured
+endpoint or a separately approved migration. No original data is deleted or
+automatically moved. The S3-compatible test server in CI is a disposable fixture,
+not a shipped replacement or proof of all external S3 providers.
 
 This initial launcher refuses automatic runtime-bundle upgrades for an existing
 workspace. A version change needs a separately verified backup/migration path;
@@ -73,7 +90,7 @@ executable; a handler subsequently assigned to another application is preserved.
 The OS callback uses only the `interview-copilot` scheme, `auth` host and
 `/confirm` or `/recovery` path, with a bounded per-flow `#state=UUID` fragment. The current Supabase Auth
 implementation excludes fragments from redirect allowlist matching and preserves
-them on a successful PKCE return, so the proposed hosted entries remain exactly
+them on a successful PKCE return, so the approved hosted entries are exactly
 `interview-copilot://auth/confirm` and `interview-copilot://auth/recovery`. No host,
 path or query wildcard is required. Error returns without state are notices only
 and do not consume an active flow. The hosted project's health endpoint reports
@@ -100,7 +117,7 @@ uses OS ShellExecute with synthetic pending metadata to check closed/warm launch
 single-instance delivery, fragment preservation, stale/duplicate/expired rejection,
 and uninstall cleanup. It never calls Supabase or starts Docker Desktop. A Linux
 Docker job starts the real bundled services, pings every Celery lane, writes
-synthetic PostgreSQL/object/file fixtures, and verifies retention and ownership on
+synthetic PostgreSQL/private-file fixtures, and verifies retention and ownership on
 stop/restart. Its temporary settings codec is explicitly a test fixture; it does
 not prove Windows DPAPI. These jobs must run successfully on the exact PR head
 before their checks can be claimed as passed. Neither substitutes for live email,

@@ -213,14 +213,20 @@ def test_s3_download_is_bounded_and_body_closes_on_hash_mismatch(
     body = Body(b"changed")
     seen = []
 
-    @contextmanager
     def client(*args, **kwargs):
         seen.append(kwargs["config"])
-        yield SimpleNamespace(
-            get_object=lambda **args: {"ContentLength": 7, "Body": body}
+        return SimpleNamespace(
+            head_object=lambda **args: {"ContentLength": 7},
+            get_object=lambda **args: {"ContentLength": 7, "Body": body},
         )
 
+    monkeypatch.setattr(settings, "AWS_ENDPOINT_URL", "https://s3.example.invalid")
+    monkeypatch.setattr(settings, "AWS_ACCESS_KEY_ID", "synthetic")
+    monkeypatch.setattr(settings, "AWS_SECRET_ACCESS_KEY", "synthetic")
     monkeypatch.setattr(boto3, "client", client)
+    from app.core import storage
+
+    monkeypatch.setattr(storage, "s3_client", storage._LazyS3Client())
     chosen = replace(
         selection(db_session, audio_data),
         storage_uri=f"s3://{settings.S3_BUCKET_NAME}/owned/audio",

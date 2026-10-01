@@ -543,7 +543,7 @@ def set_avatar(
         and asset.size_bytes > avatar_service.AVATAR_MAX_BYTES
     ):
         raise HTTPException(status_code=413, detail="图片过大（>1MB），请压缩后再试")
-    if not (asset.storage_uri or "").startswith("s3://"):
+    if not (asset.storage_uri or "").startswith(("s3://", "local://")):
         raise HTTPException(status_code=400, detail="头像存储位置无效")
 
     # Magic-byte check on the uploaded bytes (the server never saw them during

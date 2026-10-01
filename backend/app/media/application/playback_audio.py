@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 import io
-from pathlib import Path
-from tempfile import TemporaryDirectory
 import time
 import wave
 
@@ -21,57 +19,16 @@ PLAYBACK_DEADLINE_SECONDS = 120
 
 @contextmanager
 def _local_source(storage_uri: str, *, max_bytes: int, deadline: float):
-    from app.core.config import settings
-    from app.core.storage import is_local_uri, parse_local_uri, parse_s3_uri
+    from app.core.storage import materialize_object
 
-    if is_local_uri(storage_uri):
-        yield str(parse_local_uri(storage_uri))
-        return
-    if not storage_uri.startswith("s3://"):
-        raise CommandError("conflict", "原录音存储类型不支持安全回放")
-    bucket, key = parse_s3_uri(storage_uri)
-    if bucket != settings.S3_BUCKET_NAME:
-        raise CommandError("conflict", "原录音不在受控存储范围内")
-
-    import boto3
-    from botocore.config import Config
-
-    # A stalled object store cannot occupy the bounded playback pool forever.
-    with boto3.client(
-        "s3",
-        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-        region_name=settings.AWS_REGION,
-        endpoint_url=settings.AWS_ENDPOINT_URL,
-        config=Config(
-            connect_timeout=5, read_timeout=10, retries={"total_max_attempts": 1}
-        ),
-    ) as client:
-        response = client.get_object(Bucket=bucket, Key=key)
-        body = response["Body"]
-        try:
-            size = response.get("ContentLength")
-            if type(size) is not int or not 0 < size <= max_bytes:
-                raise ValueError("audio_input_size_invalid")
-            with TemporaryDirectory(prefix="interview-playback-object-") as root:
-                path = Path(root) / "source.audio"
-                total = 0
-                with path.open("xb") as output:
-                    while True:
-                        if time.monotonic() >= deadline:
-                            raise TimeoutError("playback_deadline")
-                        block = body.read(64 * 1024)
-                        if not block:
-                            break
-                        total += len(block)
-                        if total > max_bytes or total > size:
-                            raise ValueError("audio_input_size_invalid")
-                        output.write(block)
-                if total != size:
-                    raise ValueError("audio_source_changed")
-                yield str(path)
-        finally:
-            body.close()
+    if time.monotonic() >= deadline:
+        raise TimeoutError("playback_deadline")
+    with materialize_object(
+        storage_uri, max_bytes=max_bytes, deadline=deadline
+    ) as path:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("playback_deadline")
+        yield path
 
 
 async def _decode(path, *, first, last, max_bytes, max_ms, timeout):

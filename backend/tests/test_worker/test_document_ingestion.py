@@ -32,6 +32,9 @@ def _skip_worker_runtime_warmup(monkeypatch):
     unrelated and capable of blocking an otherwise in-memory unit test.  The
     signal-to-runtime mapping is covered separately by ``test_celery_routes``.
     """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "S3_BUCKET_NAME", "b")
     import app.rag.runtime as rag_runtime
 
     monkeypatch.setattr(rag_runtime, "ensure_rag_runtime", lambda **kwargs: None)
@@ -103,7 +106,7 @@ def test_chat_audio_is_transcribed_into_private_citable_chunks(worker_db, monkey
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "wb").write(b"audio"),
     )
 
@@ -225,7 +228,7 @@ def test_worker_marks_failed_on_empty_after_cleaning_without_retry(
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
@@ -260,7 +263,7 @@ def test_worker_keeps_processing_when_index_queued(worker_db, monkeypatch):
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
@@ -299,7 +302,7 @@ def test_ready_chat_projection_notifies_waiting_turn_service(worker_db, monkeypa
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
@@ -346,7 +349,7 @@ def test_worker_marks_failed_on_embedding_validation_without_retry(
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
@@ -383,7 +386,7 @@ def test_worker_does_not_leave_document_processing_for_non_retryable_crash(
 
     monkeypatch.setattr(
         storage_mod,
-        "download_file_from_s3",
+        "download_file_from_storage",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
@@ -421,7 +424,7 @@ def test_source_edit_during_download_stops_before_parser(worker_db, monkeypatch)
             db.get(KnowledgeDocument, doc_id).title = "new source title"
             db.commit()
 
-    monkeypatch.setattr(storage, "download_file_from_s3", download)
+    monkeypatch.setattr(storage, "download_file_from_storage", download)
     monkeypatch.setattr(
         pipeline,
         "ingest_document",
@@ -472,7 +475,7 @@ def test_late_ingest_cannot_revive_deleted_source_and_waits_without_transaction(
         }
 
     monkeypatch.setattr(worker, "SessionLocal", sessions)
-    monkeypatch.setattr(storage, "download_file_from_s3", download)
+    monkeypatch.setattr(storage, "download_file_from_storage", download)
     monkeypatch.setattr(pipeline, "ingest_document", ingest)
     assert worker.process_document_ingestion.run(doc_id)["status"] == "superseded"
     with worker_db() as db:

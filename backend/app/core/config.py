@@ -103,6 +103,8 @@ class Settings(BaseSettings):
 
     # Local upload backups and object-storage staging
     STORAGE_DIR: str = ""
+    STORAGE_BACKEND: Literal["filesystem", "s3"] = "filesystem"
+    STORAGE_MIN_FREE_BYTES: int = Field(default=64 * 1024 * 1024, ge=0)
 
     # Parser device policy. RAG weights use the independently configured broker;
     # its device is explicit and never initializes CUDA in this process.
@@ -377,11 +379,11 @@ class Settings(BaseSettings):
     NOTION_OAUTH_CLIENT_SECRET: SecretStr = SecretStr("")
     NOTION_OAUTH_REDIRECT_URI: str = ""
 
-    # S3-compatible object storage. Defaults are for local MinIO development.
-    AWS_ACCESS_KEY_ID: str = "minioadmin"
-    AWS_SECRET_ACCESS_KEY: str = "minioadmin"
+    # Optional S3-compatible storage requires explicit endpoint and credentials.
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
     AWS_REGION: str = "us-east-1"
-    AWS_ENDPOINT_URL: str = "http://localhost:9000"
+    AWS_ENDPOINT_URL: str = ""
     # Browser-facing endpoint used only to sign presigned URLs. Containers use
     # AWS_ENDPOINT_URL=http://minio:9000 for server I/O while browsers need a
     # host/public address such as http://localhost:9000.

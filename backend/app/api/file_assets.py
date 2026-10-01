@@ -19,11 +19,12 @@ import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.rate_limit import RATE_UPLOAD, limiter
 from app.core.security import get_current_user
+from app.core.storage import StorageConfigurationError
 from app.db.database import get_db
 from app.models.file_asset import FileAsset
 from app.models.user import User
@@ -96,6 +97,8 @@ def create_upload_url(
             content_type=body.content_type,
             size_bytes=body.size_bytes,
         )
+    except StorageConfigurationError as exc:
+        raise HTTPException(503, str(exc)) from exc
     except UnknownUploadPurpose:
         raise HTTPException(status_code=400, detail=f"不支持的上传用途：{body.purpose}")
     except UploadTooLarge as exc:
@@ -121,11 +124,20 @@ def confirm_upload(
     ``validation_status=passed`` attests existence + size only; deep content
     validation is the consuming domain's parse/ingest step.
     """
-    asset = confirm_file_asset(
-        db,
-        file_asset_id=file_asset_id,
-        user_id=current_user.username,
-    )
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    try:
+        asset = confirm_file_asset(
+            db,
+            file_asset_id=file_asset_id,
+            user_id=current_user.username,
+        )
+    except StorageConfigurationError as exc:
+        db.rollback()
+        raise HTTPException(503, str(exc)) from exc
+    except (BotoCoreError, ClientError, OSError) as exc:
+        db.rollback()
+        raise HTTPException(503, "文件存储暂时不可用，请稍后重试") from exc
     if asset is None:
         raise HTTPException(status_code=404, detail="文件资产不存在或无权访问")
     return ConfirmResponse(
@@ -221,8 +233,9 @@ def permanently_delete_file_asset(
     return execution.result
 
 
-@router.get("/file-assets/{file_asset_id}/download")
+@router.api_route("/file-assets/{file_asset_id}/download", methods=["GET", "HEAD"])
 def download_file_asset(
+    request: Request,
     file_asset_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -243,61 +256,306 @@ def download_file_asset(
     if asset is None:
         raise HTTPException(status_code=404, detail="文件资产不存在或不可下载")
 
-    if asset.storage_uri.startswith("s3://"):
-        from app.core.config import settings
-        from app.core.storage import parse_s3_uri, s3_client
+    return _stream_asset(request, asset, attachment=True)
 
+
+@router.get("/file-assets/storage-usage")
+def storage_usage(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Owner logical usage; optional device capacity, never filesystem paths."""
+    import shutil
+    from sqlalchemy import func
+    from app.core.config import settings
+    from app.core.storage import check_free_space
+
+    used, count = (
+        db.query(
+            func.coalesce(func.sum(FileAsset.size_bytes), 0), func.count(FileAsset.id)
+        )
+        .filter(
+            FileAsset.user_id == current_user.id,
+            FileAsset.deleted_at.is_(None),
+            FileAsset.upload_status.in_(("uploaded", "consumed")),
+            FileAsset.validation_status == "passed",
+        )
+        .one()
+    )
+    free = total = None
+    if settings.STORAGE_BACKEND == "filesystem":
         try:
-            bucket, key = parse_s3_uri(asset.storage_uri)
-            if bucket != settings.S3_BUCKET_NAME:
-                raise ValueError("FileAsset points outside the controlled bucket")
-            object_response = s3_client.get_object(Bucket=bucket, Key=key)
-        except Exception as exc:  # noqa: BLE001 - no raw storage fallback
-            logger.warning("download read failed for %s", asset.id, exc_info=True)
-            raise HTTPException(status_code=503, detail="文件暂时无法下载") from exc
-
-        body = object_response["Body"]
-
-        def iter_object():
+            check_free_space()
+            capacity = shutil.disk_usage(settings.STORAGE_DIR)
+            free, total = capacity.free, capacity.total
+        except OSError:
+            # Capacity still useful on a full disk; an absent/unreadable mount is unknown.
             try:
-                yield from body.iter_chunks(chunk_size=64 * 1024)
-            finally:
-                body.close()
+                capacity = shutil.disk_usage(settings.STORAGE_DIR)
+                free, total = capacity.free, capacity.total
+            except OSError:
+                pass
+    return {
+        "backend": settings.STORAGE_BACKEND,
+        "used_bytes": int(used),
+        "asset_count": count,
+        "free_bytes": free,
+        "total_bytes": total,
+    }
 
-        headers = {
-            "Cache-Control": "private, no-store",
-            "Content-Disposition": (
-                f"attachment; filename*=UTF-8''{quote(asset.original_filename, safe='')}"
-            ),
-            "X-Content-Type-Options": "nosniff",
-        }
-        response_size = object_response.get("ContentLength", asset.size_bytes)
-        if response_size is not None:
-            headers["Content-Length"] = str(response_size)
-        return StreamingResponse(
-            iter_object(),
-            media_type=asset.content_type or "application/octet-stream",
-            headers=headers,
-        )
 
-    from app.core.storage import is_local_uri, parse_local_uri
+def _capability_asset(db, file_asset_id, token, operation, *, lock=False):
+    from app.files.application.storage_access import decode_capability, matches_asset
 
-    if is_local_uri(asset.storage_uri):
+    try:
+        claims = decode_capability(token, operation=operation)
+    except Exception as exc:
+        raise HTTPException(403, "文件访问凭据无效或已过期") from exc
+    query = db.query(FileAsset).filter(
+        FileAsset.id == file_asset_id, FileAsset.deleted_at.is_(None)
+    )
+    if lock:
+        query = query.populate_existing().with_for_update()
+    asset = query.one_or_none()
+    owner = db.get(User, claims["owner"])
+    if owner is None or not owner.is_active or owner.token_version != claims["tv"]:
+        raise HTTPException(403, "文件访问凭据已撤销")
+    if (
+        asset is None
+        and operation == "read"
+        and file_asset_id == f"legacy-avatar-{owner.id}"
+        and (owner.avatar_url or "").startswith("local://avatars/")
+    ):
+        from app.files.application.storage_access import legacy_avatar_asset
+
+        asset = legacy_avatar_asset(owner)
+    if asset is None or not matches_asset(claims, asset):
+        raise HTTPException(404, "文件资产不存在或无权访问")
+    return asset
+
+
+@router.put("/file-assets/{file_asset_id}/content", status_code=204)
+@limiter.limit(RATE_UPLOAD)
+async def upload_file_content(
+    request: Request,
+    response: Response,
+    file_asset_id: str,
+    token: str,
+    db: Session = Depends(get_db),
+):
+    """Stream to bounded scratch, then create-only commit while holding asset lock."""
+    import errno
+    import hashlib
+    from botocore.exceptions import BotoCoreError, ClientError
+    import tempfile
+    from app.core import storage
+    from app.files.application.purpose_registry import get_purpose_spec
+
+    from starlette.concurrency import run_in_threadpool
+
+    # A waiting PostgreSQL row lock must not block the event loop that is
+    # still receiving the upload holding that lock.
+    asset = await run_in_threadpool(
+        _capability_asset, db, file_asset_id, token, "write", lock=True
+    )
+    if asset.upload_status != "pending_upload":
+        raise HTTPException(409, "上传已结束，请重新创建文件资产")
+    spec = get_purpose_spec(asset.purpose)
+    if spec is None:
+        raise HTTPException(409, "不支持的上传用途")
+    incoming_type = (
+        request.headers.get("content-type", "application/octet-stream")
+        .split(";", 1)[0]
+        .strip()
+        .lower()
+    )
+    if (
+        incoming_type
+        != (asset.content_type or "application/octet-stream")
+        .split(";", 1)[0]
+        .strip()
+        .lower()
+    ):
+        raise HTTPException(415, "文件类型与上传声明不一致")
+    declared = request.headers.get("content-length")
+    if declared is not None:
         try:
-            local_path = parse_local_uri(asset.storage_uri)
+            length = int(declared)
         except ValueError as exc:
-            logger.warning("unsafe local FileAsset URI for %s", asset.id)
-            raise HTTPException(status_code=404, detail="文件资产不可下载") from exc
-        if not local_path.is_file():
-            raise HTTPException(status_code=404, detail="文件资产不可下载")
-        return FileResponse(
-            path=local_path,
+            raise HTTPException(400, "文件长度无效") from exc
+        if length < 0 or length > spec.max_bytes:
+            raise HTTPException(413, "文件超过上传上限")
+        if asset.size_bytes is not None and length != asset.size_bytes:
+            raise HTTPException(400, "文件长度与上传声明不一致")
+    try:
+        if storage.head_object(asset.storage_uri) is not None:
+            raise HTTPException(409, "文件已上传，请确认上传结果")
+        storage.check_free_space(asset.size_bytes or 0)
+        # Scratch lives on the managed volume; never accumulate a 500MB request in RAM.
+        with tempfile.TemporaryFile(dir=storage.settings.STORAGE_DIR) as staged:
+            size = 0
+            digest = hashlib.sha256()
+            async for block in request.stream():
+                size += len(block)
+                if size > spec.max_bytes:
+                    raise HTTPException(413, "文件超过上传上限")
+                if asset.size_bytes is not None and size > asset.size_bytes:
+                    raise HTTPException(400, "文件长度与上传声明不一致")
+                storage.check_free_space(len(block))
+                staged.write(block)
+                digest.update(block)
+            if asset.size_bytes is not None and size != asset.size_bytes:
+                raise HTTPException(400, "文件上传不完整")
+            if declared is not None and size != int(declared):
+                raise HTTPException(400, "文件上传不完整")
+            # Recheck expiration immediately before committing a slow upload.
+            from app.files.application.storage_access import decode_capability
+
+            try:
+                decode_capability(token, operation="write")
+            except Exception as exc:
+                raise HTTPException(403, "文件访问凭据已过期") from exc
+            await run_in_threadpool(
+                storage.store_object,
+                staged,
+                asset.storage_uri,
+                content_type=asset.content_type,
+                max_bytes=spec.max_bytes,
+            )
+            from app.files.application.file_asset_service import (
+                record_file_asset_upload,
+            )
+
+            record_file_asset_upload(db, asset, digest.hexdigest())
+    except StorageConfigurationError as exc:
+        db.rollback()
+        raise HTTPException(503, str(exc)) from exc
+    except FileExistsError as exc:
+        db.rollback()
+        raise HTTPException(409, "文件已上传") from exc
+    except ClientError as exc:
+        db.rollback()
+        code = str(exc.response.get("Error", {}).get("Code"))
+        if code in {"412", "PreconditionFailed", "ConditionalRequestConflict"}:
+            raise HTTPException(409, "文件已上传") from exc
+        raise HTTPException(503, "文件存储暂时不可用") from exc
+    except BotoCoreError as exc:
+        db.rollback()
+        raise HTTPException(503, "文件存储暂时不可用") from exc
+    except OSError as exc:
+        db.rollback()
+        if exc.errno == errno.ENOSPC:
+            raise HTTPException(507, "存储空间不足，请释放空间后重试") from exc
+        raise HTTPException(503, "文件存储暂时不可用") from exc
+    except BaseException:
+        db.rollback()
+        raise
+    return Response(status_code=204)
+
+
+def _stream_asset(request: Request, asset, *, attachment=False):
+    from app.core.storage import head_object, open_object
+
+    try:
+        meta = head_object(asset.storage_uri)
+    except StorageConfigurationError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(404, "文件资产不可下载") from exc
+    except Exception as exc:
+        raise HTTPException(503, "文件暂时不可读") from exc
+    if meta is None:
+        raise HTTPException(404, "文件不存在")
+    size = meta["size_bytes"]
+    base_content_type = (
+        (asset.content_type or "application/octet-stream")
+        .split(";", 1)[0]
+        .strip()
+        .lower()
+    )
+    safe_inline = asset.purpose in {
+        "avatar",
+        "interview_audio",
+        "mock_audio_clip",
+    } and base_content_type in {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "audio/mpeg",
+        "audio/wav",
+        "audio/x-wav",
+        "audio/ogg",
+        "audio/webm",
+        "audio/mp4",
+        "video/mp4",
+        "video/webm",
+    }
+    attachment = attachment or not safe_inline
+    headers = {
+        "Referrer-Policy": "no-referrer",
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f"{'attachment' if attachment else 'inline'}; filename*=UTF-8''{quote(asset.original_filename, safe='')}",
+    }
+    start, end, status = 0, size - 1, 200
+    byte_range = request.headers.get("range")
+    if byte_range:
+        import re
+
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", byte_range.strip())
+        if not match or not any(match.groups()) or size == 0:
+            raise HTTPException(
+                416, "无效的文件范围", headers={"Content-Range": f"bytes */{size}"}
+            )
+        first, last = match.groups()
+        if first:
+            start, end = int(first), min(int(last) if last else size - 1, size - 1)
+        else:
+            start, end = max(0, size - int(last)), size - 1
+        if start >= size or start > end or (not first and int(last) == 0):
+            raise HTTPException(
+                416, "无效的文件范围", headers={"Content-Range": f"bytes */{size}"}
+            )
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        status = 206
+    length = max(0, end - start + 1)
+    headers["Content-Length"] = str(length)
+    if request.method == "HEAD":
+        return Response(
+            status_code=status,
+            headers=headers,
             media_type=asset.content_type or "application/octet-stream",
-            filename=asset.original_filename,
-            headers={
-                "Cache-Control": "private, no-store",
-                "X-Content-Type-Options": "nosniff",
-            },
         )
 
-    raise HTTPException(status_code=409, detail="该存储类型不支持安全下载")
+    def chunks():
+        with open_object(
+            asset.storage_uri, start=start, end=end if size else None
+        ) as stream:
+            remaining = length
+            while remaining:
+                block = stream.read(min(64 * 1024, remaining))
+                if not block:
+                    raise OSError("Incomplete object stream")
+                remaining -= len(block)
+                yield block
+
+    return StreamingResponse(
+        chunks(),
+        status_code=status,
+        headers=headers,
+        media_type=asset.content_type or "application/octet-stream",
+    )
+
+
+@router.api_route("/file-assets/{file_asset_id}/content", methods=["GET", "HEAD"])
+def read_file_content(
+    request: Request, file_asset_id: str, token: str, db: Session = Depends(get_db)
+):
+    asset = _capability_asset(db, file_asset_id, token, "read")
+    if (
+        asset.upload_status not in ("uploaded", "consumed")
+        or asset.validation_status != "passed"
+    ):
+        raise HTTPException(404, "文件资产不可读")
+    return _stream_asset(request, asset)

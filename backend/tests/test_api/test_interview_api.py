@@ -741,3 +741,51 @@ def test_poll_record_snapshot_returns_plain_dict_not_orm_row(db: Session):
     # a live session — assertable equality after the fixture-owned
     # session is no longer referenced anywhere in this test.
     assert snap["id"] == "ir_snap"
+
+
+@pytest.mark.parametrize("audio_urls", [None, {}])
+def test_canonical_mock_audio_never_falls_back_when_signer_omits_asset(audio_urls):
+    from app.api.interviews.records import _serialize_qa
+    from app.models.interview_qa import InterviewQA
+
+    qa = InterviewQA(
+        id="qa_canonical",
+        record_id="ir_canonical",
+        question="Question",
+        answer_audio_file_asset_id="fa_denied",
+        answer_audio_url="https://legacy.example/stale.mp3",
+    )
+    result = _serialize_qa(qa, audio_urls=audio_urls)
+    assert result["answer_audio_file_asset_id"] == "fa_denied"
+    assert result["answer_audio_url"] is None
+
+
+def test_canonical_mock_audio_uses_only_scoped_url():
+    from app.api.interviews.records import _serialize_qa
+    from app.models.interview_qa import InterviewQA
+
+    qa = InterviewQA(
+        id="qa_canonical",
+        record_id="ir_canonical",
+        question="Question",
+        answer_audio_file_asset_id="fa_owned",
+        answer_audio_url="https://legacy.example/stale.mp3",
+    )
+    scoped = "/api/v1/file-assets/fa_owned/content?token=synthetic"
+    assert (
+        _serialize_qa(qa, audio_urls={"fa_owned": scoped})["answer_audio_url"] == scoped
+    )
+
+
+def test_legacy_only_mock_audio_preserves_existing_url():
+    from app.api.interviews.records import _serialize_qa
+    from app.models.interview_qa import InterviewQA
+
+    qa = InterviewQA(
+        id="qa_legacy",
+        record_id="ir_legacy",
+        question="Question",
+        answer_audio_file_asset_id=None,
+        answer_audio_url="https://legacy.example/original.mp3",
+    )
+    assert _serialize_qa(qa, audio_urls={})["answer_audio_url"] == qa.answer_audio_url

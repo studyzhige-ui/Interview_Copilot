@@ -54,7 +54,7 @@ def execute_ingestion(
     wake_attachment_turns,
 ):
     from app.core.runtime_files import create_runtime_temp_file
-    from app.core.storage import download_file_from_s3
+    from app.core.storage import download_file_from_storage
     from app.rag.cleaning import EmptyContentError
     from app.rag.embedding_registry import EmbeddingValidationError
     from app.rag.ingest.pipeline import ingest_document, ingest_transcript
@@ -123,12 +123,10 @@ def execute_ingestion(
             raise ValueError("Audio transcription is only valid for chat attachments")
         if prepared.purpose == "knowledge_document":
             validate_knowledge_document_format(prepared.filename, prepared.content_type)
-        if not prepared.storage_uri.startswith("s3://"):
-            raise ValueError("Knowledge ingestion only accepts owned S3 uploads")
         prefix = f"uploads/{snapshot.user_id}/{prepared.file_id}/"
-        from app.core.storage import parse_s3_uri
+        from app.core.storage import object_key_from_uri
 
-        _, storage_key = parse_s3_uri(prepared.storage_uri)
+        storage_key = object_key_from_uri(prepared.storage_uri)
         if (
             not prepared.object_key.startswith(prefix)
             or storage_key != prepared.object_key
@@ -136,7 +134,7 @@ def execute_ingestion(
             raise ValueError("Knowledge upload object key does not match owner prefix")
         path = create_runtime_temp_file(suffix=os.path.splitext(prepared.object_key)[1])
         with for_owner(snapshot.user_id, operation=f"ingest:{document_id}:{task_id}"):
-            download_file_from_s3(prepared.storage_uri, path)
+            download_file_from_storage(prepared.storage_uri, path)
             # Reject a concurrent edit before paying for ASR/parser/embedding.
             with session_factory() as db:
                 _current(db, document_id, snapshot)

@@ -24,19 +24,11 @@ def _stub_presign(monkeypatch):
     Records the TTL each call used so tests can pin UP-7."""
     calls = {}
 
-    def _fake(object_key, content_type="application/octet-stream", expiration=600):
+    def _fake(asset, *, owner, operation, expiration=600):
         calls["expiration"] = expiration
-        return {
-            "upload_url": f"https://signed.example/{object_key}",
-            "storage_uri": f"s3://bucket/{object_key}",
-            "object_key": object_key,
-        }
+        return f"https://signed.example/{asset.id}"
 
-    monkeypatch.setattr(
-        file_asset_service,
-        "generate_presigned_upload_url_for_key",
-        _fake,
-    )
+    monkeypatch.setattr("app.files.application.storage_access.asset_url", _fake)
     return calls
 
 
@@ -405,6 +397,7 @@ def test_delete_object_handler_enforces_owner_prefix(monkeypatch):
     from app.core import storage
 
     deleted = []
+    monkeypatch.setattr(storage.settings, "S3_BUCKET_NAME", "bucket")
     monkeypatch.setattr(storage, "delete_s3_object", deleted.append)
     owned_job = SimpleNamespace(
         job_type="delete_object",

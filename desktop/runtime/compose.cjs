@@ -4,8 +4,13 @@ const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
-const REQUIRED = ['db', 'redis', 'minio', 'api', 'frontend', 'worker-turns', 'worker-transcription', 'worker-pipeline', 'worker-jobs', 'beat'];
+const { absoluteLocalDirectory, selectedParent, createDataDirectory, verifyDataDirectory, discardUncommittedDataDirectory } = require('./data-directory.cjs');
+const { writePrivateFileExclusively: writeSettingsExclusively } = require('./private-file.cjs');
+const REQUIRED = ['db', 'redis', 'api', 'frontend', 'worker-turns', 'worker-transcription', 'worker-pipeline', 'worker-jobs', 'beat'];
 const LABEL = 'io.interview-copilot.installation';
+// Values injected after `compose config` must survive the second interpolation
+// pass literally. Never re-escape the model already serialized by Compose.
+const composeLiteral = value => value.replaceAll('$', () => '$$');
 function projectName(id) { if (!/^[a-f0-9]{24}$/.test(id)) throw new Error('本地工作区标识无效'); return `interview-copilot-${id}`; }
 function publicConfig(value) {
   if (value?.provider !== 'supabase') throw new Error('发行包缺少统一账号配置');
@@ -19,10 +24,9 @@ function environment(state, auth) {
     APP_EDITION: 'community', AUTH_PROVIDER: 'supabase', SUPABASE_URL: auth.url,
     SUPABASE_PUBLISHABLE_KEY: auth.publishableKey, SUPABASE_EMAIL_DELIVERY: auth.emailDelivery,
     SECRET_KEY: state.secret, POSTGRES_USER: 'postgres', POSTGRES_PASSWORD: state.databasePassword,
-    POSTGRES_DB: 'interview_copilot', AWS_ACCESS_KEY_ID: state.storageUser, AWS_SECRET_ACCESS_KEY: state.storagePassword,
+    POSTGRES_DB: 'interview_copilot', STORAGE_BACKEND: 'filesystem', STORAGE_DIR: '/app/data/storage', STORAGE_MIN_FREE_BYTES: '67108864',
     DATABASE_URL: `postgresql://postgres:${state.databasePassword}@db:5432/interview_copilot`,
-    REDIS_URL: 'redis://redis:6379/0', S3_BUCKET_NAME: 'interview-copilot-bucket',
-    S3_PUBLIC_ENDPOINT_URL: `http://127.0.0.1:${state.storagePort}`, CORS_ORIGINS: `http://127.0.0.1:${state.port}`,
+    REDIS_URL: 'redis://redis:6379/0', CORS_ORIGINS: `http://127.0.0.1:${state.port}`,
     APP_EXTRAS: '', UVICORN_WORKERS: '2',
   };
   for (const value of Object.values(values)) if (/[\r\n\0]/.test(value)) throw new Error('本地配置包含无效字符');
@@ -35,19 +39,19 @@ function ownedModel(model, state, dataRoot) {
     delete service.container_name;
     service.labels = { ...(service.labels || {}), [LABEL]: state.id };
     if (service.build) service.image = `${project}-${name === 'db' || name === 'frontend' ? name : 'backend'}:${state.bundle.slice(0, 12)}`;
-    // Infrastructure is private to this Compose network. Only the product and
-    // presigned object URLs need loopback host ports; never publish a LAN port.
+    // Infrastructure is private to this Compose network. The product's API
+    // serves scoped file capabilities; only its loopback port is published.
     delete service.ports;
-    if (service.volumes) service.volumes = service.volumes.map(volume => volume.type === 'bind' && volume.target === '/app/data' ? { ...volume, source: dataRoot } : volume);
+    if (service.volumes) service.volumes = service.volumes.map(volume => volume.type === 'bind' && volume.target === '/app/data' ? { ...volume, source: composeLiteral(dataRoot) } : volume);
   }
   model.services.frontend.ports = [{ target: 80, published: String(state.port), host_ip: '127.0.0.1', protocol: 'tcp' }];
-  model.services.minio.ports = [{ target: 9000, published: String(state.storagePort), host_ip: '127.0.0.1', protocol: 'tcp' }];
   model.name = project;
   return model;
 }
 function validateState(state) {
   projectName(state?.id);
   if (!/^[a-f0-9]{64}$/.test(state.bundle || '') || ![state.port, state.storagePort].every(port => Number.isInteger(port) && port >= 1024 && port <= 65535) || state.port === state.storagePort || !['secret', 'databasePassword', 'storageUser', 'storagePassword'].every(key => typeof state[key] === 'string' && /^[A-Za-z0-9_-]{24,128}$/.test(state[key]))) throw new Error('本地工作区配置损坏；不会覆盖或重新生成密钥');
+  if (state.dataDirectory !== undefined) absoluteLocalDirectory(state.dataDirectory);
   return state;
 }
 function rows(output) { const value = output.trim(); if (!value) return []; if (value.startsWith('[')) return JSON.parse(value); return value.split('\n').map(line => JSON.parse(line)); }
@@ -95,6 +99,22 @@ class ComposeRuntime {
   async hasWorkspace() {
     try { validateState(JSON.parse(this.decode(await fs.readFile(path.join(this.root, 'workspace.enc'))))); return true; } catch { return false; }
   }
+  async dataDirectoryInfo() {
+    try {
+      const state = validateState(JSON.parse(this.decode(await fs.readFile(path.join(this.root, 'workspace.enc')))));
+      return { canChooseDirectory: false, dataDirectory: state.dataDirectory || path.join(this.root, 'data'), dataDirectoryIsParent: false };
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw new Error('原工作区配置无法读取；不会修改资料位置或重置密钥');
+      return { canChooseDirectory: true, dataDirectory: this.selectedDataParent || path.join(this.root, 'data'), dataDirectoryIsParent: !!this.selectedDataParent };
+    }
+  }
+  async selectDataDirectory(directory) {
+    if (this.busy || !(await this.dataDirectoryInfo()).canChooseDirectory) throw new Error('已有工作区不能直接更换资料目录，请先完成备份、复制与核验');
+    const selected = await selectedParent(directory);
+    if (this.busy || !(await this.dataDirectoryInfo()).canChooseDirectory) throw new Error('工作区已启动，不能直接修改资料位置');
+    this.selectedDataParent = selected;
+    return this.dataDirectoryInfo();
+  }
   async load({ create = true, allowBundleMismatch = false } = {}) {
     await fs.mkdir(this.root, { recursive: true, mode: 0o700 });
     const location = path.join(this.root, 'workspace.enc');
@@ -106,10 +126,13 @@ class ComposeRuntime {
       return this.state;
     }
     if (!create) throw new Error('尚未创建本地工作区');
-    this.state = { id: crypto.randomBytes(12).toString('hex'), bundle: this.bundle, port: await freePort(), storagePort: await freePort(), secret: crypto.randomBytes(48).toString('base64url'), databasePassword: crypto.randomBytes(32).toString('hex'), storageUser: crypto.randomBytes(12).toString('hex'), storagePassword: crypto.randomBytes(32).toString('hex') };
-    while (this.state.storagePort === this.state.port) this.state.storagePort = await freePort();
-    validateState(this.state);
-    await fs.writeFile(location, this.encode(JSON.stringify(this.state)), { flag: 'wx', mode: 0o600 });
+    const state = { id: crypto.randomBytes(12).toString('hex'), bundle: this.bundle, port: await freePort(), storagePort: await freePort(), secret: crypto.randomBytes(48).toString('base64url'), databasePassword: crypto.randomBytes(32).toString('hex'), storageUser: crypto.randomBytes(12).toString('hex'), storagePassword: crypto.randomBytes(32).toString('hex') };
+    while (state.storagePort === state.port) state.storagePort = await freePort();
+    state.dataDirectory = await createDataDirectory(this.root, state.id, this.selectedDataParent);
+    validateState(state);
+    try { await writeSettingsExclusively(location, this.encode(JSON.stringify(state))); }
+    catch (error) { await discardUncommittedDataDirectory(state.dataDirectory, state.id); throw error; }
+    this.state = state;
     return this.state;
   }
   async configured(action) {
@@ -120,12 +143,13 @@ class ComposeRuntime {
       await fs.writeFile(envPath, environment(state, this.auth), { mode: 0o600 });
       let template = await fs.readFile(path.join(this.resources, 'docker-compose.yml'), 'utf8');
       if (!template.includes('env_file: .env')) throw new Error('发行包 Compose 模板版本不受支持');
-      template = template.replaceAll('env_file: .env', `env_file: ${JSON.stringify(envPath)}`);
+      template = template.replaceAll('env_file: .env', () => `env_file: ${JSON.stringify(composeLiteral(envPath))}`);
       const source = path.join(temporary, 'source.yml'), generated = path.join(temporary, 'owned.json');
       await fs.writeFile(source, template, { mode: 0o600 });
       const prefix = ['compose', '--project-name', project, '--project-directory', this.resources, '--env-file', envPath];
       const model = JSON.parse(await this.run('docker', [...prefix, '-f', source, '--profile', 'full', 'config', '--format', 'json']));
-      const data = path.join(this.root, 'data'); await fs.mkdir(data, { recursive: true, mode: 0o700 });
+      const data = state.dataDirectory ? await verifyDataDirectory(state.dataDirectory, state.id) : path.join(this.root, 'data');
+      if (!state.dataDirectory) await fs.mkdir(data, { recursive: true, mode: 0o700 });
       await fs.writeFile(generated, JSON.stringify(ownedModel(model, state, data)), { mode: 0o600 });
       return await action([...prefix, '-f', generated, '--profile', 'full'], state);
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
@@ -148,7 +172,7 @@ class ComposeRuntime {
       return await this.configured(async (prefix, state) => {
         const previous = await this.inspectOwned(state);
         const published = previous.flatMap(item => Object.values(item.NetworkSettings?.Ports || {}).flat()).filter(Boolean).map(item => Number(item.HostPort));
-        for (const port of [state.port, state.storagePort]) if (!published.includes(port)) await assertPortFree(port);
+        for (const port of [state.port]) if (!published.includes(port)) await assertPortFree(port);
         await this.run('docker', [...prefix, 'up', '-d', '--build', '--wait', '--wait-timeout', '240'], { timeout: 20 * 60 * 1000 });
         const running = await this.inspectOwned(state);
         const ready = new Set(running.filter(item => item.State?.Running).map(item => item.Config.Labels['com.docker.compose.service']));
@@ -173,4 +197,4 @@ class ComposeRuntime {
     finally { this.busy = false; }
   }
 }
-module.exports = { ComposeRuntime, command, ownedModel, environment, publicConfig, rows, projectName, REQUIRED, LABEL, validateState, childEnvironment };
+module.exports = { ComposeRuntime, command, ownedModel, environment, publicConfig, rows, projectName, REQUIRED, LABEL, validateState, childEnvironment, writeSettingsExclusively };

@@ -49,8 +49,8 @@ def _process_artifact_resume(resume_id: str) -> dict[str, str]:
                     else None
                 )
                 object_key = asset.object_key if asset is not None else ""
-            if storage_uri and storage_uri.startswith("s3://"):
-                from app.core.storage import download_file_from_s3
+            if storage_uri:
+                from app.core.storage import download_file_from_storage
                 from app.interviews.application.document_text import (
                     extract_document_text,
                 )
@@ -58,7 +58,7 @@ def _process_artifact_resume(resume_id: str) -> dict[str, str]:
                 _, ext = os.path.splitext(object_key or "")
                 tmp_path = create_runtime_temp_file(suffix=ext or ".pdf")
                 try:
-                    download_file_from_s3(storage_uri, tmp_path)
+                    download_file_from_storage(storage_uri, tmp_path)
                     text = (extract_document_text(tmp_path) or "").strip()
                 finally:
                     if os.path.exists(tmp_path):

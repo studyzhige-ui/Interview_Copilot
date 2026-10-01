@@ -32,7 +32,7 @@ export async function getInterviewRecord(
 }
 
 export async function uploadAudio(file: File): Promise<{ upload_id: string; filename: string }> {
-  // Unified presigned flow (purpose='interview_audio') — no server-receives-bytes
+  // Unified presigned flow (purpose='interview_audio') — provider-neutral capability upload
   // direct upload. Returns the confirmed file_asset id as upload_id.
   const fileAssetId = await uploadFileAsset(file, 'interview_audio');
   return { upload_id: fileAssetId, filename: file.name };

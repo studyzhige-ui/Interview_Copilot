@@ -7,8 +7,11 @@ x-backend-build: &backend-build
 x-backend-environment: &backend-environment
   DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-interview_copilot}
   REDIS_URL: redis://redis:6379/0
-  AWS_ENDPOINT_URL: http://minio:9000
-  S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
+  STORAGE_BACKEND: ${STORAGE_BACKEND:-filesystem}
+  STORAGE_DIR: /app/data/storage
+  STORAGE_MIN_FREE_BYTES: ${STORAGE_MIN_FREE_BYTES:-67108864}
+  AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-}
+  S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-}
 
 x-backend-service: &backend-service
   image: interview-copilot-backend:community
@@ -31,8 +34,6 @@ x-runtime-dependencies: &runtime-dependencies
   redis:
     condition: service_healthy
   migrate:
-    condition: service_completed_successfully
-  minio-create-bucket:
     condition: service_completed_successfully
 
 services:
@@ -75,45 +76,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
-    networks:
-      - copilot_net
-
-  minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    container_name: interview_copilot_minio
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-    environment:
-      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
-    volumes:
-      - minio_data:/data
-    command: server /data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-    networks:
-      - copilot_net
-
-  minio-create-bucket:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
-    container_name: interview_copilot_mc
-    depends_on:
-      minio:
-        condition: service_healthy
-    environment:
-      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-interview-copilot-bucket}
-    entrypoint:
-      - /bin/sh
-      - -ec
-      - |
-        /usr/bin/mc alias set myminio http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
-        /usr/bin/mc mb "myminio/$$S3_BUCKET_NAME" --ignore-existing
     networks:
       - copilot_net
 
@@ -168,6 +130,9 @@ services:
       <<: *runtime-dependencies
     # Alias the container DNS as `backend` so frontend nginx upstream resolves.
     hostname: backend
+    networks:
+      copilot_net:
+        aliases: [backend]
 
   frontend:
     profiles: [full]
@@ -290,6 +255,7 @@ services:
       <<: *runtime-dependencies
 
 volumes:
+  # Retained declaration only: no MinIO service is started or old data removed.
   minio_data:
   pgdata:
   redis_data:

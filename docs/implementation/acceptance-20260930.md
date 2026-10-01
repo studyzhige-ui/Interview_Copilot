@@ -31,14 +31,41 @@ a dependency deprecation. No private recording or paid provider was used.
 
 | Area | Current evidence | Remaining acceptance |
 | --- | --- | --- |
-| Complete web interaction/visual journeys | Existing focused real-browser campaign | Expanded route, form, keyboard, narrow-screen, interruption and account-isolation campaign with screenshots |
-| Hosted email/password Auth | Signup and confirmation enabled; exact four development callbacks saved; custom SMTP configured | User-authorized real test account, email receipt, confirmation, login, recovery, logout, and offline-unlock continuation |
+| Complete web interaction/visual journeys | Seven real HTTP/PostgreSQL cases and 70 desktop/mobile screenshots passed and were visually reviewed on `77f4eb8e` | New storage/avatar, expired-audio renewal and lower plugin content cases on the final storage head |
+| Hosted email/password Auth | Signup and confirmation enabled; four development and two exact native callbacks saved; custom SMTP configured | User-authorized real test account, email receipt, confirmation, login, recovery, logout, and offline-unlock continuation |
 | Existing Cloudflare preview | Bot reports failed build; no working preview URL | Obtain actual build logs and identify cause; a static Pages preview alone cannot implement the local FastAPI `/api/v1` service |
-| Installed desktop | New Windows Electron launcher and package sources; focused boundary review and unpacked source-integrity checks | Run staged Windows installer/OS dispatch and Linux Docker jobs, then actual Windows Docker Desktop, live email return and microphone acceptance |
+| Installed desktop | Full NSIS installation and synthetic Windows OS dispatch passed on `a55a6017` | Repeat exact-head packaging; real local-storage Docker campaign, then actual Windows Docker Desktop, live email return and microphone acceptance |
 
 These outstanding areas must not be described as passed or ready to merge.
 Hosted security settings, credentials, and password entry still follow their
 separate approval/secure-entry requirements.
+
+## Storage and installed-Windows follow-up (2026-10-01)
+
+Windows job `110157469470` on `a55a6017` completed a full NSIS build, integrity
+inspection, actual per-user installation/first-launch URI registration, cold and
+warm OS dispatch, single-instance routing, stale/duplicate/expired callback
+rejection, restart and uninstall cleanup. Its synthetic pending metadata proves
+OS delivery only; live Supabase/PKCE, mail, microphone and Windows Docker Desktop
+still require their own evidence. The fixture's public Auth configuration is
+synthetic and cannot serve as a live-account release.
+
+The same acceptance campaign found the historical MinIO images unavailable from
+Docker Hub and the selected server tag unauthorized on the vendor Quay registry.
+Vendor advisories also affect the selected community release; a mirror change
+does not resolve that security boundary. The user approved default private local
+filesystem storage with optional explicitly configured S3. This implementation
+keeps old URI dispatch and data intact and adds bounded immutable transfer,
+authenticated/capability reads and media ranges, per-owner usage, free-space
+guarding, and initial file-directory selection. Existing workspace moves and
+actual old-data migration remain separate operations.
+
+The coherent storage batch must run the restored real Docker lifecycle/retention
+campaign, four PostgreSQL ordering tests, the browser upload/avatar/download and
+usage flow, and the optional S3 HTTP fixture. Local skipped service tests are not
+counted as passed. The S3 fixture uses the official SeaweedFS 4.48 linux/amd64
+descriptor `sha256:aba492e2a4e4c90bff795745e8e660affa1f09e7650f5981bd7bccd1a06cd931`,
+verified against registry bytes; it is disposable test infrastructure only.
 
 ## Desktop boundary
 
@@ -47,7 +74,8 @@ That prototype remains available through `npm run prototype`; its smoke did not
 load the production React app or FastAPI. The new launcher, pinned dependency
 lockfile, NSIS configuration, owned stack lifecycle and pending-flow native bridge
 now load the real product after readiness checks. The existing Compose stack keeps
-PostgreSQL/pgvector, Redis, MinIO and workers and exposes the product on loopback.
+PostgreSQL/pgvector, Redis and workers and exposes the product on loopback.
+Private filesystem storage is now the default; explicitly configured S3 is optional.
 The user selected Windows desktop and then accepted Docker Desktop for the first
 version. The Linux runtime remains inside Docker; the Windows shell must not try
 to run Celery or Linux peer-credential/process primitives natively. Docker
@@ -70,13 +98,15 @@ At the independently reviewed local desktop snapshot `41a9ef8`:
   exact native allowlist entries with fragment state; real email delivery and
   browser-to-Windows preservation are not yet observed
 
-The staged Windows fixture and Linux Docker acceptance campaigns are unrun until
-publication is approved and exact-head CI finishes. The OS probe uses synthetic
-pending metadata and proves no Supabase account or password operation. The Linux
-campaign tests real service readiness, Celery control traffic, database/object/file
-retention and unrelated-container isolation, with synthetic data only. Windows
-Docker Desktop startup, DPAPI across restart, microphone and user mail flows remain
-separate installed-host requirements.
+Publication is approved; each changed source tree still requires its own CI result.
+The successful Windows OS probe above uses synthetic pending metadata and proves
+no Supabase account or password operation. The restored Linux campaign tests real
+service readiness, Celery control traffic, database/private-file retention,
+authenticated upload/download/ranges, capability-log suppression and unrelated
+container isolation, with synthetic data only. Windows Docker Desktop startup,
+DPAPI across restart, microphone and user mail flows remain separate installed-host
+requirements. The new directory tests inject partial writes and ENOSPC and prove
+safe retry; they do not simulate a power loss or establish crash recovery.
 
 Any desktop implementation must:
 

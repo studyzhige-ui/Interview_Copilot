@@ -2,9 +2,9 @@ import { apiClient } from './client';
 import { putFileToPresignedUrl } from './presignedUpload';
 import type { FileAssetDeletionImpact } from '@/types/api';
 
-// Unified presigned upload: reserve a file_assets row + PUT bytes to object
-// storage + confirm. Mirrors backend/app/api/file_assets.py. Business endpoints
-// then consume the confirmed file_asset_id. No server-receives-bytes path.
+// Unified upload: reserve a file_assets row + PUT bytes to its capability URL
+// + confirm. Business endpoints then consume the confirmed file_asset_id.
+// Local files and optional S3 use this same provider-neutral contract.
 
 async function createUploadUrl(payload: {
   purpose: string;

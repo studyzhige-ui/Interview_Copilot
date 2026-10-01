@@ -11,7 +11,7 @@ test('owned runtime retains all business lanes while making infrastructure priva
   for (const [name, service] of Object.entries(result.services)) {
     assert.equal(service.container_name, undefined); assert.equal(service.labels[LABEL], state.id);
     assert.equal(service.volumes[0].source, 'C:/Users/fixture/我的工作区/data');
-    if (!['frontend', 'minio'].includes(name)) assert.equal(service.ports, undefined);
+    if (name !== 'frontend') assert.equal(service.ports, undefined);
     else assert.equal(service.ports[0].host_ip, '127.0.0.1');
     assert.ok(service.image.startsWith(`interview-copilot-${state.id}-`));
   }
@@ -20,6 +20,16 @@ test('release Auth configuration accepts only public keys and HTTPS project orig
   for (const config of [{ ...auth, publishableKey: 'sb_secret_fixture' }, { ...auth, url: 'http://fixture.supabase.co' }, { ...auth, url: 'https://fixture.supabase.co/path' }, { ...auth, url: 'https://user:pass@fixture.supabase.co' }, { ...auth, provider: 'local' }]) assert.throws(() => publicConfig(config));
   const env = environment(state, auth); assert.ok(env.includes('AUTH_PROVIDER=supabase')); assert.ok(env.includes(`SECRET_KEY=${state.secret}`));
   assert.ok(!env.includes('minioadmin')); assert.throws(() => environment({ ...state, secret: 'value\nINJECTED=yes' }, auth));
+  assert.ok(env.includes('STORAGE_BACKEND=filesystem'));
+  assert.ok(!env.includes('AWS_ACCESS_KEY_ID') && !env.includes('AWS_SECRET_ACCESS_KEY'));
+});
+test('selected bind paths preserve literal dollar names through the second Compose interpolation', () => {
+  const model = { services: Object.fromEntries(REQUIRED.map(name => [name, { environment: { ALREADY_ESCAPED: '$$UNCHANGED' }, volumes: [{ type: 'bind', source: '/original', target: '/app/data' }] }])) };
+  const result = ownedModel(model, state, 'C:/资料/$USER/${HOME}/data');
+  for (const service of Object.values(result.services)) {
+    assert.equal(service.volumes[0].source, 'C:/资料/$$USER/$${HOME}/data');
+    assert.equal(service.environment.ALREADY_ESCAPED, '$$UNCHANGED');
+  }
 });
 test('corrupt local state fails instead of silently rotating data encryption keys', () => {
   assert.equal(validateState(state), state);

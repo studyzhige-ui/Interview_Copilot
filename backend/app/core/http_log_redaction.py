@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 
 _SENSITIVE_QUERY_PATHS = frozenset({"/api/v1/integrations/gmail/callback"})
@@ -19,7 +20,9 @@ class SensitiveQueryAccessLogFilter(logging.Filter):
         if not isinstance(raw_target, str):
             return True
         path = raw_target.partition("?")[0]
-        if path not in _SENSITIVE_QUERY_PATHS:
+        if path not in _SENSITIVE_QUERY_PATHS and not (
+            re.fullmatch(r"/api/v1/file-assets/[^/]+/content(?:/.*)?", path)
+        ):
             return True
         safe_args = list(args)
         safe_args[2] = f"{path}?[sensitive-query-redacted]"

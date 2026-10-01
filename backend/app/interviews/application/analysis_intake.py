@@ -54,19 +54,17 @@ def extract_text_snapshot(db: Session, file_asset_id: str, user_id: str) -> str:
     import os
 
     from app.core.runtime_files import create_runtime_temp_file
-    from app.core.storage import download_file_from_s3
+    from app.core.storage import download_file_from_storage
     from app.interviews.application.document_text import extract_document_text
 
     upload = get_owned_file_asset(db, file_asset_id=file_asset_id, user_id=user_id)
     if upload is None or not upload.storage_uri:
         return ""
-    if not upload.storage_uri.startswith("s3://"):
-        return ""
 
     _, ext = os.path.splitext(upload.object_key or "")
     tmp_path = create_runtime_temp_file(suffix=ext or ".pdf")
     try:
-        download_file_from_s3(upload.storage_uri, tmp_path)
+        download_file_from_storage(upload.storage_uri, tmp_path)
         return (extract_document_text(tmp_path) or "")[:12000]
     finally:
         if os.path.exists(tmp_path):

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from app.core.storage import parse_s3_uri
+from app.core.storage import object_key_from_uri
 from app.db.types import utc_now
 from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
@@ -100,7 +100,7 @@ def hard_delete_knowledge_document(
         # owner — and object_key is namespaced by it, so use it directly.
         owner_pk = document.user_id
         expected_prefix = f"uploads/{owner_pk}/{document.file_asset_id}/"
-        _, storage_key = parse_s3_uri(document.storage_uri)
+        storage_key = object_key_from_uri(document.storage_uri)
         if document.object_key != storage_key or not document.object_key.startswith(
             expected_prefix
         ):

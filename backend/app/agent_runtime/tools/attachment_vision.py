@@ -311,42 +311,20 @@ def _read_bounded_asset(storage_uri: str, declared_size: int | None) -> bytes:
 
     from app.core import storage
 
-    if storage.is_local_uri(storage_uri):
-        try:
-            path = storage.parse_local_uri(storage_uri)
-        except ValueError as exc:
-            raise _VisionBlocked("attachment_storage_boundary_invalid") from exc
-        if not path.is_file() or path.stat().st_size > _MAX_SOURCE_BYTES:
+    try:
+        meta = storage.head_object(storage_uri)
+        if meta is None or meta["size_bytes"] > _MAX_SOURCE_BYTES:
             raise _VisionBlocked(
-                "attachment_source_too_large",
-                max_source_bytes=_MAX_SOURCE_BYTES,
+                "attachment_source_too_large", max_source_bytes=_MAX_SOURCE_BYTES
             )
-        data = path.read_bytes()
-    elif storage_uri.startswith("s3://"):
-        from app.core.config import settings
-
-        try:
-            bucket, key = storage.parse_s3_uri(storage_uri)
-            if bucket != settings.S3_BUCKET_NAME:
-                raise ValueError("outside controlled bucket")
-            response = storage.s3_client.get_object(Bucket=bucket, Key=key)
-            content_length = response.get("ContentLength")
-            if content_length is not None and int(content_length) > _MAX_SOURCE_BYTES:
-                raise _VisionBlocked(
-                    "attachment_source_too_large",
-                    max_source_bytes=_MAX_SOURCE_BYTES,
-                )
-            body = response["Body"]
-            try:
-                data = body.read(_MAX_SOURCE_BYTES + 1)
-            finally:
-                body.close()
-        except _VisionBlocked:
-            raise
-        except Exception as exc:  # noqa: BLE001 - storage details stay private
-            raise _VisionBlocked("attachment_storage_unavailable") from exc
-    else:
-        raise _VisionBlocked("attachment_storage_boundary_invalid")
+        with storage.open_object(storage_uri) as body:
+            data = body.read(_MAX_SOURCE_BYTES + 1)
+    except _VisionBlocked:
+        raise
+    except ValueError as exc:
+        raise _VisionBlocked("attachment_storage_boundary_invalid") from exc
+    except Exception as exc:
+        raise _VisionBlocked("attachment_storage_unavailable") from exc
 
     if len(data) > _MAX_SOURCE_BYTES:
         raise _VisionBlocked(

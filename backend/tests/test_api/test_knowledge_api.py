@@ -155,8 +155,8 @@ def test_rag_query_500_on_retriever_error(client):
 def test_create_upload_url_creates_user_upload(client, db: Session):
     fake_url_info = {"upload_url": "https://upload", "storage_uri": "s3://b/k"}
     with patch(
-        "app.files.application.file_asset_service.generate_presigned_upload_url_for_key",
-        return_value=fake_url_info,
+        "app.files.application.storage_access.asset_url",
+        return_value=fake_url_info["upload_url"],
     ):
         resp = client.post(
             "/api/v1/knowledge/upload/url",
@@ -613,7 +613,7 @@ def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
     db.add(ok)
     db.commit()
     monkeypatch.setattr(
-        ks, "parse_s3_uri", lambda uri: ("b", f"uploads/{uid}/fa_ok/r.pdf")
+        ks, "object_key_from_uri", lambda uri: f"uploads/{uid}/fa_ok/r.pdf"
     )
     ks.hard_delete_knowledge_document(db, ok)  # pk-prefixed key → guard passes
     # Blob delete rides the outbox now (UP-2) — the job must be queued.
@@ -643,7 +643,7 @@ def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
     db.add(foreign)
     db.commit()
     monkeypatch.setattr(
-        ks, "parse_s3_uri", lambda uri: ("b", "uploads/999/fa_bad/x.pdf")
+        ks, "object_key_from_uri", lambda uri: "uploads/999/fa_bad/x.pdf"
     )
     with pytest.raises(ValueError):
         ks.hard_delete_knowledge_document(db, foreign)

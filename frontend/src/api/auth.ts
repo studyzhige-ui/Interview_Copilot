@@ -102,9 +102,8 @@ export async function updateMe(patch: {
 }
 
 export async function uploadAvatar(file: File): Promise<MeResponse> {
-  // Unified presigned flow (purpose='avatar'): bytes PUT straight to object
-  // storage, then the server validates + sets the avatar from the confirmed
-  // file_asset. No multipart server-receives-bytes path.
+  // Unified capability flow (purpose='avatar'): PUT bytes, confirm the asset,
+  // then validate and set the avatar. Local files and optional S3 share this API.
   const fileAssetId = await uploadFileAsset(file, 'avatar');
   const res = await apiClient.post('/auth/me/avatar', { file_asset_id: fileAssetId });
   return res.data;

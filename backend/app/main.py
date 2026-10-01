@@ -203,24 +203,6 @@ app.add_middleware(
 )
 
 
-# ─── Local-fallback static files (avatars only) ──────────────────────────
-# When S3 / MinIO is unreachable an avatar upload falls back to writing the
-# bytes under ``STORAGE_DIR/avatars/...`` (see app.core.storage fallback).
-# Those files need to be browser-readable; we mount JUST the avatars/
-# sub-tree as a public static route. Other STORAGE_DIR contents (resumes,
-# JDs, knowledge documents) stay off-bus — they're private and only the
-# backend should touch them.
-from fastapi.staticfiles import StaticFiles  # noqa: E402
-
-_avatar_local_dir = Path(settings.STORAGE_DIR) / "avatars"
-_avatar_local_dir.mkdir(parents=True, exist_ok=True)
-app.mount(
-    "/api/v1/static/avatars",
-    StaticFiles(directory=str(_avatar_local_dir)),
-    name="local-avatars",
-)
-
-
 # ─── Catch-all exception logger ─────────────────────────────────────────
 # FastAPI / Starlette swallows bare exceptions and returns a 500 body with
 # no log line by default — meaning a NullPointerException or AttributeError

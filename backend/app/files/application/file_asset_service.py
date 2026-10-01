@@ -38,7 +38,6 @@ from sqlalchemy.orm import Session
 
 from app.core.storage import (
     build_owned_object_key,
-    generate_presigned_upload_url_for_key,
     head_object,
     read_object_head,
     storage_uri_for_key,
@@ -47,6 +46,7 @@ from app.core.storage import (
 from app.core.user_identity import resolve_user_pk
 from app.db.types import utc_now
 from app.models.file_asset import FileAsset, generate_file_asset_id
+from app.models.user import User
 from app.files.application.purpose_registry import PurposeSpec
 from app.files.application.purpose_registry import get_purpose_spec
 
@@ -111,11 +111,16 @@ def create_file_asset(
     db.add(asset)
     db.commit()
     db.refresh(asset)
-    url_info = generate_presigned_upload_url_for_key(
-        asset.object_key,
-        content_type=asset.content_type or "application/octet-stream",
-        expiration=spec.presign_ttl_seconds,
-    )
+    from app.files.application.storage_access import asset_url
+
+    url_info = {
+        "upload_url": asset_url(
+            asset,
+            owner=db.get(User, asset.user_id),
+            operation="write",
+            expiration=spec.presign_ttl_seconds,
+        )
+    }
     return asset, url_info
 
 
@@ -137,7 +142,7 @@ def store_validated_file_asset(
     commands use this path so the client sends the file only once and the
     resulting asset still follows the canonical ``file_assets`` lifecycle.
     """
-    asset, _spec = _new_file_asset(
+    asset, spec = _new_file_asset(
         db,
         user_id=user_id,
         filename=filename,
@@ -150,12 +155,23 @@ def store_validated_file_asset(
     db.refresh(asset)
 
     try:
+        file_obj.seek(0, os.SEEK_END)
+        actual_size = file_obj.tell()
+        if actual_size > spec.max_bytes:
+            raise UploadTooLarge(asset.purpose, spec.max_bytes)
+        if asset.size_bytes is not None and asset.size_bytes != actual_size:
+            raise ValueError("Validated file size differs from declared size")
+        asset.size_bytes = actual_size
         file_obj.seek(0)
         asset.storage_uri = upload_file_to_owned_key(
             file_obj,
             asset.object_key,
             content_type=asset.content_type,
         )
+        import hashlib
+
+        file_obj.seek(0)
+        asset.checksum_sha256 = hashlib.file_digest(file_obj, "sha256").hexdigest()
         asset.upload_status = UPLOAD_STATUS_UPLOADED
         asset.validation_status = "passed"
         asset.validation_error = None
@@ -272,7 +288,9 @@ def confirm_file_asset(
     """Confirm a client-completed upload — delegates to
     ``_verify_pending_asset``. Returns the asset, or ``None`` if it isn't
     owned by the caller."""
-    asset = get_owned_file_asset(db, file_asset_id=file_asset_id, user_id=user_id)
+    asset = get_owned_file_asset(
+        db, file_asset_id=file_asset_id, user_id=user_id, for_update=True
+    )
     if asset is None:
         return None
     return _verify_pending_asset(db, asset)
@@ -305,10 +323,25 @@ def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
     Idempotent: an already-uploaded/consumed asset is returned untouched
     (never regresses), and a failed asset stays failed.
     """
+    # Serialize confirmation with upload and deletion in PostgreSQL.
+    asset = (
+        db.query(FileAsset)
+        .filter(FileAsset.id == asset.id)
+        .populate_existing()
+        .with_for_update()
+        .one()
+    )
+    if asset.deleted_at is not None:
+        return asset
     if asset.upload_status != UPLOAD_STATUS_PENDING:
         return asset
 
-    meta = head_object(asset.storage_uri)
+    try:
+        meta = head_object(asset.storage_uri)
+    except Exception:
+        # Outages must not turn a valid blob into a failed/deletable upload.
+        db.rollback()
+        raise
     if meta is None:
         _fail_asset(db, asset, "object not found in storage after upload")
         return asset
@@ -390,32 +423,32 @@ def presigned_get_urls(
     asset_ids: list[str],
     *,
     expiration: int = 1800,
+    owner_id: int,
+    purpose: str,
 ) -> dict[str, str]:
-    """Batch-mint presigned GET URLs for owned assets (one IN query).
-
-    Only ``s3://`` URIs get a URL — ``local://`` storage has no presign
-    equivalent, so those (and unknown ids) are simply absent from the
-    result; callers degrade to no link. Best-effort: a presign failure
-    skips that asset instead of raising.
-    """
+    """Mint read capabilities only in the caller's explicit owner/purpose scope."""
     ids = [i for i in asset_ids if i]
     if not ids:
         return {}
-    from app.core.storage import generate_presigned_get_url
+    from app.files.application.storage_access import asset_url
 
     rows = (
-        db.query(FileAsset.id, FileAsset.storage_uri)
-        .filter(FileAsset.id.in_(ids), FileAsset.deleted_at.is_(None))
+        db.query(FileAsset)
+        .filter(
+            FileAsset.id.in_(ids),
+            FileAsset.deleted_at.is_(None),
+            FileAsset.user_id == owner_id,
+            FileAsset.purpose == purpose,
+            FileAsset.upload_status.in_(READABLE_UPLOAD_STATUSES),
+            FileAsset.validation_status == "passed",
+        )
         .all()
     )
     out: dict[str, str] = {}
-    for asset_id, uri in rows:
-        if not uri or not uri.startswith("s3://"):
-            continue
-        try:
-            out[asset_id] = generate_presigned_get_url(uri, expiration=expiration)
-        except Exception:  # noqa: BLE001 — degrade to no playback link
-            logger.warning("presign failed for asset %s", asset_id, exc_info=True)
+    for asset in rows:
+        out[asset.id] = asset_url(
+            asset, owner=db.get(User, owner_id), operation="read", expiration=expiration
+        )
     return out
 
 
@@ -459,3 +492,15 @@ def _fail_asset(db: Session, asset: FileAsset, reason: str) -> None:
     )
     db.commit()
     db.refresh(asset)
+
+
+def record_file_asset_upload(
+    db: Session, asset: FileAsset, checksum_sha256: str
+) -> None:
+    """Persist the checksum after immutable byte commit; caller holds row lock."""
+    if asset.deleted_at is not None or asset.upload_status != UPLOAD_STATUS_PENDING:
+        raise ValueError("FileAsset upload is no longer pending")
+    asset.checksum_sha256 = checksum_sha256
+    asset.updated_at = utc_now()
+    db.add(asset)
+    db.commit()

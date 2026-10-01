@@ -85,6 +85,12 @@ class _ObjectBody:
     def __init__(self, content: bytes):
         self.content = content
         self.closed = False
+        self.position = 0
+
+    def read(self, n):
+        result = self.content[self.position : self.position + n]
+        self.position += len(result)
+        return result
 
     def iter_chunks(self, *, chunk_size: int):
         yield from (
@@ -117,9 +123,17 @@ def test_download_streams_owned_s3_asset_without_disclosing_locator(
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(storage.settings, "S3_BUCKET_NAME", "private-test-bucket")
     monkeypatch.setattr(
-        storage.s3_client,
-        "get_object",
-        lambda *, Bucket, Key: calls.append((Bucket, Key)) or {"Body": body},
+        storage,
+        "s3_client",
+        SimpleNamespace(
+            get_object=lambda *, Bucket, Key, **kwargs: (
+                calls.append((Bucket, Key)) or {"Body": body}
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        storage, "head_object", lambda uri: {"size_bytes": len(content)}
     )
 
     response = client.get(f"/api/v1/file-assets/{asset.id}/download")
@@ -208,9 +222,13 @@ def test_download_is_owner_scoped_and_rejects_unreadable_lifecycle_states(
         deleted=True,
     )
     monkeypatch.setattr(
-        storage.s3_client,
-        "get_object",
-        lambda **_kwargs: pytest.fail("unreadable asset reached object storage"),
+        storage,
+        "s3_client",
+        SimpleNamespace(
+            get_object=lambda **_kwargs: pytest.fail(
+                "unreadable asset reached object storage"
+            )
+        ),
     )
 
     for asset in (other_owner, unvalidated, deleted):

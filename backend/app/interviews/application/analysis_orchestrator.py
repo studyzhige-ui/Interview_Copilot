@@ -270,16 +270,16 @@ class InterviewAnalysisOrchestrator:
 
         local_path = storage_uri
         is_temp = False
-        if storage_uri and storage_uri.startswith("s3://"):
+        if storage_uri:
             _, ext = os.path.splitext(storage_uri)
             local_path = create_runtime_temp_file(suffix=ext)
             is_temp = True
 
         try:
             if is_temp:
-                from app.core.storage import download_file_from_s3
+                from app.core.storage import download_file_from_storage
 
-                download_file_from_s3(storage_uri, local_path)
+                download_file_from_storage(storage_uri, local_path)
             evidence = await transcribe_interview_evidence(
                 local_path,
                 file_asset_id=file_asset_id,

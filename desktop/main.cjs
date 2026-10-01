@@ -13,7 +13,7 @@ else {
   const primary = app.requestSingleInstanceLock();
   if (!primary) app.quit();
   else {
-    let setup, product, runtime, gate, origin = null, callback = null, incoming = null;
+    let setup, product, runtime, gate, origin = null, callback = null, incoming = null, choosingDirectory = false;
     let status = { canStop: false, phase: 'idle', message: '启动本地工作区前，请先安装并启动 Docker Desktop，并选择 Linux 容器模式。' };
     const emit = () => { if (setup && !setup.isDestroyed()) setup.webContents.send('runtime:state', status); };
     const setStatus = (phase, message) => { status = { ...status, phase, message, ready: !!origin }; emit(); };
@@ -61,7 +61,7 @@ else {
           return net.fetch(pathToFileURL(target).href);
         } catch { return new Response('Not found', { status: 404 }); }
       });
-      setup = new BrowserWindow({ width: 740, height: 620, resizable: true, title: 'Interview Copilot · 本地服务', webPreferences: { preload: path.join(__dirname, 'runtime-preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true } });
+      setup = new BrowserWindow({ width: 740, height: 760, resizable: true, title: 'Interview Copilot · 本地服务', webPreferences: { preload: path.join(__dirname, 'runtime-preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true } });
       setup.webContents.on('will-navigate', (event, url) => { if (url !== 'copilot-shell://setup/index.html') event.preventDefault(); });
       setup.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       setup.on('closed', () => { setup = null; });
@@ -71,20 +71,35 @@ else {
         const manifest = JSON.parse(fs.readFileSync(path.join(resources, 'desktop-runtime.json'), 'utf8'));
         runtime = new ComposeRuntime({ root, resources, bundle: manifest.bundle, auth: manifest.auth, encode: value => safeStorage.encryptString(value), decode: value => safeStorage.decryptString(value) });
         status.canStop = await runtime.hasWorkspace();
+        Object.assign(status, await runtime.dataDirectoryInfo());
       } catch (error) { setStatus('error', error.code === 'ENOENT' ? '发行包缺少本地服务资源。开发者请先执行 prepare-runtime；不会自动下载未知安装包' : error.message); }
       ipcMain.handle('runtime:command', async (event, action) => {
         if (!isSetup(event)) throw new Error('无效请求来源');
         if (action === 'state') return status;
         if (action === 'docker-guide') { await shell.openExternal('https://docs.docker.com/desktop/setup/install/windows-install/'); return status; }
         if (!runtime) throw new Error('本地服务资源尚未配置');
+        if (choosingDirectory) throw new Error('请先完成或取消资料目录选择');
         try {
-          if (action === 'check') { await runtime.check(); setStatus('idle', 'Docker Desktop 已就绪，可以启动本地工作区'); }
-          else if (action === 'start') { setStatus('starting', '正在构建并启动本地服务。首次启动需要联网下载依赖，请保持 Docker Desktop 运行'); const result = await runtime.start(); origin = result.origin; status.canStop = true; setStatus('ready', '本地数据库、任务服务和界面已就绪'); productWindow(); }
+          if (action === 'choose-data-directory') {
+            if (runtime.busy) throw new Error('请先等待当前服务操作完成');
+            choosingDirectory = true;
+            try {
+              if (!(await runtime.dataDirectoryInfo()).canChooseDirectory) throw new Error('已有工作区不能直接更换目录；迁移需要先复制和核验资料');
+              if (!isSetup(event)) throw new Error('目录选择已失效，请重新打开设置');
+              setStatus('choosing', '请选择存放资料和缓存的本地文件夹');
+              const result = await dialog.showOpenDialog(setup, { title: '选择资料与缓存的存放位置', properties: ['openDirectory', 'createDirectory'] });
+              if (!isSetup(event)) throw new Error('目录选择已失效，请重新打开设置');
+              if (!result.canceled && result.filePaths.length === 1) Object.assign(status, await runtime.selectDataDirectory(result.filePaths[0]));
+              setStatus('idle', result.canceled ? '资料位置未修改' : '启动时会创建本应用的独立资料子目录，原有文件不会被覆盖');
+            } finally { choosingDirectory = false; }
+          }
+          else if (action === 'check') { await runtime.check(); setStatus('idle', 'Docker Desktop 已就绪，可以启动本地工作区'); }
+          else if (action === 'start') { setStatus('starting', '正在构建并启动本地服务。首次启动需要联网下载依赖，请保持 Docker Desktop 运行'); const result = await runtime.start(); origin = result.origin; status.canStop = true; Object.assign(status, await runtime.dataDirectoryInfo()); setStatus('ready', '本地数据库、任务服务和界面已就绪'); productWindow(); }
           else if (action === 'open') { if (!origin) throw new Error('请先启动本地服务'); productWindow(); }
           else if (action === 'stop') { setStatus('stopping', '正在停止本应用的本地服务，资料与数据库卷会保留'); await runtime.stop(); product?.close(); origin = null; setStatus('idle', '本地服务已停止，资料和密钥仍保留'); }
           else throw new Error('不支持的操作');
           return status;
-        } catch (error) { status.canStop = await runtime.hasWorkspace(); setStatus('error', error.message); throw error; }
+        } catch (error) { status.canStop = await runtime.hasWorkspace(); try { Object.assign(status, await runtime.dataDirectoryInfo()); } catch { status.canChooseDirectory = false; } setStatus('error', error.message); throw error; }
       });
       ipcMain.handle('auth:begin', (event, purpose) => { if (!isProduct(event)) throw new Error('无效请求来源'); return gate.begin(purpose); });
       ipcMain.handle('auth:cancel', (event, id) => { if (!isProduct(event)) throw new Error('无效请求来源'); gate.cancel(id); });

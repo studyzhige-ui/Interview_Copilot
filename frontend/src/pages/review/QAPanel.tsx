@@ -23,6 +23,7 @@ import { InterviewOpportunityControl } from './InterviewOpportunityControl';
 import { CorrectionHistory } from './CorrectionHistory';
 import { QAEditor } from './QAEditor';
 import { TranscriptWorkbench } from './TranscriptWorkbench';
+import { MockAnswerAudio } from './MockAnswerAudio';
 
 export type ReviewTab = 'report' | 'qa' | 'transcript' | 'history';
 type Tab = ReviewTab;
@@ -705,16 +706,8 @@ function QAItem({
       <div className="flex items-center gap-2 mb-2">
         <Pill tone="success">A</Pill>
         <span className="text-xs text-stone-500">你的回答 · 可编辑</span>
-        {qa.answer_audio_url && (
-          // MOCK-7: voice answers keep their original clip — presigned URL
-          // minted by the backend per detail read.
-          <audio
-            controls
-            preload="none"
-            src={qa.answer_audio_url}
-            className="h-7 max-w-[220px]"
-          />
-        )}
+        {qa.answer_audio_url && <MockAnswerAudio recordId={recordId} qaId={qa.id}
+          assetId={qa.answer_audio_file_asset_id} url={qa.answer_audio_url} />}
         <button
           onClick={() => setEditing((v) => !v)}
           title="编辑回答"

@@ -49,21 +49,20 @@ def snapshot(page, name):
     page.screenshot(path=str(EVIDENCE / f"{name}.png"), full_page=True)
 
 
-def capture_workspace_scroll(page, name):
+def capture_workspace_scroll(page, name, selector="#workspace-content"):
     """Capture the internal scroll owner; full_page only captures document scroll."""
-    metrics = page.locator("#workspace-content").evaluate(
+    owner = page.locator(selector)
+    metrics = owner.evaluate(
         "el => ({height: el.clientHeight, total: el.scrollHeight})"
     )
     bottom = max(0, metrics["total"] - metrics["height"])
     step = max(1, int(metrics["height"] * 0.8))
     offsets = list(range(step, bottom, step)) + ([bottom] if bottom else [])
     for index, offset in enumerate(offsets, 1):
-        page.locator("#workspace-content").evaluate(
-            "(el, y) => { el.scrollTop = y; }", offset
-        )
+        owner.evaluate("(el, y) => { el.scrollTop = y; }", offset)
         snapshot(page, f"{name}-scroll-{index:02d}")
-    page.locator("#workspace-content").evaluate("el => { el.scrollTop = 0; }")
-    return {**metrics, "captured_offsets": [0, *offsets]}
+    owner.evaluate("el => { el.scrollTop = 0; }")
+    return {**metrics, "owner": selector, "captured_offsets": [0, *offsets]}
 
 
 def test_all_primary_routes_desktop_and_mobile_real_http(browser_app):
@@ -90,7 +89,16 @@ def test_all_primary_routes_desktop_and_mobile_real_http(browser_app):
             page.wait_for_load_state("networkidle")
             name = f"{size['width']}-{route.strip('/').replace('/', '-')}"
             snapshot(page, name)
-            scroll_coverage = capture_workspace_scroll(page, name)
+            # Plugin marketplace intentionally owns an inner full-height scroller.
+            # Capturing the shell alone misses lower cards on narrow viewports.
+            scroll_owner = (
+                "#workspace-content > .overflow-auto"
+                if route == "/plugins"
+                else "#workspace-content"
+            )
+            scroll_coverage = capture_workspace_scroll(page, name, scroll_owner)
+            if size["width"] == 390 and route == "/plugins":
+                assert len(scroll_coverage["captured_offsets"]) > 1
             if size["width"] == 390 and route == "/me":
                 identity = (
                     page.get_by_text("@browser-owner", exact=True)
@@ -331,3 +339,187 @@ def test_deleted_conversation_and_older_review_deep_link_regressions(browser_app
         page.get_by_role("heading", name="Synthetic review 000", exact=True)
     ).to_have_count(0)
     snapshot(page, "review-missing-target-not-wrong-record")
+
+
+def test_local_file_avatar_upload_reload_download_and_owner_usage(browser_app):
+    """Real local capability PUT/media GET and authenticated owner download, no S3."""
+    import base64
+    from playwright.sync_api import expect
+
+    address, context, _ = browser_app
+    page = context.new_page()
+    login(page, address)
+    page.goto(address + "/me")
+    expect(page.get_by_role("region", name="文件存储")).to_be_visible()
+    expect(page.get_by_text("新文件保存位置：本地文件存储", exact=True)).to_be_visible()
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGM0SglgYGBgYmBgYGBgAAAK1ADqrdxXQwAAAABJRU5ErkJggg=="
+    )
+    puts = []
+    page.on(
+        "request",
+        lambda request: puts.append(request) if request.method == "PUT" else None,
+    )
+    with page.expect_response(
+        lambda response: response.url.endswith("/file-assets/upload-url")
+    ) as reserved:
+        with page.expect_response(
+            lambda response: response.url.endswith("/auth/me/avatar")
+        ) as avatar:
+            page.locator('input[type="file"]').set_input_files(
+                {
+                    "name": "synthetic-avatar.png",
+                    "mimeType": "image/png",
+                    "buffer": png,
+                }
+            )
+    assert reserved.value.ok and avatar.value.ok
+    asset_id = reserved.value.json()["file_asset_id"]
+    assert len(puts) == 1 and "authorization" not in puts[0].headers
+    image = page.get_by_alt_text("头像", exact=True)
+    expect(image).to_be_visible()
+    expect(image).to_have_js_property("complete", True)
+    expect(image).to_have_js_property("naturalWidth", 2)
+    expect(
+        page.get_by_role("region", name="文件存储").get_by_text("1 个", exact=True)
+    ).to_be_visible()
+    page.reload()
+    expect(page.get_by_alt_text("头像", exact=True)).to_have_js_property(
+        "naturalWidth", 2
+    )
+    expect(
+        page.get_by_role("region", name="文件存储").get_by_text("1 个", exact=True)
+    ).to_be_visible()
+    snapshot(page, "local-file-avatar-persisted-and-owner-usage")
+    page.get_by_role("region", name="文件存储").scroll_into_view_if_needed()
+    snapshot(page, "local-file-owner-storage-summary")
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.get_by_role("region", name="文件存储").scroll_into_view_if_needed()
+    snapshot(page, "local-file-mobile-storage-summary")
+    download = page.evaluate(
+        """async (id) => {
+        const response = await fetch('/api/v1/file-assets/' + encodeURIComponent(id) + '/download', {
+            headers: { Authorization: 'Bearer ' + localStorage.getItem('access_token') }
+        });
+        return {status: response.status, bytes: Array.from(new Uint8Array(await response.arrayBuffer()))};
+    }""",
+        asset_id,
+    )
+    assert download["status"] == 200
+    assert bytes(download["bytes"]) == png
+
+
+def test_real_expired_answer_audio_renews_once_without_autoplay(
+    browser_app, monkeypatch
+):
+    """Real expired capability + real WAV decoding; only initial detail URL is aged."""
+    import io
+    import wave
+    from playwright.sync_api import expect
+    from app.core.config import settings
+    from app.files.application.storage_access import asset_url
+    from app.models.file_asset import FileAsset
+    from app.models.interview_record import InterviewRecord
+    from app.models.interview_qa import InterviewQA
+
+    address, context, factory = browser_app
+    page = context.new_page()
+    login(page, address)
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(16000)
+        output.writeframes(b"\0\0" * 16000)
+    payload = buffer.getvalue()
+    asset_id = page.evaluate(
+        """async (bytes) => {
+        const headers = {Authorization: 'Bearer ' + localStorage.getItem('access_token')};
+        const reservation = await fetch('/api/v1/file-assets/upload-url', {
+            method: 'POST', headers: {...headers, 'Content-Type': 'application/json'},
+            body: JSON.stringify({purpose: 'mock_audio_clip', filename: 'synthetic.wav', content_type: 'audio/wav', size_bytes: bytes.length})
+        });
+        if (!reservation.ok) throw new Error('Synthetic audio reservation failed');
+        const asset = await reservation.json();
+        const upload = await fetch(asset.upload_url, {method: 'PUT', headers: {'Content-Type': 'audio/wav'}, body: new Uint8Array(bytes)});
+        if (!upload.ok) throw new Error('Synthetic audio upload failed');
+        const confirmed = await fetch('/api/v1/file-assets/' + asset.file_asset_id + '/confirm', {method: 'POST', headers});
+        if (!confirmed.ok) throw new Error('Synthetic audio confirmation failed');
+        return asset.file_asset_id;
+    }""",
+        list(payload),
+    )
+    record_id = "ir_browser_audio_expiry"
+    with factory() as db:
+        owner = db.query(User).filter_by(username="browser-owner").one()
+        db.add(
+            InterviewRecord(
+                id=record_id,
+                user_id=owner.id,
+                source="mock",
+                status="review_ready",
+                title="Synthetic audio renewal",
+            )
+        )
+        db.flush()
+        db.add(
+            InterviewQA(
+                record_id=record_id,
+                question="Synthetic question",
+                answer="Synthetic answer",
+                answer_input_mode="voice",
+                answer_audio_file_asset_id=asset_id,
+            )
+        )
+        db.commit()
+        asset = db.get(FileAsset, asset_id)
+        # The browser host has this isolated synthetic key, never a user secret.
+        # Expire this one fixture token; production TTL/config is never changed.
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                settings,
+                "SECRET_KEY",
+                "isolated-browser-secret-not-production-32-bytes",
+            )
+            expired = asset_url(asset, owner=owner, operation="read", expiration=-1)
+    detail_reads = []
+    media_statuses = []
+
+    def initial_expired_detail(route):
+        response = route.fetch()
+        assert response.status == 200
+        body = response.json()
+        detail_reads.append(body["id"])
+        if len(detail_reads) == 1:
+            body["qa"][0]["answer_audio_url"] = expired
+        route.fulfill(response=response, json=body)
+
+    page.route(f"**/api/v1/interview-records/{record_id}", initial_expired_detail)
+    page.on(
+        "response",
+        lambda response: (
+            media_statuses.append(response.status)
+            if f"/file-assets/{asset_id}/content?" in response.url
+            else None
+        ),
+    )
+    page.goto(address + f"/review?id={record_id}")
+    page.get_by_role("button", name="QA 对", exact=True).click()
+    player = page.get_by_label("回答原录音", exact=True)
+    expect(player).to_have_attribute("src", expired)
+    # Fetch metadata without starting playback; expired GET genuinely returns403.
+    player.evaluate("audio => { audio.preload = 'metadata'; audio.load(); }")
+    expect(page.get_by_text("播放链接已刷新，请重新播放", exact=True)).to_be_visible()
+    expect(player).not_to_have_attribute("src", expired)
+    assert detail_reads == [record_id, record_id]
+    assert 403 in media_statuses
+    assert player.evaluate("audio => audio.paused")
+    player.evaluate("audio => { audio.preload = 'auto'; audio.load(); }")
+    page.wait_for_function("""() => {
+        const audio = document.querySelector('audio[aria-label="回答原录音"]');
+        return audio && audio.readyState >= 2;
+    }""")
+    assert player.evaluate("audio => audio.duration") == 1
+    assert player.evaluate("audio => audio.paused")
+    assert any(status in {200, 206} for status in media_statuses)
+    snapshot(page, "expired-answer-audio-authorized-renewal-no-autoplay")
