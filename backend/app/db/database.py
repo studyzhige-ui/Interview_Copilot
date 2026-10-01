@@ -27,6 +27,14 @@ Base = declarative_base()
 
 
 def get_db():
+    """One cached session per handler/auth dependency graph.
+
+    Always declare Depends(get_db, scope="function"). Mixing FastAPI scopes
+    creates separate sessions, making an authenticated ORM User unusable by
+    mutation handlers. Function scope closes before a streaming response body;
+    generators must capture scalar data or open their own short-lived sessions.
+    The architecture regression enforces this shared lifetime contract.
+    """
     db = SessionLocal()
     try:
         yield db

@@ -65,7 +65,7 @@ async def analyze_interview_endpoint(
     request: Request,
     response: Response,
     body: AnalyzeRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Create an InterviewRecord from an uploaded audio file and dispatch the
@@ -149,7 +149,7 @@ async def reanalyze_interview_record(
             "重建 QA；默认只重新批改"
         ),
     ),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Re-run the analysis pipeline for a failed or completed upload record
@@ -181,7 +181,7 @@ async def reanalyze_interview_record(
 @router.post("/analyze/{record_id}/cancel")
 def cancel_analysis(
     record_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Revoke a running analysis task. Used when the user discards the draft
@@ -245,7 +245,7 @@ def list_interview_records(
 @router.get("/interview-records/{record_id}")
 def get_interview_record(
     record_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     record = interview_record_service.get(record_id, current_user.username)
@@ -404,7 +404,7 @@ def update_interview_record(
     record_id: str,
     payload: InterviewRecordUpdateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     record = record_admin.get_owned_record(db, record_id, current_user.username)
     if record is None:
@@ -439,7 +439,7 @@ def delete_interview_record(
     record_id: str,
     cascade_knowledge: bool = Query(False),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Hard-delete an interview record and every trace tied to it.
 
@@ -479,7 +479,7 @@ def edit_interview_qa(
     qa_id: str,
     payload: QAEditRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     with command_errors():
         qa = record_admin.edit_owned_qa(
@@ -504,7 +504,7 @@ async def save_qa_to_knowledge_endpoint(
     qa_id: str,
     body: SaveQARequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Publish a QA's improved answer to the knowledge base (RFC §6.9).
 
@@ -559,7 +559,7 @@ def unsave_qa_from_knowledge_endpoint(
     record_id: str,
     qa_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Remove the knowledge document previously saved from this QA."""
     user_pk = resolve_user_pk(db, current_user.username)
@@ -763,7 +763,7 @@ def get_interview_corrections(
     record_id: str,
     before: str | None = Query(None, max_length=36),
     limit: int = Query(30, ge=1, le=100),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     from app.core.user_identity import resolve_user_pk

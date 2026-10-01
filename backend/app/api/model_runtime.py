@@ -286,7 +286,7 @@ async def _ping_one(profile_id: str, user_id: str | None = None) -> dict:
 @router.get("/models/api-keys")
 def list_my_api_keys(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return the user's configured providers + masked hints.
 
@@ -303,7 +303,7 @@ def upsert_my_api_key(
     provider: str,
     payload: APIKeyUpsertRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Encrypt-and-store the user's key for one provider.
 
@@ -349,7 +349,7 @@ def upsert_my_api_key(
 def delete_my_api_key(
     provider: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.core.cache import invalidate
     from app.identity.application.user_api_key_service import delete_user_api_key

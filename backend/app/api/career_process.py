@@ -161,7 +161,7 @@ def get_opportunities(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return list_job_opportunities(
         db,
@@ -177,7 +177,7 @@ def post_opportunity(
     payload: OpportunityCreate,
     response: Response,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _require_user_assertion(payload.source_kind)
     if payload.entry_reason == "verified_submission":
@@ -218,7 +218,7 @@ def post_opportunity(
 )
 def get_opportunity_merge_candidates(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return suggest_opportunity_merge_candidates(db, user_pk=current_user.id)
 
@@ -227,7 +227,7 @@ def get_opportunity_merge_candidates(
 def get_opportunity_merges(
     include_retracted: bool = False,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return list_opportunity_merges(
         db,
@@ -242,7 +242,7 @@ def get_opportunity_merges(
 )
 def read_job_description_snapshots(
     opportunity_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ) -> list[JobDescriptionSnapshotView]:
     try:
@@ -264,7 +264,7 @@ def read_job_description_snapshots(
 def create_product_ui_job_description_snapshot(
     opportunity_id: str,
     command: JobDescriptionSnapshotFromProductUI,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ) -> JobDescriptionSnapshotView:
     """Persist an explicit typed product-UI JD submission."""
@@ -296,7 +296,7 @@ def create_product_ui_job_description_snapshot(
 def post_opportunity_merge(
     payload: OpportunityMergeCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -313,7 +313,7 @@ def post_opportunity_merge_retraction(
     merge_id: str,
     payload: OpportunityMergeRetract,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -335,7 +335,7 @@ def patch_opportunity_directions(
     opportunity_id: str,
     payload: OpportunityDirectionsReplace,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _require_user_assertion(payload.source_kind)
     return _run_domain(
@@ -357,7 +357,7 @@ def patch_opportunity_directions(
 def get_process_events(
     opportunity_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -378,7 +378,7 @@ def post_confirmed_process_event(
     opportunity_id: str,
     payload: ProcessEventAppend,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _require_user_assertion(payload.source_kind)
     return _run_domain(
@@ -403,7 +403,7 @@ def post_process_event_correction(
     event_id: str,
     payload: ProcessEventCorrection,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _require_user_assertion(payload.source_kind)
     return _run_domain(
@@ -424,7 +424,7 @@ def get_next_actions(
     statuses: list[NextActionStatus] | None = Query(default=None),
     limit: int = Query(200, ge=1, le=500),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return list_next_actions(
         db,
@@ -442,7 +442,7 @@ def get_next_actions(
 def post_next_action(
     payload: NextActionCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _require_direct_action_source(payload.source_kind)
     return _run_domain(
@@ -461,7 +461,7 @@ def put_next_action(
     action_id: str,
     payload: NextActionEdit,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -480,7 +480,7 @@ def post_next_action_plan(
     action_id: str,
     payload: NextActionTransition,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _require_direct_transition_source(
         payload.source_kind,
@@ -503,7 +503,7 @@ def post_next_action_complete(
     action_id: str,
     payload: NextActionTransition,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _require_direct_transition_source(
         payload.source_kind,
@@ -526,7 +526,7 @@ def post_next_action_close(
     action_id: str,
     payload: NextActionClose,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     _require_direct_transition_source(
         payload.source_kind,

@@ -37,7 +37,7 @@ def get_pending_client_action(
     turn_id: str,
     client_id: str = Query(min_length=1, max_length=128),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Replay a pending action only to the instance currently bound to it."""
 
@@ -64,7 +64,7 @@ def takeover_client_action(
     interaction_id: str,
     body: MockClientActionTakeoverRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Explicit user command to bind a stranded action to this client."""
 
@@ -111,7 +111,7 @@ async def resolve_client_action(
     interaction_id: str,
     body: MockClientActionResultRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Persist ack/refusal/failure and resume the same Turn/Tool Call once."""
 

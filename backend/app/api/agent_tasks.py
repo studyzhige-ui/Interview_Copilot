@@ -31,7 +31,7 @@ def read_agent_task(
     session_id: str,
     turn_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> AgentTaskView | None:
     """Return ``null`` when this simple Turn has no AgentTask."""
 

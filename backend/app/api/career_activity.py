@@ -17,7 +17,7 @@ router = APIRouter(prefix="/career/activity", tags=["career-activity"])
 def read_career_activity(
     limit: int = Query(100, ge=1, le=200),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> list[CareerActivityEvent]:
     return list_career_activity(db, user_pk=current_user.id, limit=limit)
 

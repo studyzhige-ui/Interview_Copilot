@@ -128,6 +128,9 @@ async function main() {
       " with open_object(asset.storage_uri) as stream: assert stream.read()==b'retained'",
     ].join('\n'), asset.file_asset_id]);
     report.checks.push('real local unlock, immutable upload/confirm, owner isolation, byte-range download and worker file resolution');
+    // Exercise the production private-source snapshot and actual FFmpeg decoder.
+    await runtime.run('docker', ['exec', await owned('api'), 'python', '-c', "import hashlib, io, uuid, wave\nfrom types import SimpleNamespace\nfrom app.core.storage import storage_uri_for_key, store_object, delete_object\nfrom app.media.application.playback_audio import render_clip\npcm=bytes(32000)\nbuffer=io.BytesIO()\nwith wave.open(buffer,'wb') as source:\n source.setnchannels(1);source.setsampwidth(2);source.setframerate(16000);source.writeframes(pcm)\nraw=buffer.getvalue()\nuri=storage_uri_for_key('acceptance/'+uuid.uuid4().hex+'.wav')\nstore_object(io.BytesIO(raw),uri,content_type='audio/wav')\ntry:\n selection=SimpleNamespace(storage_uri=uri,file_asset_id='synthetic-runtime-audio',sha256=hashlib.sha256(raw).hexdigest(),size_bytes=len(raw),first_sample=0,last_sample=16000)\n clip=render_clip(selection,max_bytes=100000,max_ms=2000)\n with wave.open(io.BytesIO(clip),'rb') as output:\n  assert output.getframerate()==16000 and output.getnchannels()==1\n  assert output.readframes(16001)==pcm\nfinally:\n delete_object(uri)\n"], { timeout: 30000 });
+    report.checks.push('production image decodes exact synthetic private-file audio samples without any model');
     await fs.writeFile(path.join(runtime.state.dataDirectory, 'synthetic-retention.txt'), 'retained');
     const settings = await fs.readFile(path.join(root, 'workspace.enc'));
     const candidate = (await runtime.run('docker', ['run', '-d', '--label', 'io.interview-copilot.acceptance=unrelated-sentinel', 'redis:8.10.0-alpine'])).trim();

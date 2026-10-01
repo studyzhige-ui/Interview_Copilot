@@ -1,6 +1,6 @@
 # Interview Copilot
 
-Interview Copilot is a cloud-first career copilot. It combines job-search
+Interview Copilot is a local-first career copilot. It combines job-search
 tracking, mock interviews, recording analysis, resume/JD retrieval, durable
 artifacts, user Skills, and MCP tools. Long-term Agent Memory remains behind
 its evaluation gate; the current runtime does not produce or recall it.
@@ -45,21 +45,21 @@ remain separate gates.
   and mock interview
 - Long-running agent turns with reconnectable event streams and cancellation
 - User-scoped Skills and MCP servers with concrete Tool discovery, execution records, and current policy controls
-- PostgreSQL/pgvector, Redis/Celery, and S3-compatible object storage
+- PostgreSQL/pgvector, Redis/Celery, private local file storage, and optional S3
 
 ## Quick start
 
 Choose one run mode and do not mix them in the same checkout.
 
-### Host development
+### Host development (Linux or WSL2)
+
+Native Windows users should use the [desktop launcher](desktop/README.md) with
+Docker Desktop or the full container stack below. The backend and Celery run in
+Linux. Use the Bash launchers below for host-backend development.
 
 Requirements: Python 3.11–3.13, Node.js 20+, Docker, and an active Python
 virtual environment. The setup script installs dependencies, starts the local
 infrastructure, applies migrations, and installs the frontend packages.
-
-```powershell
-pwsh ./scripts/setup.ps1
-```
 
 ```bash
 bash ./scripts/setup.sh
@@ -69,10 +69,6 @@ The setup script asks which edition to configure. Community then asks for a
 model profile: lightweight remote, local/hybrid CPU, or local/hybrid CUDA. A
 local profile opens a per-capability model wizard and stores the selection in
 `.env`. Then use the matching daily launcher:
-
-```powershell
-.\scripts\start.ps1
-```
 
 ```bash
 bash ./scripts/start.sh
@@ -92,7 +88,10 @@ docker compose --profile full up -d --wait
 ```
 
 Open `http://localhost`. Runtime data and model caches are stored under
-`data/`; PostgreSQL/pgvector, Redis, and MinIO use Docker volumes.
+`data/`; PostgreSQL/pgvector and Redis use Docker volumes. New files use
+`data/storage` by default. Optional S3 needs an explicit endpoint and credentials;
+existing S3 assets retain their original provider. Old MinIO volumes are not
+automatically migrated or deleted.
 
 See [Community deployment](docs/deployment/community.md) or
 [Cloud deployment](docs/deployment/cloud.md) for the complete contract.

@@ -77,7 +77,7 @@ def get_turn_tool_call_audit(
     turn_id: str,
     call_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Read the deep audit layer for the same durable live/replay call id."""
 
@@ -121,7 +121,7 @@ def create_chat_attachment_draft(
     session_id: str,
     body: AttachmentDraftCreateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.conversation.application.attachment_ingress_service import (
         AttachmentIngressError,
@@ -174,7 +174,7 @@ def get_chat_attachment_draft(
     session_id: str,
     draft_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.conversation.application.attachment_ingress_service import (
         AttachmentIngressError,
@@ -208,7 +208,7 @@ def remove_chat_attachment_draft(
     session_id: str,
     draft_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.conversation.application.attachment_ingress_service import (
         AttachmentIngressError,
@@ -245,7 +245,7 @@ def get_turn_interaction(
     session_id: str,
     turn_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.conversation.application.interaction_service import get_pending_interaction
 
@@ -276,7 +276,7 @@ def resolve_turn_interaction(
     interaction_id: str,
     body: ResolveInteractionRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.conversation.application.interaction_service import (
         InteractionConflictError,
@@ -517,7 +517,7 @@ def create_chat_turn(
     session_id: str,
     body: ChatTurnRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_pk = resolve_user_pk(db, current_user.username)
     row = db.get(Conversation, session_id)
@@ -614,7 +614,7 @@ def create_chat_turn(
 def list_pending_submissions(
     session_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_pk = resolve_user_pk(db, current_user.username)
     conversation = db.get(Conversation, session_id)
@@ -696,7 +696,7 @@ def edit_pending_submission(
     submission_id: str,
     body: PendingSubmissionUpdateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.conversation.application.turn_executor import SubmissionConflictError
     from app.conversation.application.turn_executor import update_pending_submission
@@ -734,7 +734,7 @@ def withdraw_pending_submission_endpoint(
     submission_id: str,
     expected_version: int = Query(ge=1),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.conversation.application.turn_executor import SubmissionConflictError
     from app.conversation.application.turn_executor import schedule_turn
@@ -798,7 +798,7 @@ def retry_pending_submission_endpoint(
     submission_id: str,
     body: PendingSubmissionCommandRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.conversation.application.turn_executor import SubmissionConflictError
     from app.conversation.application.turn_executor import retry_pending_submission
@@ -842,7 +842,7 @@ def interrupt_turn_for_submission(
     turn_id: str,
     body: _InterruptRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.conversation.application.turn_executor import SubmissionConflictError
     from app.conversation.application.turn_executor import cancel_pending_turn
@@ -962,7 +962,7 @@ def cancel_chat_turn(
     session_id: str,
     turn_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_pk = resolve_user_pk(db, current_user.username)
     turn = db.get(ConversationTurn, turn_id)

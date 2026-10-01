@@ -15,6 +15,7 @@ from tests.browser.test_invitation_browser import (
     database,  # noqa: F401
     fresh_pg_db,  # noqa: F401
     login,
+    safe_response_failure,
     pytestmark as browser_marks,
 )
 
@@ -373,7 +374,8 @@ def test_local_file_avatar_upload_reload_download_and_owner_usage(browser_app):
                     "buffer": png,
                 }
             )
-    assert reserved.value.ok and avatar.value.ok
+    assert reserved.value.ok, safe_response_failure(reserved.value)
+    assert avatar.value.ok, safe_response_failure(avatar.value)
     asset_id = reserved.value.json()["file_asset_id"]
     assert len(puts) == 1 and "authorization" not in puts[0].headers
     image = page.get_by_alt_text("头像", exact=True)
@@ -522,4 +524,11 @@ def test_real_expired_answer_audio_renews_once_without_autoplay(
     assert player.evaluate("audio => audio.duration") == 1
     assert player.evaluate("audio => audio.paused")
     assert any(status in {200, 206} for status in media_statuses)
+    player_box = player.bounding_box()
+    card_box = player.locator("xpath=ancestor::article[1]").bounding_box()
+    assert player_box and card_box
+    assert player_box["x"] + player_box["width"] <= card_box["x"] + card_box["width"], (
+        player_box,
+        card_box,
+    )
     snapshot(page, "expired-answer-audio-authorized-renewal-no-autoplay")

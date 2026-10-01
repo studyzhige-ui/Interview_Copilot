@@ -148,8 +148,8 @@ class ComposeRuntime {
       await fs.writeFile(source, template, { mode: 0o600 });
       const prefix = ['compose', '--project-name', project, '--project-directory', this.resources, '--env-file', envPath];
       const model = JSON.parse(await this.run('docker', [...prefix, '-f', source, '--profile', 'full', 'config', '--format', 'json']));
-      const data = state.dataDirectory ? await verifyDataDirectory(state.dataDirectory, state.id) : path.join(this.root, 'data');
-      if (!state.dataDirectory) await fs.mkdir(data, { recursive: true, mode: 0o700 });
+      let data = state.dataDirectory ? await verifyDataDirectory(state.dataDirectory, state.id) : path.join(this.root, 'data');
+      if (!state.dataDirectory) { await fs.mkdir(data, { recursive: true, mode: 0o700 }); data = await selectedParent(data); }
       await fs.writeFile(generated, JSON.stringify(ownedModel(model, state, data)), { mode: 0o600 });
       return await action([...prefix, '-f', generated, '--profile', 'full'], state);
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }

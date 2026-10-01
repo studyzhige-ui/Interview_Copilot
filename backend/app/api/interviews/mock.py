@@ -97,7 +97,7 @@ def start_mock_interview(
     response: Response,
     body: MockStartRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Atomically create the record + conversation + runtime and return the
     opening interviewer line. No pre-created chat session — start owns it."""
@@ -191,7 +191,7 @@ def get_mock_answer_receipt(
     record_id: str,
     request_id: UUID,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     record = _owned_mock_record_or_404(db, record_id, current_user.username)
     receipt = mock_answer_receipts.read_receipt(db, record.id, str(request_id))
@@ -211,7 +211,7 @@ async def submit_mock_answer(
     record_id: str,
     body: MockAnswerRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """One turn: persist the candidate's answer, generate the next interviewer
     line from the plan + stage + recent messages, persist it, advance runtime."""
@@ -326,7 +326,7 @@ def finish_mock_interview(
     response: Response,
     record_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.api.command_errors import command_errors
 
@@ -346,7 +346,7 @@ def retry_mock_review(
     response: Response,
     record_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.api.command_errors import command_errors
 
@@ -367,7 +367,7 @@ def abandon_mock_interview(
     response: Response,
     record_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Actively abandon an unfinished mock: delete its conversation + messages,
     runtime, mock audio assets and the draft record (abandon = this never
@@ -405,7 +405,7 @@ def get_in_progress_mock(
     request: Request,
     response: Response,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Resume banner: the user's most recent in-progress mock, from the runtime."""
     runtime = mock_runtime_service.get_active_runtime(db, user_id=current_user.username)
@@ -438,7 +438,7 @@ def get_mock_live_state(
     response: Response,
     record_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Return the canonical live transcript for resume and error recovery."""
     _owned_mock_record_or_404(db, record_id, current_user.username)
@@ -512,7 +512,7 @@ async def prepare_answer_audio(
     record_id: str,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Transcribe and keep one recording without a second client upload."""
     from app.files.application.file_validation import read_validated_upload
@@ -607,7 +607,7 @@ async def synthesize_speech(
     response: Response,
     body: TTSRequest,
     _current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Generate explicitly selected speech; audio format follows the provider."""
     from app.media.application.tts_service import tts_service

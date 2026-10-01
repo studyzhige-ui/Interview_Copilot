@@ -112,7 +112,7 @@ def list_conversation_attachment_sources(
     submission_id: str | None = Query(default=None, max_length=128),
     turn_id: str | None = Query(default=None, max_length=128),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Read queued or claimed source state without silently dropping failures."""
 
@@ -145,7 +145,7 @@ def retry_attachment_source(
     session_id: str,
     source_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Retry the same parsing projection; never mint a new attachment identity."""
 
@@ -204,7 +204,7 @@ def remove_conversation_source_from_scope(
     session_id: str,
     attachment_ref_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Revoke this Conversation scope while retaining a History tombstone."""
 
@@ -241,7 +241,7 @@ def promote_conversation_attachment_to_debrief(
     session_id: str,
     attachment_ref_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_pk = resolve_user_pk(db, current_user.username)
     try:
@@ -276,7 +276,7 @@ def promote_conversation_attachment_to_formal_artifact(
     attachment_ref_id: str,
     body: AttachmentArtifactPromotionRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Explicitly grant this exact Conversation file a formal Artifact scope."""
 
@@ -329,7 +329,7 @@ def promote_conversation_attachment_to_formal_artifact(
 def get_debrief_project_sources(
     record_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_pk = resolve_user_pk(db, current_user.username)
     try:
@@ -351,7 +351,7 @@ def remove_debrief_source(
     record_id: str,
     source_ref_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_pk = resolve_user_pk(db, current_user.username)
     try:

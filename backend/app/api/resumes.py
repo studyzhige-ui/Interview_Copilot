@@ -51,7 +51,7 @@ def _serialize(record) -> ResumeResponse:
 @router.get("/resumes", response_model=list[ResumeResponse])
 def list_resumes(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return [
         _serialize(r)
@@ -68,7 +68,7 @@ def create_resume(
     response: Response,
     body: ResumeCreateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         resume = resume_artifact_service.create_resume_artifact(
@@ -99,7 +99,7 @@ def retry_resume_parse(
     response: Response,
     resume_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Explicitly retry extraction for the exact current ArtifactVersion."""
 
@@ -141,7 +141,7 @@ def replace_resume(
     resume_id: str,
     body: ResumeCreateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         resume = resume_artifact_service.add_resume_version(
@@ -172,7 +172,7 @@ def set_default(
     response: Response,
     resume_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         resume = resume_artifact_service.set_default_resume_artifact(
@@ -192,7 +192,7 @@ def delete_resume(
     response: Response,
     resume_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         resume_artifact_service.archive_resume_artifact(

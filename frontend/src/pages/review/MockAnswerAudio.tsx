@@ -56,8 +56,8 @@ function AnswerPlayer({ recordId, qaId, assetId, url }: Props) {
       if (!controller.signal.aborted) setStatus('failed');
     } finally { pending.current = false; }
   };
-  return <span className="min-w-0">
-    <audio key={generation} ref={audio} controls preload="none" src={source} className="h-7 max-w-[220px]"
+  return <span className="min-w-0 max-w-full">
+    <audio key={generation} ref={audio} controls preload="none" src={source} className="h-7 w-full max-w-[220px]"
       aria-label="回答原录音" onError={() => { void recover(); }} onLoadedMetadata={() => {
         const player = audio.current;
         if (!player || restoreTime.current === null) return;

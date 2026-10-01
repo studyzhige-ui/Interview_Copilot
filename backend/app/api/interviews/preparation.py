@@ -26,7 +26,7 @@ def preparation(
     response: Response,
     body: MockPreparationRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     response.headers["Cache-Control"] = "no-store"
     try:

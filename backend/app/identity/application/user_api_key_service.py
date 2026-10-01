@@ -64,7 +64,7 @@ def _session(db: Session | None):
     """Use the caller's session if given; otherwise spin up a short-lived one.
 
     Keeps the service callable from both FastAPI endpoints (which pass
-    ``Depends(get_db)``) and ad-hoc places (Celery tasks, CLI) without
+    ``Depends(get_db, scope="function")``) and ad-hoc places (Celery tasks, CLI) without
     duplicating lifecycle code.
     """
     if db is not None:

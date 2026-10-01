@@ -11,7 +11,7 @@ const installation = 'a'.repeat(24);
 const auth = { provider: 'supabase', url: 'https://fixture.supabase.co', publishableKey: 'sb_publishable_synthetic_fixture' };
 const state = { id: installation, bundle: 'b'.repeat(64), port: 21781, storagePort: 21782, secret: 'c'.repeat(64), databasePassword: 'd'.repeat(64), storageUser: 'e'.repeat(24), storagePassword: 'f'.repeat(64) };
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'copilot-directory-test-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'copilot-directory-test-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -107,4 +107,31 @@ test('failure cleanup preserves original files and rejects another installation 
   assert.equal(await discardUncommittedDataDirectory(directory, installation), false);
   assert.equal(await fs.readFile(path.join(directory, 'original.txt'), 'utf8'), 'retained');
   assert.equal(await verifyDataDirectory(directory, installation), directory);
+});
+
+test('canonical spelling changes require the same filesystem directory identity', async t => {
+  const root = await fixture(t), requested = path.join(root, 'short-spelling'), canonical = path.join(root, 'long-spelling');
+  await fs.mkdir(requested); await fs.mkdir(canonical);
+  const lstat = fs.lstat.bind(fs), realpath = fs.realpath.bind(fs), identity = await lstat(requested, { bigint: true });
+  t.mock.method(fs, 'realpath', location => location === requested ? Promise.resolve(canonical) : realpath(location));
+  t.mock.method(fs, 'lstat', (location, ...args) => location === canonical ? Promise.resolve(identity) : lstat(location, ...args));
+  assert.equal(await selectedParent(requested), canonical);
+  t.mock.restoreAll();
+  t.mock.method(fs, 'realpath', location => location === requested ? Promise.resolve(canonical) : realpath(location));
+  await assert.rejects(selectedParent(requested), /重定向/);
+});
+test('a directory below a redirected ancestor is refused even when its leaf is ordinary', async t => {
+  const root = await fixture(t), actual = path.join(root, 'actual'), redirected = path.join(root, 'redirected');
+  await fs.mkdir(actual); await fs.mkdir(path.join(actual, 'child')); await fs.symlink(actual, redirected, 'junction');
+  await assert.rejects(selectedParent(path.join(redirected, 'child')), /链接/);
+});
+test('the operating system temp spelling resolves to the verified canonical directory', async t => {
+  const requested = await fs.mkdtemp(path.join(os.tmpdir(), 'copilot-alias-test-'));
+  t.after(() => fs.rm(requested, { recursive: true, force: true }));
+  const canonical = await fs.realpath(requested);
+  t.diagnostic(JSON.stringify({ platform: process.platform, requested, canonical, spellingChanged: path.relative(requested, canonical) !== '' }));
+  assert.equal(await selectedParent(requested), canonical);
+  const directory = await createDataDirectory(requested, installation);
+  assert.equal(directory, path.join(canonical, 'data'));
+  assert.equal(await verifyDataDirectory(path.join(requested, 'data'), installation), directory);
 });

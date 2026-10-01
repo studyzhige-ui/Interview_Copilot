@@ -8,10 +8,15 @@ Community is the GitHub self-hosted edition. It has two independent choices:
 All combinations use `.env.community.example` and the same application code,
 database schema, and `data/` layout.
 
-## Host development mode
+## Host development mode (Linux or WSL2)
 
-Use this mode to read, debug, test, or modify the source. Python, Celery, and
-Vite run on the host; Docker Compose runs PostgreSQL/pgvector, Redis, and MinIO.
+Use this mode to read, debug, test, or modify the source inside Linux or WSL2.
+The backend uses Linux file/process isolation primitives and Celery. Native
+Windows users should use the [desktop launcher](../../desktop/README.md) with
+Docker Desktop or full containers. Use the Bash scripts below for host-backend
+development. Python, Celery, and
+Vite run on the host; Docker Compose runs PostgreSQL/pgvector and Redis.
+Files use the private local provider by default, shared by the API and workers.
 
 Requirements:
 
@@ -21,15 +26,6 @@ Requirements:
 - Enough RAM and disk for local models, or remote provider credentials
 
 Run the one-time setup:
-
-```powershell
-pwsh ./scripts/setup.ps1
-```
-
-The setup asks for a Community model profile. For an unattended setup, pass
-`-ModelProfile remote`, `-ModelProfile local-cpu`, or
-`-ModelProfile local-cuda`. The earlier `-LocalModels` and `-Cuda` aliases
-remain supported.
 
 ```bash
 bash ./scripts/setup.sh
@@ -45,20 +41,16 @@ applies Alembic migrations, and runs `npm ci`.
 
 For daily startup:
 
-```powershell
-.\scripts\start.ps1
-```
-
 ```bash
 bash ./scripts/start.sh
 ```
 
 The launcher shows a concise status view by default while preserving complete
-output under `data/logs`. Use `-VerboseLogs` on PowerShell or `--verbose-logs`
-on Bash when diagnosing startup or runtime failures.
+output under `data/logs`. Use `--verbose-logs` when diagnosing startup or runtime
+failures.
 
 Open `http://localhost:5173`. Stop the foreground launcher with `Ctrl+C`; use
-`scripts/stop.ps1` or `bash scripts/stop.sh` when you also want to stop the
+`bash scripts/stop.sh` when you also want to stop the
 Docker infrastructure.
 
 ### Optional Gmail credential store
@@ -102,15 +94,19 @@ docker compose --profile full logs -f api worker-turns worker-pipeline
 docker compose --profile full down
 ```
 
-Application runtime data and model caches are mounted at `./data`; database,
-Redis and MinIO state use named Docker volumes. `docker compose down`
+Application runtime data and model caches are mounted at `./data`; database
+and Redis state use named Docker volumes. `docker compose down`
 preserves them. Adding `--volumes` permanently removes database and service
 state and must only be used for an intentional reset.
 
-Full Compose uses `AWS_ENDPOINT_URL=http://minio:9000` for server-side object
-I/O and `S3_PUBLIC_ENDPOINT_URL=http://localhost:9000` for browser presigned
-URLs. If users access the site through another hostname, set the public value
-to the externally reachable MinIO/S3 origin before starting the stack.
+Full Compose uses `STORAGE_BACKEND=filesystem` and `/app/data/storage`.
+Uploads and scoped file reads use the application API origin. To use S3 for new
+files, explicitly set `STORAGE_BACKEND=s3`, `AWS_ENDPOINT_URL`,
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `S3_BUCKET_NAME`. The API proxies
+bounded immutable uploads; an unavailable S3 provider never silently falls back
+to local storage. Existing `s3://` assets still require their configured original
+endpoint even when the default changes. Historical MinIO volumes are retained;
+copying, verifying and switching old data is a separate approved operation.
 
 ## Model modes
 
@@ -153,11 +149,11 @@ All application-managed files live under the ignored `data/` tree:
 | `cache/` | Local model weights and Python bytecode | Rebuildable; never deleted automatically because downloads can be large |
 | `logs/` | Host launcher logs and `metrics.jsonl` | Launcher logs older than 14 days are swept; metrics rotate at 50 MiB with one backup |
 | `runtime/` | Celery Beat schedule and small process state | Reused and overwritten |
-| `storage/` | Local fallback for user uploads when object storage is unavailable | Deleted with the owning business object/outbox job |
+| `storage/` | Private default store for user files; never an automatic S3 fallback | Deleted with the owning business object/outbox job |
 | `tmp/` | Document/audio downloads and parser conversions | Deleted after each operation; crash leftovers older than 24 hours are swept daily |
 | `backups/`, `evaluation/`, `release/` | Explicit operator command output | Created only when the corresponding script is run |
 
-PostgreSQL/pgvector, Redis, and MinIO data use named Docker volumes rather than
+PostgreSQL/pgvector and Redis data use named Docker volumes rather than
 arbitrary source folders. `docker compose down` keeps them; `down --volumes`
 deletes them. Cache cleanup is intentionally manual: stop application workers,
 then remove only the unused model directory under `data/cache`.

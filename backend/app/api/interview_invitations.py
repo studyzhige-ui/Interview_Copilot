@@ -85,7 +85,7 @@ def confirm_invitation_from_ui(
     payload: ConfirmInterviewInvitation,
     response: Response,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> ConfirmInterviewInvitationResult:
     """Direct UI path; Agent and Automation use their own thin adapters."""
 
@@ -133,7 +133,7 @@ def ingest_fixture_observation(
     payload: FixtureInterviewInvitationInput,
     response: Response,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> FixtureInterviewInvitationResult:
     """VS-01 deterministic fixture ingress; this is not a live provider API."""
 
@@ -163,7 +163,7 @@ def ingest_fixture_observation(
 def read_invitation_candidate(
     candidate_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> InterviewInvitationCandidateView:
     try:
         return get_interview_invitation_candidate(
@@ -181,7 +181,7 @@ def read_invitation_candidate(
 )
 def list_confirmed_invitation_interviews(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> list[InterviewInvitationHandoffView]:
     return list_interview_invitation_handoffs(
         db,
@@ -196,7 +196,7 @@ def list_confirmed_invitation_interviews(
 def read_invitation_handoff(
     interview_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> InterviewInvitationHandoffView:
     try:
         return get_interview_invitation_handoff(
@@ -215,7 +215,7 @@ __all__ = ["router"]
 def read_submission_receipt(
     idempotency_key: str = Query(min_length=1, max_length=200),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         return submissions.submission_view(
@@ -229,7 +229,7 @@ def read_submission_receipt(
 def resume_submission(
     payload: SubmissionKey,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = submissions.execute_submission(
@@ -249,7 +249,7 @@ def resume_submission(
 def cancel_pending_submission(
     payload: SubmissionKey,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = submissions.cancel_submission(

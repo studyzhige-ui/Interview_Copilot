@@ -127,7 +127,7 @@ def get_gmail_observations(
     statuses: list[str] = Query(default=[]),
     limit: int = Query(default=100, ge=1, le=200),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     allowed = {
         "unreviewed",
@@ -154,7 +154,7 @@ def get_gmail_observations(
 )
 async def sync_gmail_observations(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     adapter=Depends(get_gmail_provider_adapter),
 ):
     return await _perform_sync(
@@ -171,7 +171,7 @@ async def sync_gmail_observations(
 async def rebaseline_gmail_observations(
     body: GmailObservationRebaseline,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     adapter=Depends(get_gmail_provider_adapter),
 ):
     del body  # Pydantic has already required explicit confirm_gap=true.
@@ -202,7 +202,7 @@ def get_gmail_review_cards(
     task_id: str,
     statuses: list[str] = Query(default=[]),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     allowed = {"pending", "approved", "rejected", "skipped"}
     selected = set(statuses)
@@ -228,7 +228,7 @@ def resolve_gmail_review_card(
     card_id: str,
     body: GmailObservationCardResolve,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = gmail_observation_service.resolve_review_card(
@@ -274,7 +274,7 @@ def retract_gmail_observation(
     observation_id: str,
     body: GmailObservationRetract,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         gmail_observation_service.retract_applied_observation(

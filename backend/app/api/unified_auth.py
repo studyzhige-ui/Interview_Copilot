@@ -77,7 +77,7 @@ def bind_local_profile(
     response: Response,
     body: BindProfileRequest,
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     claims = verified_online_claims(token, db)
     if body.legacy_username:
@@ -103,7 +103,7 @@ def setup_local_unlock(
     response: Response,
     body: UnlockSetupRequest,
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     claims = verified_online_claims(token, db)
     require_recent_password(claims)
@@ -125,7 +125,7 @@ def unlock_local_profile(
     request: Request,
     response: Response,
     body: UnlockRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     if settings.AUTH_PROVIDER != "supabase":
         raise HTTPException(409, "当前安装使用原本地账号登录")

@@ -33,7 +33,7 @@ router = APIRouter(prefix="/career-insights", tags=["career-insights"])
 def action_agenda(
     at: datetime | None = None,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return reminder_service.build_next_action_agenda(db, user_pk=current_user.id, at=at)
 
@@ -41,7 +41,7 @@ def action_agenda(
 @router.get("/notification-preference", response_model=NotificationPreferenceView)
 def get_notification_preference(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return reminder_service.notification_preference(db, user_pk=current_user.id)
 
@@ -50,7 +50,7 @@ def get_notification_preference(
 def put_notification_preference(
     body: NotificationPreferenceUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         row = reminder_service.update_notification_preference(
@@ -70,7 +70,7 @@ def put_notification_preference(
 def reminder_inbox(
     limit: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return reminder_service.list_reminder_inbox(
         db, user_pk=current_user.id, limit=limit
@@ -82,7 +82,7 @@ def dismiss_reminder(
     action_id: str,
     body: ReminderDismiss,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         row = reminder_service.dismiss_reminder(
@@ -109,7 +109,7 @@ def funnel_analysis(
     occurred_from: datetime | None = None,
     occurred_to: datetime | None = None,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return funnel_analysis_service.analyze_funnel(
         db,
@@ -126,7 +126,7 @@ def funnel_analysis(
 def compare_offers(
     body: OfferAnalysisRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = offer_analysis_service.compare_offers(
@@ -153,7 +153,7 @@ def negotiation_draft(
     offer_id: str,
     body: NegotiationDraftRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         result = offer_analysis_service.build_negotiation_draft(

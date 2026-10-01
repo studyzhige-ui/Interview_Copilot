@@ -703,7 +703,7 @@ function QAItem({
       </div>
 
       {/* A-row */}
-      <div className="flex items-center gap-2 mb-2">
+      <div className="flex flex-wrap items-center gap-2 mb-2">
         <Pill tone="success">A</Pill>
         <span className="text-xs text-stone-500">你的回答 · 可编辑</span>
         {qa.answer_audio_url && <MockAnswerAudio recordId={recordId} qaId={qa.id}

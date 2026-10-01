@@ -111,7 +111,7 @@ def create_knowledge_upload_url(
     request: Request,
     response: Response,
     body: KnowledgeUploadRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     """Create an owned knowledge upload and return a presigned upload URL.
@@ -144,7 +144,7 @@ def create_knowledge_document(
     request: Request,
     response: Response,
     body: KnowledgeDocumentCreateRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     with command_errors():
@@ -166,7 +166,7 @@ def list_knowledge_documents(
     category: Optional[str] = None,
     status: Optional[str] = None,
     source_kind: Optional[SourceKindEnum] = None,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     # selectinload(.upload) avoids an N+1 in ``_document_payload`` — the
@@ -197,7 +197,7 @@ def list_knowledge_documents(
 @router.get("/knowledge/documents/{document_id}")
 def get_knowledge_document(
     document_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     document = (
@@ -219,7 +219,7 @@ def get_knowledge_document(
 def update_knowledge_document(
     document_id: str,
     request: KnowledgeDocumentUpdateRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     with command_errors():
@@ -232,7 +232,7 @@ def update_knowledge_document(
 @router.delete("/knowledge/documents/{document_id}")
 def delete_knowledge_document(
     document_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     document = (
@@ -259,7 +259,7 @@ def delete_knowledge_document(
 
 @router.get("/knowledge/categories")
 def list_knowledge_categories(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     current_user: User = Depends(get_current_user),
 ):
     rows = (

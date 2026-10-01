@@ -41,7 +41,7 @@ async def media_offer(
     body: MediaOffer,
     current_user: User = Depends(get_current_user),
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     if not config.enabled:
         raise HTTPException(503, "实时语音尚未启用，请使用文字或录音回答。")
@@ -95,7 +95,7 @@ async def media_close(
     client_session_id: UUID,
     connection_id: UUID,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_id = current_user.id
     db.close()
@@ -114,7 +114,7 @@ def media_playback_reports(
     response: Response,
     record_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         reports = playback_reports(

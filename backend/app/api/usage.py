@@ -15,7 +15,7 @@ router = APIRouter(prefix="/usage", tags=["usage"])
 def account_usage(
     day: date | None = None,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from datetime import datetime, UTC
 
@@ -34,7 +34,7 @@ def usage_receipts(
     before: str | None = Query(None, min_length=64, max_length=64),
     limit: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         return queries.wire(
@@ -51,7 +51,7 @@ def usage_corrections(
     receipt_id: str,
     limit: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return queries.wire(
         {

@@ -31,7 +31,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def browser_app(database, tmp_path):
+def browser_app(database, tmp_path, request):
     url, _, factory = database
     from playwright.sync_api import sync_playwright
 
@@ -115,6 +115,30 @@ def browser_app(database, tmp_path):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=5)
+            log.flush()
+            # Only this isolated synthetic API process; preserve server-side
+            # failure evidence while removing capability/login credentials.
+            import re
+
+            evidence = root / "test-results/frontend-acceptance/server-logs"
+            evidence.mkdir(parents=True, exist_ok=True)
+            diagnostic = log_path.read_text()[-200_000:]
+            diagnostic = re.sub(r"eyJ[A-Za-z0-9_.-]+", "[redacted token]", diagnostic)
+            diagnostic = re.sub(
+                r"(?i)(Bearer\s+)[^\s'\"]+", r"\1[redacted]", diagnostic
+            )
+            (evidence / f"{request.node.name}.log").write_text(diagnostic)
+
+
+def safe_response_failure(response):
+    """Keep status/error diagnostics, never copy a successful credential payload."""
+    import re
+
+    if response.ok:
+        return f"HTTP {response.status}"
+    body = response.text()[:1000]
+    body = re.sub(r"eyJ[A-Za-z0-9_.-]+", "[redacted token]", body)
+    return f"HTTP {response.status}: {body}"
 
 
 def login(page, address):
@@ -123,7 +147,30 @@ def login(page, address):
     page.goto(address + "/interviews")
     page.get_by_placeholder("请输入用户名").fill("browser-owner")
     page.get_by_placeholder("至少 6 位").fill("synthetic-test-password")
-    page.locator('form button[type="submit"]').click()
+    for attempt in range(2):
+        with page.expect_response(
+            lambda response: (
+                response.url.endswith("/api/v1/auth/login")
+                and response.request.method == "POST"
+            )
+        ) as admitted:
+            page.locator('form button[type="submit"]').click()
+        response = admitted.value
+        if response.status != 429 or attempt == 1:
+            assert response.ok, safe_response_failure(response)
+            break
+        # Separate browser scenarios share the real test Redis/IP quota. Respect
+        # the actual rejection header once; never disable or reset the limiter.
+        retry_after = response.headers.get("retry-after")
+        assert retry_after, safe_response_failure(response)
+        try:
+            delay = float(retry_after)
+        except ValueError:
+            from email.utils import parsedate_to_datetime
+
+            delay = parsedate_to_datetime(retry_after).timestamp() - time.time()
+        assert 0 <= delay <= 65, f"Unexpected Retry-After: {retry_after}"
+        time.sleep(delay + 0.2)
     expect(page).to_have_url(address + "/today")
     page.goto(address + "/interviews")
     expect(page.get_by_role("heading", name="面试准备", exact=True)).to_be_visible()

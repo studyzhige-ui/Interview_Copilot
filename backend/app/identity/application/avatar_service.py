@@ -1,9 +1,8 @@
-"""Avatar storage business logic: validation, URL translation, cleanup.
+"""Validate, publish private read capabilities for, and retire owned avatars.
 
-The avatar bytes go straight to object storage via the unified presigned
-flow, so the server never sees them at upload time. Everything here runs
-at *set*-time (magic-byte check on the object head) or *read*-time
-(translating the stored URI into a browser-fetchable URL).
+The bounded upload API commits immutable provider bytes before confirmation.
+Setting an avatar verifies image MIME/magic and consumes that FileAsset; profile
+reads mint revocable owner-bound URLs for both local and S3-backed images.
 """
 
 from __future__ import annotations
@@ -57,12 +56,7 @@ def matches_magic(content_type: str, body: bytes) -> bool:
 
 
 def read_object_head(storage_uri: str, n: int = 32) -> bytes:
-    """Read the first ``n`` bytes of an S3 object.
-
-    Used to magic-byte-validate an avatar uploaded via the presigned flow: the
-    bytes went straight to object storage, so the server reads the head here to
-    confirm the declared image type matches the real content.
-    """
+    """Read a bounded provider-neutral head for the avatar MIME check."""
     from app.core.storage import read_object_head as read_head
 
     return read_head(storage_uri, n) or b""

@@ -125,7 +125,7 @@ def send_verification_code(
     request: Request,
     response: Response,
     payload: EmailRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Generate and send a 6-digit code to the given email.
 
@@ -178,7 +178,7 @@ def reset_password(
     request: Request,
     response: Response,
     body: ResetPasswordRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Reset a forgotten password using a one-time email code.
 
@@ -224,7 +224,7 @@ def register_user(
     request: Request,
     response: Response,
     user_in: UserCreate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Register a new user after verifying their email code.
 
@@ -285,7 +285,7 @@ def register_user(
 def login_access_token(
     request: Request,
     response: Response,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     form_data: OAuth2PasswordRequestForm = Depends(),
 ):
     if settings.AUTH_PROVIDER == "supabase":
@@ -317,7 +317,7 @@ def refresh_access_token(
     request: Request,
     response: Response,
     body: RefreshRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Rotate refresh tokens.
 
@@ -396,7 +396,7 @@ def logout(
     response: Response,
     body: LogoutRequest | None = None,
     access_token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Revoke the caller's access token and (optionally) their refresh token.
 
@@ -437,7 +437,7 @@ def change_password(
     response: Response,
     body: ChangePasswordRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Change the caller's password and invalidate every outstanding token.
 
@@ -491,7 +491,7 @@ def get_me(current_user: User = Depends(get_current_user)):
 def update_me(
     payload: MeUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     user_account_service.update_profile(
         db,
@@ -511,15 +511,14 @@ def set_avatar(
     response: Response,
     body: AvatarSetRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Set the avatar from a confirmed ``file_assets(purpose='avatar')`` upload.
 
-    The image was PUT straight to object storage via the unified presigned flow,
-    so there is no server-receives-bytes path. Here we run the image safety check
-    (declared type + size + magic bytes on the object head), then point
-    ``users.avatar_url`` at the asset and mark it consumed. ``avatar_url`` stores
-    the ``s3://`` URI; the serializer turns it into a presigned GET on /auth/me.
+    Upload bytes enter the bounded capability endpoint and are committed once
+    to the selected provider. Confirm verifies size and purpose; this command
+    also checks the declared image MIME against magic bytes before consuming
+    the asset. Profile serialization returns an owner-bound read capability.
     """
     from app.files.application.file_asset_service import READABLE_UPLOAD_STATUSES
     from app.files.application.file_asset_service import get_owned_file_asset
@@ -564,10 +563,7 @@ def set_avatar(
             detail="文件内容与声明的图片类型不匹配，已拒绝",
         )
 
-    # Known gap (deferred): the presigned PUT URL minted at upload-url time has a
-    # 1h TTL and isn't revoked after this validation, so a user could re-PUT bytes
-    # to their OWN key after the magic check passes (self-poisoning only — it only
-    # affects where their own avatar renders). A future hardening would copy the
-    # validated object to an immutable server key or shorten the upload TTL.
+    # Storage creation is immutable; neither the original upload capability
+    # nor a retry can overwrite the bytes validated here.
     avatar_service.swap_avatar(db, current_user, asset)
     return _serialize_me(current_user)

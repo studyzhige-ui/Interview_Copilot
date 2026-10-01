@@ -26,7 +26,7 @@ def transcript_page(
     transcript_id: str | None = None,
     offset: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=200),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     user: User = Depends(get_current_user),
 ):
     with command_errors():
@@ -47,7 +47,7 @@ def transcript_page(
 def correct_transcript(
     record_id: str,
     body: TranscriptCorrectionRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     user: User = Depends(get_current_user),
 ):
     with command_errors():
@@ -64,7 +64,7 @@ def correction_history(
     record_id: str,
     before: str | None = None,
     limit: int = Query(20, ge=1, le=50),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     user: User = Depends(get_current_user),
 ):
     with command_errors():
@@ -80,7 +80,7 @@ def correction_history(
 def correction_receipt(
     record_id: str,
     request_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     user: User = Depends(get_current_user),
 ):
     with command_errors():
@@ -96,7 +96,7 @@ async def transcript_playback(
     record_id: str,
     body: TranscriptPlaybackRequest,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.interviews.application.transcript_playback import create_playback
     from app.media.application.workers import pool

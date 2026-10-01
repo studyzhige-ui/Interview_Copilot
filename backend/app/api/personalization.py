@@ -34,7 +34,7 @@ router = APIRouter(prefix="/personalization", tags=["personalization"])
 @router.get("/memory-pipeline")
 def memory_pipeline_status(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from sqlalchemy import func
     from app.models.memory_pipeline import MemoryExtraction, MemoryWorkspace
@@ -66,7 +66,7 @@ def memory_pipeline_status(
 def memory_receipts(
     turn_id: str | None = None,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.models.memory_pipeline import MemoryReadReceipt
 
@@ -94,7 +94,7 @@ def memory_feedback(
     receipt_id: str,
     body: MemoryFeedbackCommand,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.memory.recall import set_feedback
 
@@ -142,7 +142,7 @@ def _run_memory(db: Session, operation, *, commit: bool = False):
 @router.get("/copilot-preference", response_model=CopilotPreferenceView)
 def get_copilot_preference(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return personalization_service.get_copilot_preference(db, user_pk=current_user.id)
 
@@ -151,7 +151,7 @@ def get_copilot_preference(
 def put_copilot_preference(
     body: CopilotPreferenceUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run(
         db,
@@ -171,7 +171,7 @@ def put_copilot_preference(
 def get_conversation_guidance(
     conversation_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run(
         db,
@@ -191,7 +191,7 @@ def put_conversation_guidance(
     conversation_id: str,
     body: ScopedGuidanceUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run(
         db,
@@ -212,7 +212,7 @@ def put_conversation_guidance(
 def get_debrief_guidance(
     interview_record_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run(
         db,
@@ -232,7 +232,7 @@ def put_debrief_guidance(
     interview_record_id: str,
     body: ScopedGuidanceUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run(
         db,
@@ -249,7 +249,7 @@ def put_debrief_guidance(
 @router.get("/memory-settings", response_model=AgentMemorySettingsView)
 def get_memory_settings(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return agent_memory_service.get_settings(db, user_pk=current_user.id)
 
@@ -258,7 +258,7 @@ def get_memory_settings(
 def put_memory_settings(
     body: AgentMemorySettingsUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_memory(
         db,
@@ -278,7 +278,7 @@ def put_memory_settings(
 def get_conversation_memory_controls(
     conversation_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_memory(
         db,
@@ -298,7 +298,7 @@ def put_conversation_memory_controls(
     conversation_id: str,
     body: ConversationMemoryControlsUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_memory(
         db,
@@ -317,7 +317,7 @@ def get_memories(
     include_inactive: bool = Query(False),
     limit: int = Query(100, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return agent_memory_service.list_memories(
         db,
@@ -332,7 +332,7 @@ def patch_memory(
     memory_id: str,
     body: AgentMemoryUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_memory(
         db,
@@ -351,7 +351,7 @@ def invalidate_memory(
     memory_id: str,
     body: AgentMemoryStatusCommand,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_memory(
         db,
@@ -370,7 +370,7 @@ def remove_memory(
     memory_id: str,
     body: AgentMemoryStatusCommand,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_memory(
         db,
@@ -392,7 +392,7 @@ def promote_memory_to_preference(
     memory_id: str,
     body: AgentMemoryPromotionCommand,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     memory, preference = _run_memory(
         db,

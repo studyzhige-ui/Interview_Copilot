@@ -164,7 +164,7 @@ def _raise_resume_http(exc: resume_artifact_service.ResumeArtifactError) -> None
 def save_artifact(
     body: ArtifactExplicitSaveRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         if body.artifact_kind.strip().casefold() == "resume":
@@ -206,7 +206,7 @@ def save_artifact(
 def promote_message(
     body: ArtifactMessagePromotionRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         existing_artifact_id = (
@@ -252,7 +252,7 @@ def list_artifacts(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         rows = artifact_service.list_artifacts(
@@ -274,7 +274,7 @@ def list_artifacts(
 def read_artifact(
     artifact_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     artifact = _owned_artifact(db, current_user.id, artifact_id)
     try:
@@ -290,7 +290,7 @@ def read_artifact(
 def list_artifact_versions(
     artifact_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         return [
@@ -309,7 +309,7 @@ def list_artifact_versions(
 def list_artifact_relations(
     artifact_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         return [
@@ -331,7 +331,7 @@ def list_artifact_relations(
 def list_artifact_submissions(
     artifact_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         return [
@@ -354,7 +354,7 @@ def edit_artifact(
     artifact_id: str,
     body: ArtifactEditRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         artifact = _owned_artifact(db, current_user.id, artifact_id)
@@ -397,7 +397,7 @@ def edit_artifact(
 def archive_artifact(
     artifact_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         owned = _owned_artifact(db, current_user.id, artifact_id)
@@ -429,7 +429,7 @@ def relate_artifact(
     artifact_id: str,
     body: ArtifactRelatedRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         relation = artifact_service.relate_artifact_to_job(
@@ -451,7 +451,7 @@ def record_submitted_artifact(
     artifact_id: str,
     body: ArtifactSubmittedRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     try:
         if body.ui_confirmation == "product_ui":

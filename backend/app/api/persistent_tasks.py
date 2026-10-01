@@ -82,7 +82,7 @@ def _run_domain(
 @router.get("", response_model=list[PersistentTaskView])
 def get_persistent_tasks(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return persistent_task_service.list_persistent_tasks(
         db,
@@ -94,7 +94,7 @@ def get_persistent_tasks(
 def post_persistent_task(
     body: PersistentTaskCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -132,7 +132,7 @@ def get_persistent_task_eligible_tools(
 def get_persistent_task(
     task_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -151,7 +151,7 @@ def get_persistent_task(
 def get_persistent_task_triggers(
     task_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -168,7 +168,7 @@ def patch_persistent_task(
     task_id: str,
     body: PersistentTaskUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -188,7 +188,7 @@ def delete_persistent_task(
     task_id: str,
     body: PersistentTaskDelete,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     result = _run_domain(
         db,
@@ -225,7 +225,7 @@ def delete_persistent_task(
 def get_persistent_task_deletion_impact(
     task_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _run_domain(
         db,
@@ -267,7 +267,7 @@ def pause_persistent_task(
     task_id: str,
     body: PersistentTaskStateChange,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _change_state(
         db,
@@ -283,7 +283,7 @@ def resume_persistent_task(
     task_id: str,
     body: PersistentTaskStateChange,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     return _change_state(
         db,
@@ -304,7 +304,7 @@ def trigger_persistent_task(
     body: PersistentTaskTriggerInput,
     response: Response,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     admission = _run_domain(
         db,

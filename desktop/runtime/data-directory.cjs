@@ -7,11 +7,25 @@ function absoluteLocalDirectory(value) {
   if (typeof value !== 'string' || !path.isAbsolute(value) || /[\0\r\n]/.test(value) || (process.platform === 'win32' && value.startsWith('\\\\'))) throw new Error('请选择此电脑上的本地文件夹');
   return path.resolve(value);
 }
+async function directoryChainWithoutLinks(directory) {
+  let cursor = directory, leaf;
+  for (;;) {
+    const info = await fs.lstat(cursor, { bigint: true });
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('资料目录不能是链接或普通文件');
+    leaf ??= info;
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return leaf;
+    cursor = parent;
+  }
+}
 async function directoryWithoutLink(directory) {
-  const info = await fs.lstat(directory);
-  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('资料目录不能是链接或普通文件');
+  const before = await directoryChainWithoutLinks(directory);
   const actual = await fs.realpath(directory);
-  if (path.relative(directory, actual) !== '') throw new Error('资料目录路径发生了重定向，请恢复原目录后重试');
+  // Windows may expand a legitimate 8.3 name without changing the directory.
+  // Reject links in either ancestry and compare filesystem identity, not spelling.
+  const canonical = await directoryChainWithoutLinks(actual);
+  const after = await directoryChainWithoutLinks(directory);
+  if (before.ino !== canonical.ino || before.dev !== canonical.dev || before.ino !== after.ino || before.dev !== after.dev) throw new Error('资料目录路径发生了重定向，请恢复原目录后重试');
   return actual;
 }
 async function selectedParent(value) {
@@ -33,7 +47,7 @@ async function createDataDirectory(workspaceRoot, installation, parent) {
   catch (error) { if (error.code === 'EEXIST') throw new Error('资料目录已存在；请保留旧资料及原配置，不会自动接管或覆盖'); throw error; }
   const created = await fs.lstat(directory, { bigint: true });
   try {
-    await directoryWithoutLink(directory);
+    directory = await directoryWithoutLink(directory);
     await writePrivateFileExclusively(path.join(directory, OWNER_FILE), JSON.stringify({ version: 1, installation }));
   } catch (error) {
     // Only the same newly created, still-empty directory may be removed. A
@@ -45,7 +59,7 @@ async function createDataDirectory(workspaceRoot, installation, parent) {
   return directory;
 }
 async function verifyDataDirectory(directory, installation) {
-  absoluteLocalDirectory(directory); await directoryWithoutLink(directory);
+  absoluteLocalDirectory(directory); directory = await directoryWithoutLink(directory);
   const marker = path.join(directory, OWNER_FILE), info = await fs.lstat(marker);
   if (!info.isFile() || info.isSymbolicLink()) throw new Error('资料目录的归属标记无效');
   const owner = JSON.parse(await fs.readFile(marker, 'utf8'));

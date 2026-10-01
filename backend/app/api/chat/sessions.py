@@ -62,7 +62,7 @@ router = APIRouter(tags=["chat"])
 def get_context_status(
     session_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Owner-scoped diagnostics, excluding the actual private context payload."""
     from app.conversation.context_store import load
@@ -89,7 +89,7 @@ def get_context_status(
 async def compact_context(
     session_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Manual compaction uses the same model, prompt and checkpoint transaction."""
     from app.conversation.context_manager import prepare
@@ -152,7 +152,7 @@ async def compact_context(
 def create_chat_session(
     request: SessionCreateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     with command_errors():
         return session_commands.create_chat_session(request, current_user, db)
@@ -161,7 +161,7 @@ def create_chat_session(
 @router.get("/chat/sessions", response_model=List[SessionListItem])
 def list_conversations(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     type: Literal["general", "debrief", "mock_interview", "persistent_task"]
@@ -208,7 +208,7 @@ def _owned_conversation(db: Session, *, session_id: str, user_pk: int) -> Conver
 def get_session_execution_mode(
     session_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     row = _owned_conversation(
         db,
@@ -230,7 +230,7 @@ def update_session_execution_mode(
     session_id: str,
     payload: SessionExecutionModeUpdateRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     with command_errors():
         return session_commands.update_session_execution_mode(
@@ -243,7 +243,7 @@ def update_session_title(
     session_id: str,
     payload: SessionRenameRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     with command_errors():
         return session_commands.update_session_title(
@@ -258,7 +258,7 @@ def update_session_title(
 def get_chat_session_deletion_impact(
     session_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.conversation.application.conversation_deletion_service import (
         ConversationDeletionConflictError,
@@ -292,7 +292,7 @@ def delete_chat_session(
     session_id: str,
     payload: ConversationDeleteRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.conversation.application.conversation_deletion_service import (
         ConversationDeletionConflictError,
@@ -351,7 +351,7 @@ def delete_chat_session(
 def get_full_transcript(
     session_id: str = Query(...),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     session_row = db.query(Conversation).filter(Conversation.id == session_id).first()
     if not session_row or session_row.user_id != resolve_user_pk(

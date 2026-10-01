@@ -42,11 +42,12 @@ RUN python -m venv /opt/venv && \
 # Stage 2: Lean runtime image
 FROM python:3.13.14-slim AS runtime
 
-# libpq is needed at runtime for psycopg2; curl is the healthcheck client;
+# libpq is needed at runtime for psycopg2; FFmpeg decodes bounded source clips;
+# curl is the healthcheck client;
 # gosu (~1MB) lets entrypoint drop privileges *after* fixing /app/data
 # ownership — useful when a bind-mounted volume comes in owned by host UID.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libpq5 curl gosu && \
+    apt-get install -y --no-install-recommends libpq5 ffmpeg curl gosu && \
     rm -rf /var/lib/apt/lists/*
 
 # ── Non-root runtime user ────────────────────────────────────────────────

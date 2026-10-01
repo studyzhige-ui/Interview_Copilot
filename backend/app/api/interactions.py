@@ -21,7 +21,7 @@ router = APIRouter(prefix="/interactions", tags=["interactions"])
 @router.get("/pending-confirmations", response_model=list[PendingInteractionProjection])
 def pending_confirmations(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> list[PendingInteractionProjection]:
     """Project only the three Interaction kinds allowed in Today confirmation."""
 

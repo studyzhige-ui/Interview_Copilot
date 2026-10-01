@@ -29,6 +29,8 @@ dependencies = [
     "pydantic-settings==2.15.0",
     "PyJWT==2.13.0",
     "cryptography==50.0.0",
+    # Runtime plugin and Gmail credential-store locking
+    "filelock==3.32.2",
     "pwdlib[argon2,bcrypt]==0.3.0",
     "nest_asyncio==1.6.0",
     "slowapi==0.1.10",
@@ -93,7 +95,6 @@ cuda = [
 ]
 dev = [
     # Tests and static analysis
-    "filelock==3.32.2",
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     # Keep the lint contract explicit below so Ruff upgrades do not silently
@@ -102,7 +103,6 @@ dev = [
 ]
 evaluation = [
     # Optional offline RAG and interview quality evaluation
-    "filelock==3.32.2",
     "ragas==0.4.3",
     # Ragas 0.4.3 imports the pre-1.0 LangChain community module layout.
     # Pin the newest coherent 0.3 line instead of the incompatible 1.x/0.4 pair.

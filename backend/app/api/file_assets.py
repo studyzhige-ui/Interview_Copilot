@@ -81,7 +81,7 @@ def create_upload_url(
     response: Response,
     body: UploadUrlRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Reserve a file asset and return a short-lived presigned PUT URL.
 
@@ -117,7 +117,7 @@ def confirm_upload(
     response: Response,
     file_asset_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Confirm a client-completed upload: HEAD-verify + size-reconcile.
 
@@ -170,7 +170,7 @@ def _file_deletion_http(exc: Exception) -> HTTPException:
 def get_file_asset_deletion_impact(
     file_asset_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.files.application.file_asset_deletion_service import FileAssetDeletionError
     from app.files.application.file_asset_deletion_service import (
@@ -195,7 +195,7 @@ def permanently_delete_file_asset(
     file_asset_id: str,
     body: FileAssetPermanentDeleteRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     from app.files.application.file_asset_deletion_service import FileAssetDeletionError
     from app.files.application.file_asset_deletion_service import (
@@ -238,7 +238,7 @@ def download_file_asset(
     request: Request,
     file_asset_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Owner-scoped download without disclosing storage URI or object key."""
 
@@ -261,7 +261,8 @@ def download_file_asset(
 
 @router.get("/file-assets/storage-usage")
 def storage_usage(
-    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Owner logical usage; optional device capacity, never filesystem paths."""
     import shutil
@@ -340,7 +341,7 @@ async def upload_file_content(
     response: Response,
     file_asset_id: str,
     token: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ):
     """Stream to bounded scratch, then create-only commit while holding asset lock."""
     import errno
@@ -528,10 +529,10 @@ def _stream_asset(request: Request, asset, *, attachment=False):
             media_type=asset.content_type or "application/octet-stream",
         )
 
+    storage_uri = asset.storage_uri
+
     def chunks():
-        with open_object(
-            asset.storage_uri, start=start, end=end if size else None
-        ) as stream:
+        with open_object(storage_uri, start=start, end=end if size else None) as stream:
             remaining = length
             while remaining:
                 block = stream.read(min(64 * 1024, remaining))
@@ -550,7 +551,10 @@ def _stream_asset(request: Request, asset, *, attachment=False):
 
 @router.api_route("/file-assets/{file_asset_id}/content", methods=["GET", "HEAD"])
 def read_file_content(
-    request: Request, file_asset_id: str, token: str, db: Session = Depends(get_db)
+    request: Request,
+    file_asset_id: str,
+    token: str,
+    db: Session = Depends(get_db, scope="function"),
 ):
     asset = _capability_asset(db, file_asset_id, token, "read")
     if (

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Interview Copilot — daily development startup (Windows / PowerShell 7+).
+    Interview Copilot — daily development startup (PowerShell 7+).
 .DESCRIPTION
     Idempotent. Brings everything up in the current console window:
       1. docker compose up -d --wait    (no-op if already running)
@@ -41,6 +41,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if (([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) -and -not $SkipBackend) {
+    throw 'Native Windows backend execution is unsupported. Use the Windows desktop with Docker Desktop, the full container stack, or use the Bash developer launcher inside Linux/WSL2.'
+}
 
 try { chcp 65001 > $null } catch { }
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
@@ -140,21 +144,12 @@ if (-not $SkipBackend) {
     Push-Location $projectRoot
     try {
         $dockerOutput = @(docker compose up -d --wait --wait-timeout 180 `
-            db redis minio 2>&1)
+            db redis 2>&1)
         $dockerExit = $LASTEXITCODE
         Save-CommandOutput 'Docker' $dockerOutput
         if ($dockerExit -ne 0) {
             Save-CommandOutput 'Docker' ($dockerOutput | Select-Object -Last 20) -Show
             Log 'Docker' 'Infrastructure did not become healthy.' Red
-            Log 'Docker' "Details: $logFile" DarkYellow
-            exit 1
-        }
-        $bucketOutput = @(docker compose run --rm --no-deps minio-create-bucket 2>&1)
-        $bucketExit = $LASTEXITCODE
-        Save-CommandOutput 'Docker' $bucketOutput
-        if ($bucketExit -ne 0) {
-            Save-CommandOutput 'Docker' $bucketOutput -Show
-            Log 'Docker' 'MinIO bucket initialization failed.' Red
             Log 'Docker' "Details: $logFile" DarkYellow
             exit 1
         }
