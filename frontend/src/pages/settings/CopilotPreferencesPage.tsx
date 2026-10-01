@@ -111,7 +111,7 @@ function ExecutionModeForm({ initialMode }: { initialMode: ExecutionMode }) {
       <div>
         <h2 className="text-sm font-semibold text-stone-800">新对话默认执行模式</h2>
         <p className="mt-1 text-xs leading-relaxed text-stone-500">
-          新建 Conversation 时由云端继承此设置。当前对话仍可在聊天工具栏单独切换，修改这里不会改变已有对话或持续任务。
+          新建对话时由当前运行服务继承此设置。当前对话仍可在聊天工具栏单独切换，修改这里不会改变已有对话或持续任务。
         </p>
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">

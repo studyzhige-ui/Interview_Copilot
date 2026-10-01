@@ -49,6 +49,23 @@ def snapshot(page, name):
     page.screenshot(path=str(EVIDENCE / f"{name}.png"), full_page=True)
 
 
+def capture_workspace_scroll(page, name):
+    """Capture the internal scroll owner; full_page only captures document scroll."""
+    metrics = page.locator("#workspace-content").evaluate(
+        "el => ({height: el.clientHeight, total: el.scrollHeight})"
+    )
+    bottom = max(0, metrics["total"] - metrics["height"])
+    step = max(1, int(metrics["height"] * 0.8))
+    offsets = list(range(step, bottom, step)) + ([bottom] if bottom else [])
+    for index, offset in enumerate(offsets, 1):
+        page.locator("#workspace-content").evaluate(
+            "(el, y) => { el.scrollTop = y; }", offset
+        )
+        snapshot(page, f"{name}-scroll-{index:02d}")
+    page.locator("#workspace-content").evaluate("el => { el.scrollTop = 0; }")
+    return {**metrics, "captured_offsets": [0, *offsets]}
+
+
 def test_all_primary_routes_desktop_and_mobile_real_http(browser_app):
     from playwright.sync_api import expect
 
@@ -71,11 +88,35 @@ def test_all_primary_routes_desktop_and_mobile_real_http(browser_app):
             page.goto(address + route)
             expect(page.locator("#workspace-content")).to_be_visible()
             page.wait_for_load_state("networkidle")
-            snapshot(page, f"{size['width']}-{route.strip('/').replace('/', '-')}")
+            name = f"{size['width']}-{route.strip('/').replace('/', '-')}"
+            snapshot(page, name)
+            scroll_coverage = capture_workspace_scroll(page, name)
+            if size["width"] == 390 and route == "/me":
+                identity = (
+                    page.get_by_text("@browser-owner", exact=True)
+                    .locator("..")
+                    .bounding_box()
+                )
+                save = page.get_by_role(
+                    "button", name="保存修改", exact=True
+                ).bounding_box()
+                assert identity and save
+                assert save["y"] >= identity["y"] + identity["height"] - 1, (
+                    identity,
+                    save,
+                )
+            if size["width"] == 390 and route == "/career-process":
+                for label in ["刷新", "检查重复", "记录新岗位面试", "添加机会"]:
+                    box = page.get_by_role(
+                        "button", name=label, exact=True
+                    ).first.bounding_box()
+                    assert box and box["height"] <= 38, (label, box)
+
             observations.append(
                 {
                     "route": route,
                     "viewport": size,
+                    "scroll_coverage": scroll_coverage,
                     "layout": page.evaluate("""() => ({
                     width: innerWidth, bodyWidth: document.body.scrollWidth,
                     mainWidth: document.querySelector('main').clientWidth,
@@ -142,6 +183,14 @@ def test_opportunity_modal_keyboard_repeated_open_and_account_isolation(browser_
         "Synthetic user-confirmed opportunity for browser acceptance only"
     )
     snapshot(page, "opportunity-modal-desktop")
+    page.set_viewport_size({"width": 390, "height": 844})
+    snapshot(page, "opportunity-modal-mobile-top")
+    modal.locator(".overflow-auto").evaluate(
+        "el => { el.scrollTop = el.scrollHeight; }"
+    )
+    snapshot(page, "opportunity-modal-mobile-bottom")
+    expect(modal.get_by_role("button", name="开始跟进")).to_be_in_viewport()
+    page.set_viewport_size({"width": 1280, "height": 720})
     with page.expect_response(
         lambda response: (
             response.request.method == "POST"

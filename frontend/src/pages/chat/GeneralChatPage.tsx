@@ -361,7 +361,7 @@ export function GeneralChatPage({ embedded = false, objectReference = null, onOb
           <div>
             <span className="today-dateline">与你一起推进求职</span>
             <h2>{starter?.title ?? '今天，想先完成什么？'}</h2>
-            <p>{starter?.detail ?? '描述一个具体目标，例如修改简历或准备面试。你可以随时补充资料，协作记录会保存在左侧。'}</p>
+            <p>{starter?.detail ?? '描述一个具体目标，例如修改简历或准备面试。你可以随时补充资料，协作记录会保存在对话列表中。'}</p>
             {starter && <p>接下来会为你准备一份可编辑的起步消息。确认后发送，再一起补充需要的信息。</p>}
             <button className="today-primary-link" disabled={creating} onClick={onNew}>{creating ? '正在创建…' : starter ? '开始这项准备' : '开始新对话'}</button>
             {productObjectReference && (

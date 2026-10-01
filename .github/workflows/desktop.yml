@@ -37,7 +37,7 @@ jobs:
       - name: Run native boundary and lifecycle policy tests
         run: npm test --prefix desktop
       - name: Build validation-only Windows installer
-        run: npm run package:win --prefix desktop -- -c.artifactName=Interview-Copilot-acceptance-fixture.exe
+        run: node desktop/scripts/build-acceptance.cjs
       - name: Inspect installer and bundled source integrity
         run: node desktop/scripts/verify-package.cjs --installer
       - name: Verify installed Windows protocol and single-instance dispatch
@@ -80,6 +80,23 @@ jobs:
           node-version: "24"
       - name: Assemble the exact installed runtime sources
         run: node desktop/scripts/prepare-runtime.cjs
+      - name: Inspect the vendor's exact legacy MinIO image manifests
+        shell: bash
+        run: |
+          docker buildx imagetools inspect quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z | tee desktop/minio-server-descriptor.txt
+          docker buildx imagetools inspect quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z | tee desktop/minio-client-descriptor.txt
+          docker buildx imagetools inspect --raw quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z > desktop/minio-server-manifest.json
+          docker buildx imagetools inspect --raw quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z > desktop/minio-client-manifest.json
+          sha256sum desktop/minio-*-manifest.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for path in Path('desktop').glob('minio-*-manifest.json'):
+              manifest = json.loads(path.read_text())
+              platforms = [{"digest": item['digest'], "platform": item.get('platform')} for item in manifest.get('manifests', [])]
+              print(path.name, json.dumps(platforms))
+              assert any(item['platform'].get('os') == 'linux' and item['platform'].get('architecture') == 'amd64' for item in platforms)
+          PY
       - name: Exercise the owned Docker stack and retained data
         run: node desktop/scripts/test-docker-runtime.cjs
       - name: Preserve runtime acceptance evidence
@@ -87,6 +104,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-docker-runtime-evidence
-          path: desktop/runtime-acceptance.json
+          path: |
+            desktop/runtime-acceptance.json
+            desktop/minio-*-manifest.json
+            desktop/minio-*-descriptor.txt
           if-no-files-found: warn
           retention-days: 1

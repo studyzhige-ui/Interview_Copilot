@@ -120,8 +120,8 @@ export function ProfilePage() {
   return (
     <div className="p-6 max-w-3xl mx-auto">
       <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-xs">
-        <div className="flex items-center gap-4">
-          <div className="relative group">
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="relative group shrink-0">
             <input
               ref={avatarInputRef}
               type="file"
@@ -152,11 +152,11 @@ export function ProfilePage() {
             </button>
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xl font-semibold text-stone-800">
+            <div className="text-xl font-semibold text-stone-800 break-words">
               {me.nickname || me.username}
             </div>
-            <div className="text-xs text-stone-500 mt-0.5">@{me.username}</div>
-            <div className="mt-1.5 flex items-center gap-2">
+            <div className="text-xs text-stone-500 mt-0.5 break-all">@{me.username}</div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
               {me.email_verified ? (
                 <Pill tone="success">
                   <CheckCircle2 size={10} /> 邮箱已验证
@@ -169,7 +169,7 @@ export function ProfilePage() {
               <span className="text-[11px] text-stone-400">加入于 {created || '—'}</span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0">
             {dirty && <span className="text-xs text-warning-700">有未保存的修改</span>}
             <Btn
               icon={<Save size={14} />}

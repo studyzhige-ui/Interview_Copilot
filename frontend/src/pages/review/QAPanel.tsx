@@ -102,7 +102,7 @@ export function QAPanel({
         <EmptyState
           icon={<FileText size={32} />}
           title="选择一条面试记录"
-          description="左侧列表点击任意条目查看复盘内容。如果还没有记录，点 + 新建一条。"
+          description="在「面试记录」中选择条目查看复盘内容。如果还没有记录，打开记录列表后点 + 新建一条。"
         />
       </div>
     );
