@@ -257,6 +257,7 @@ def test_read_file_contract_has_no_owner_wide_upload_or_document_selector():
         "attachment_ref_id",
         "source_ref_id",
         "tool_call_id",
+        "source_turn_id",
         "offset",
         "limit",
     }

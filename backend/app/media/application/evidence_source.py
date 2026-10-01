@@ -83,13 +83,32 @@ def capture_evidence_source(
         if not stat.S_ISREG(opened.st_mode) or not 0 < opened.st_size <= max_bytes:
             raise ValueError("audio_input_size_invalid")
 
-        def check_original() -> None:
-            try:
-                current = original.lstat()
-            except OSError as exc:
-                raise ValueError("audio_source_changed") from exc
-            if _identity(os.fstat(fd)) != identity or _identity(current) != identity:
+        def check_original(checksum: str) -> None:
+            def check_metadata() -> None:
+                try:
+                    current = original.lstat()
+                except OSError as exc:
+                    raise ValueError("audio_source_changed") from exc
+                if (
+                    _identity(os.fstat(fd)) != identity
+                    or _identity(current) != identity
+                ):
+                    raise ValueError("audio_source_changed")
+
+            check_metadata()
+            # Same-size writes can share a filesystem timestamp tick. Metadata
+            # alone cannot certify the bytes that the captured evidence binds.
+            os.lseek(fd, 0, os.SEEK_SET)
+            actual = hashlib.sha256()
+            size = 0
+            while block := os.read(fd, _COPY_BLOCK_BYTES):
+                size += len(block)
+                if size > max_bytes:
+                    raise ValueError("audio_source_changed")
+                actual.update(block)
+            if size != opened.st_size or actual.hexdigest() != checksum:
                 raise ValueError("audio_source_changed")
+            check_metadata()
 
         with TemporaryDirectory(prefix="interview-evidence-") as directory:
             # No user-controlled basename or parent directory reaches the worker.
@@ -103,10 +122,10 @@ def capture_evidence_source(
                         raise ValueError("audio_input_size_invalid")
                     output.write(block)
                     digest.update(block)
-            check_original()
             if copied != opened.st_size:
                 raise ValueError("audio_source_changed")
             checksum = digest.hexdigest()
+            check_original(checksum)
             if expected is not None and checksum != expected.group(1):
                 raise ValueError("audio_source_checksum_mismatch")
             captured.chmod(0o400)
@@ -118,7 +137,7 @@ def capture_evidence_source(
                 sha256=checksum,
                 size_bytes=copied,
             )
-            check_original()
+            check_original(checksum)
             if _identity(captured.stat()) != captured_identity:
                 raise ValueError("audio_snapshot_changed")
     finally:

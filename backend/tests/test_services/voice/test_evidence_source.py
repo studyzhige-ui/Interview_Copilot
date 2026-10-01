@@ -134,3 +134,22 @@ async def test_waiter_cancellation_cannot_remove_running_workers_source(tmp_path
     finally:
         release.set()
         pool.shutdown(wait=True)
+
+
+def test_same_timestamp_tick_cannot_hide_source_byte_mutation(monkeypatch, tmp_path):
+    from app.media.application import evidence_source
+
+    original = tmp_path / "recording.wav"
+    original.write_bytes(b"before")
+    # Preserve inode and size, but simulate equal/coarse mtime and ctime.
+    monkeypatch.setattr(
+        evidence_source,
+        "_identity",
+        lambda info: (info.st_dev, info.st_ino, info.st_size, 0, 0),
+    )
+    with pytest.raises(ValueError, match="audio_source_changed"):
+        with capture(original) as source:
+            snapshot = Path(source.path)
+            original.write_bytes(b"after!")
+            assert snapshot.read_bytes() == b"before"
+    assert not snapshot.exists()
