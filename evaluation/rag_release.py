@@ -69,7 +69,13 @@ def _current_runtime_contract() -> dict[str, Any]:
         "retrieval_generation": active_index_label(),
         "index_fingerprint": current_index_identity().fingerprint,
         "similarity_metric": settings.RAG_SIMILARITY_METRIC,
-        "dense_index_type": "EXACT",
+        "dense_index_type": settings.PGVECTOR_DENSE_INDEX_TYPE.upper(),
+        "hnsw": {
+            "m": settings.PGVECTOR_HNSW_M,
+            "ef_construction": settings.PGVECTOR_HNSW_EF_CONSTRUCTION,
+            "ef_search": settings.PGVECTOR_HNSW_EF_SEARCH,
+            "max_scan_tuples": settings.PGVECTOR_HNSW_MAX_SCAN_TUPLES,
+        },
         "lexical_analyzer": current_index_identity().analyzer_contract,
         "statement_timeout_ms": settings.RAG_INDEX_STATEMENT_TIMEOUT_MS,
     }

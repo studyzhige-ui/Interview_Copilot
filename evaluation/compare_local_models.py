@@ -24,6 +24,14 @@ sys.path.insert(0, str(ROOT / "backend"))
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=["bge"], default="bge")
+    parser.add_argument(
+        "--dense-index-type", choices=["exact", "hnsw"], default="exact"
+    )
+    parser.add_argument(
+        "--prepare-hnsw",
+        action="store_true",
+        help="Build graphs only in the guarded rag_compare database",
+    )
     parser.add_argument("--rerank-input-tokens", type=int, default=512)
     parser.add_argument("--user", default="release_eval_20260923")
     parser.add_argument("--rebuild", action="store_true")
@@ -40,6 +48,9 @@ def main():
     from app.core.config import settings
 
     settings.RAG_DEVICE = "cuda"
+    settings.PGVECTOR_DENSE_INDEX_TYPE = args.dense_index_type
+    if args.prepare_hnsw and args.dense_index_type != "hnsw":
+        parser.error("--prepare-hnsw requires --dense-index-type hnsw")
     settings.PARSER_PROVIDER = "docling"
     settings.EMBEDDING_PROVIDER = settings.RERANKER_PROVIDER = "local"
     settings.EMBEDDING_DIM = 1024
@@ -127,6 +138,19 @@ def main():
             _reset_user_corpus(user_pk)
             await _run(_manifest_paths(ROOT / "data/evaluation/corpus"), user_pk)
             await _prepare_isolation_probe(reset=True)
+        if args.prepare_hnsw:
+            from app.db.database import SessionLocal
+            from app.models.user import User
+            from app.rag.index.hnsw import prepare
+            from app.rag.index.identity import current_index_identity
+            from evaluation.isolation_probe import ISOLATION_USER
+
+            with SessionLocal() as db:
+                for (owner,) in db.query(User.id).filter(
+                    User.username.in_([args.user, ISOLATION_USER])
+                ):
+                    prepare(db, current_index_identity(), owner)
+                db.commit()
         alignment = validate_evidence_alignment(rows)
         print("evidence alignment", alignment, flush=True)
         for row_plan in planned[:3]:

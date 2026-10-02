@@ -98,6 +98,8 @@ def current_index_identity() -> IndexIdentity:
         query_token_reserve=int(settings.RAG_QUERY_TOKEN_RESERVE),
         retrieval_text_contract=RETRIEVAL_TEXT_VERSION,
         analyzer_contract=current_analyzer_contract(),
+        # Frozen v3 metadata: physical search uses PGVECTOR_DENSE_INDEX_TYPE.
+        # Switching acceleration must not invalidate existing BGE vectors.
         dense_index_type="EXACT",
     )
 

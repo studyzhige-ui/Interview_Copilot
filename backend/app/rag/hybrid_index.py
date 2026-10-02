@@ -1,4 +1,4 @@
-"""One PostgreSQL retrieval repository: exact pgvector + tenant-scoped BM25.
+"""One PostgreSQL repository: pgvector dense search + tenant-scoped BM25.
 
 The canonical document/chunk/file joins are applied BEFORE ranking and corpus
 statistics, not merely as a final user-interface filter. Replacement and the
@@ -6,8 +6,8 @@ published generation share one transaction. No DDL, model download or external
 service fallback occurs in a request.
 
 Official operator semantics: github.com/pgvector/pgvector, pgvector-python.
-Exact search is the explicit local baseline; it avoids cross-tenant ANN recall
-interference. Resource limits return unavailable, never silently fewer facts.
+Exact search remains the deployment default until HNSW graphs are provisioned.
+Optional HNSW graphs are isolated by owner and semantic generation.
 """
 
 from __future__ import annotations
@@ -15,8 +15,10 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from sqlalchemy import select, delete, text, or_, and_
+from sqlalchemy import select, delete, text, or_, and_, cast, exists, func
+from pgvector.sqlalchemy import VECTOR
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -352,18 +354,30 @@ def dense_search(
     vector = validate_vector(
         query_dense, expected_dim=identity.embedding_dim, label="查询"
     )
-    # Materialize only the authorized current generation BEFORE vector distance.
-    # Different dimension rows in other generations cannot enter the operator.
-    scoped = _scope(user_pk, filters).cte("authorized").prefix_with("MATERIALIZED")
+    use_hnsw = settings.PGVECTOR_DENSE_INDEX_TYPE == "hnsw"
+    scope = _scope(user_pk, filters)
+    # Materialize canonical authorization without copying every embedding.
+    # An init-plan array avoids join estimates collapsing to one row and making
+    # PostgreSQL sort the full corpus instead of scanning the HNSW expression.
+    scoped = (
+        RetrievalEntry.__table__
+        if use_hnsw
+        else scope.cte("authorized").prefix_with("MATERIALIZED")
+    )
+    embedding = (
+        cast(scoped.c.embedding, VECTOR(identity.embedding_dim))
+        if use_hnsw
+        else scoped.c.embedding
+    )
     metric = identity.similarity_metric
     if metric == "IP":
-        distance = scoped.c.embedding.max_inner_product(vector)
+        distance = embedding.max_inner_product(vector)
         score = -distance
     elif metric == "COSINE":
-        distance = scoped.c.embedding.cosine_distance(vector)
+        distance = embedding.cosine_distance(vector)
         score = 1 - distance
     elif metric == "L2":
-        distance = scoped.c.embedding.l2_distance(vector)
+        distance = embedding.l2_distance(vector)
         score = -distance
     else:
         raise ValueError("unsupported similarity metric")
@@ -376,12 +390,46 @@ def dense_search(
             scoped.c.document_id,
             score.label("score"),
         )
-        .order_by(distance, scoped.c.node_id)
+        .order_by(distance, *([] if use_hnsw else [scoped.c.node_id]))
         .limit(top_k)
     )
+    if use_hnsw:
+        authorized = (
+            scope.with_only_columns(RetrievalEntry.chunk_id)
+            .cte("authorized")
+            .prefix_with("MATERIALIZED")
+        )
+        authorized_ids = select(func.array_agg(authorized.c.chunk_id)).scalar_subquery()
+        statement = statement.where(
+            scoped.c.generation == identity.fingerprint,
+            scoped.c.user_id == user_pk,
+            func.array_position(
+                cast(authorized_ids, ARRAY(RetrievalEntry.chunk_id.type)),
+                scoped.c.chunk_id,
+            ).is_not(None),
+        )
     with database.SessionLocal() as db:
         _limits(db)
-        return [dict(row) for row in db.execute(statement).mappings()]
+        if use_hnsw:
+            from app.rag.index import hnsw
+
+            if not db.execute(select(exists(scope))).scalar():
+                return []
+            if not hnsw.ready(db, identity, user_pk):
+                raise RetrievalIndexUnavailable(
+                    "HNSW index missing; run scripts/prepare_rag_hnsw.py for this owner"
+                )
+            hnsw.search_limits(db)
+        rows = [dict(row) for row in db.execute(statement).mappings()]
+        if use_hnsw and len(rows) < top_k:
+            expected = db.execute(
+                select(func.count()).select_from(scope.limit(top_k).subquery())
+            ).scalar()
+            if expected > len(rows):
+                raise RetrievalIndexUnavailable(
+                    "HNSW scan capacity exhausted before filling authorized candidates"
+                )
+        return sorted(rows, key=lambda row: (-row["score"], row["id"]))
 
 
 def sparse_search(

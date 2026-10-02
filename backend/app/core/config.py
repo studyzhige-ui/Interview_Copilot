@@ -77,6 +77,13 @@ class Settings(BaseSettings):
 
     # One PostgreSQL store; all new indexes use pgvector and scoped BM25.
     RAG_SIMILARITY_METRIC: Literal["IP", "COSINE", "L2"] = "IP"
+    # Physical acceleration does not change the embedding generation. Indexes
+    # are provisioned explicitly by prepare_rag_hnsw, never in an HTTP request.
+    PGVECTOR_DENSE_INDEX_TYPE: Literal["hnsw", "exact"] = "exact"
+    PGVECTOR_HNSW_M: int = Field(16, ge=2, le=100)
+    PGVECTOR_HNSW_EF_CONSTRUCTION: int = Field(200, ge=4, le=1000)
+    PGVECTOR_HNSW_EF_SEARCH: int = Field(100, ge=1, le=1000)
+    PGVECTOR_HNSW_MAX_SCAN_TUPLES: int = Field(20000, ge=1, le=1000000)
     RAG_INDEX_NAMESPACE: str = "interview_copilot_rag"
     RAG_LEXICAL_ANALYZER: Literal["cjk_bigrams", "jieba_search"] = "cjk_bigrams"
     RAG_INDEX_STATEMENT_TIMEOUT_MS: int = Field(5000, ge=100, le=60000)
@@ -450,6 +457,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_rag_policy(self) -> "Settings":
+        if self.PGVECTOR_HNSW_EF_CONSTRUCTION < 2 * self.PGVECTOR_HNSW_M:
+            raise ValueError("PGVECTOR_HNSW_EF_CONSTRUCTION must be >= 2 * M")
         if self.RAG_DEVICE not in {"auto", "cpu", "cuda"}:
             raise ValueError("RAG_DEVICE must be auto, cpu, or cuda")
         if self.RAG_CHUNK_TOKENS <= self.RAG_CHUNK_OVERLAP:
