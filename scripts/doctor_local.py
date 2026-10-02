@@ -84,8 +84,7 @@ def build_report(
     *, model_root: Path, cache_root: Path, verify_hashes: bool = False
 ) -> dict:
     models = []
-    local_asr = settings.TRANSCRIPTION_PROVIDER in {"local_whisperx", "local_qwen_asr"}
-    local_tts = settings.TTS_PROVIDER == "local_qwen3_tts"
+    local_asr = settings.TRANSCRIPTION_PROVIDER == "local_whisperx"
     roles = [
         ("embedding", settings.EMBEDDING_MODEL, settings.EMBEDDING_PROVIDER == "local"),
         ("reranking", settings.RERANKER_MODEL, settings.RERANKER_PROVIDER == "local"),
@@ -105,7 +104,6 @@ def build_report(
             settings.DIARIZATION_MODE != "none"
             and (local_asr or settings.DIARIZATION_MODE == "pyannote"),
         ),
-        ("synthesis", settings.TTS_MODEL, local_tts),
     ]
     policy_conflicts = []
     for role, model, local in roles:
@@ -114,7 +112,7 @@ def build_report(
                 {"role": role, "model_id": model, "status": "not_selected_local"}
             )
             if (
-                role in {"embedding", "reranking", "transcription", "synthesis"}
+                role in {"embedding", "reranking", "transcription"}
                 and settings.AUXILIARY_MODEL_POLICY == "local_only"
             ):
                 policy_conflicts.append(role)
@@ -135,24 +133,6 @@ def build_report(
             and report.loadable_candidate
             else "not_verified"
         )
-        if role == "synthesis" and report.path:
-            codec = Path(report.path) / "speech_tokenizer"
-            weights = list(codec.glob("*.safetensors"))
-            required = {
-                "speech_tokenizer/config.json",
-                *(f"speech_tokenizer/{w.name}" for w in weights),
-            }
-            codec_present = (codec / "config.json").is_file() and bool(weights)
-            item["codec_present"] = codec_present
-            item["codec_hashes_verified"] = (
-                verify_hashes
-                and codec_present
-                and required <= set(report.checked_files)
-            )
-            if not codec_present or (
-                verify_hashes and not item["codec_hashes_verified"]
-            ):
-                item["status"] = "tts_codec_missing_or_unverified"
         models.append(item)
     if settings.PARSER_PROVIDER == "docling":
         report = inspect_directory("docling", model_root / "docling")
@@ -233,10 +213,10 @@ def build_report(
         },
         "tts": {
             "adapter": settings.TTS_PROVIDER,
-            "local": local_tts,
-            "enabled_by_policy": local_tts
-            or settings.AUXILIARY_MODEL_POLICY != "local_only",
-            "note": "Finite local synthesis and its codec require explicit broker preparation; generation is not playback or model-quality acceptance.",
+            "local": False,
+            "enabled_by_policy": settings.TTS_PROVIDER == "edge"
+            and settings.AUXILIARY_MODEL_POLICY != "local_only",
+            "note": "Disabled by default; Edge requires explicit selection. Generation is not playback or model-quality acceptance.",
         },
         "document_runtime": {
             "selected": settings.PARSER_PROVIDER == "docling",

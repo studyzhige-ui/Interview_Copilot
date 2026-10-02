@@ -12,7 +12,7 @@ entry:
 
   HAND-CURATED — NVIDIA NIM only: it hosts hundreds of OSS models, so we
     feature the handful users actually want (DeepSeek V4 / Llama 3.3 /
-    Qwen3 Coder / etc) above the long tail.
+    MiMo Pro / etc) above the long tail.
 
   ANTHROPIC AUTO (``_anthropic_tier_rank``) — Claude ids use a DASH
     version (``claude-opus-4-8`` = v4.8) the generic parser can't read,
@@ -21,7 +21,7 @@ entry:
     new Claude releases self-rank with no hand-editing.
 
   AUTO-DERIVED — every other vendor (OpenAI / Gemini / DeepSeek /
-  Moonshot / Zhipu / Qwen / Xiaomi). Display name comes from a
+  Moonshot / Zhipu / Xiaomi). Display name comes from a
   brand-aware capitalisation rule; tier_rank from parsing the version
   number + tier suffix out of the id.
 
@@ -58,7 +58,6 @@ _DATE_SUFFIX_PATTERNS: dict[str, re.Pattern[str]] = {
     "openai": re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
     "deepseek": re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
     "moonshot": re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
-    "qwen": re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
     "anthropic": re.compile(r"^(?P<bare>.+)-\d{8}$"),
     # Gemini / NVIDIA / zai / Xiaomi don't ship dated aliases in
     # current /v1/models responses — no rule means no suppression.
@@ -78,8 +77,6 @@ _BRAND_DISPLAY: dict[str, str] = {
     "mimo": "MiMo",
     "kimi": "Kimi",
     "moonshot": "Moonshot",
-    "qwen": "Qwen",
-    "qwq": "QwQ",
     "gemini": "Gemini",
     "gemma": "Gemma",
     # Acronyms
@@ -126,7 +123,7 @@ def _auto_display_name(model_id: str) -> str:
       mimo-v2.5-pro       → "MiMo v2.5 Pro"
       kimi-k2.6           → "Kimi K2.6"
       deepseek-v4-pro     → "DeepSeek v4 Pro"
-      qwen3-coder-plus    → "Qwen3 Coder Plus"
+      mimo-v2.5-pro       → "MiMo v2.5 Pro"
       gemini-3.5-flash    → "Gemini 3.5 Flash"
       gemma-4-31b-it      → "Gemma 4 31b It"
     """
@@ -182,13 +179,13 @@ def _parse_version(model_id: str) -> tuple[int, int]:
     function. If a future auto-vendor needs this, special-case it.
     """
     # X.Y decimal — covers most modern names (gpt-5.5, gemini-3.5,
-    # glm-4.7, mimo-v2.5, kimi-k2.6, qwen3.7).
+    # glm-4.7, mimo-v2.5, kimi-k2.6).
     m = re.search(r"(\d+)\.(\d+)", model_id)
     if m:
         return int(m.group(1)), int(m.group(2))
 
     # Letter-attached digit: vendors who fuse the version digit to the
-    # brand prefix WITHOUT a dash (``qwen3-max``, ``qwen3-next``).
+    # brand prefix WITHOUT a dash (``model3-max``, ``model3-next``).
     # Matches when a letter is followed by digit(s) followed by a
     # delimiter — captures the brand version BEFORE the dash-integer
     # regex below has a chance to misfire on a later ``-80b``
@@ -203,7 +200,7 @@ def _parse_version(model_id: str) -> tuple[int, int]:
     # Two guards against param-size false positives:
     #   1. Single digit only — ``-80b`` / ``-128k`` / ``-31b`` never match
     #   2. Negative lookahead skips ``b`` — ``-7b-chat`` is 7 BILLION
-    #      params (Qwen-7B), not version 7.
+    #      params (model-7B), not version 7.
     m = re.search(r"-v?(\d)(?![\db])(?=[a-z]|-|$)", model_id)
     if m:
         return int(m.group(1)), 0
@@ -331,12 +328,6 @@ CURATED: dict[tuple[str, str], ModelOverride] = {
     ),
     ("nvidia_nim", "meta/llama-4-maverick-17b-128e-instruct"): ModelOverride(
         "Llama 4 Maverick", tier_rank=7
-    ),
-    ("nvidia_nim", "qwen/qwen3-coder-480b-a35b-instruct"): ModelOverride(
-        "Qwen3 Coder 480B", tier_rank=10
-    ),
-    ("nvidia_nim", "qwen/qwen3-next-80b-a3b-instruct"): ModelOverride(
-        "Qwen3 Next 80B", tier_rank=11
     ),
     ("nvidia_nim", "mistralai/mistral-large-3-675b-instruct-2512"): ModelOverride(
         "Mistral Large 3 675B", tier_rank=15

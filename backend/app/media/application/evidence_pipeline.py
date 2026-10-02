@@ -34,17 +34,9 @@ def _whisperx_collector(path: str, *, model: str, language: str | None):
     return collect_interview_evidence_sync(path, model=model, language=language)
 
 
-def _qwen_collector(path: str, *, model: str, language: str | None):
-    from app.media.application.qwen_evidence import collect_qwen_evidence_sync
-
-    return collect_qwen_evidence_sync(path, model=model, language=language)
-
-
-# Explicit complete capabilities. Qwen uses the same source/publication fences;
-# WhisperX remains selectable for migration and quality comparison, not fallback.
+# Only providers producing complete aligned and diarized evidence are registered.
 _EVIDENCE_COLLECTORS: dict[str, EvidenceCollector] = {
     "local_whisperx": _whisperx_collector,
-    "local_qwen_asr": _qwen_collector,
 }
 
 

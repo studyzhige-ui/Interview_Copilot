@@ -60,7 +60,8 @@ def test_diarization_is_a_distinct_finite_pcm_contract(speaker_spec):
     req = task(speaker_spec)
     assert req["operation"] == "diarize"
     assert request(req) == req
-    assert speaker_spec.binding != replace(speaker_spec, role="alignment").binding
+    with pytest.raises(ValueError, match="invalid_role"):
+        replace(speaker_spec, role="alignment")
     assert speaker_spec.binding != replace(speaker_spec, revision="a" * 40).binding
     assert speaker_spec.binding == replace(speaker_spec, device="cuda").binding
     for change in (

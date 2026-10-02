@@ -8,7 +8,6 @@ export const BRAND_COLORS: Record<string, string> = {
   openai:       '#10A37F',
   anthropic:    '#C26A4A',
   gemini:       '#4285F4',
-  qwen:         '#7A5BC0',
   moonshot:     '#1E4A78',
   zai:          '#0F62FE',
   xiaomi:       '#FF6900',

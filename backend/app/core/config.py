@@ -303,10 +303,10 @@ class Settings(BaseSettings):
     PARSER_MAX_INPUT_BYTES: int = Field(50 * 1024 * 1024, ge=1, le=500 * 1024 * 1024)
     PARSER_MAX_PAGES: int = Field(500, ge=1, le=10000)
     PARSER_MAX_TEXT_BYTES: int = Field(4_000_000, ge=1, le=8_000_000)
-    TTS_PROVIDER: Literal["local_qwen3_tts", "edge"] = "local_qwen3_tts"
-    TTS_MODEL: str = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
-    TTS_DEFAULT_VOICE: str = "Vivian"
-    TTS_LANGUAGE: str = "Auto"
+    # Edge is an existing, explicit network choice. Removing the local adapter
+    # must not automatically send interview text to a remote synthesis service.
+    TTS_PROVIDER: Literal["disabled", "edge"] = "disabled"
+    TTS_DEFAULT_VOICE: str = "zh-CN-XiaoxiaoNeural"
     LEVER_API_BASE: str = "https://api.lever.co/v0"
     LEVER_SITES: str = "openai"
 

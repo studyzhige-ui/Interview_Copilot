@@ -1,4 +1,4 @@
-"""Prepare (never download) explicit local RAG and optional Qwen audio configuration."""
+"""Prepare (never download) explicit local RAG and optional Pyannote diarization configuration."""
 
 from __future__ import annotations
 
@@ -25,13 +25,8 @@ def build_config(
     model_root: Path,
     cache_root: Path,
     capacity_mib: int = 12000,
-    audio_python: str | None = None,
-    tts_python: str | None = None,
-    tts_model: str = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
     diarization_python: str | None = None,
     diarization_model: str = "pyannote/speaker-diarization-community-1",
-    asr_model: str = "Qwen/Qwen3-ASR-1.7B",
-    alignment_model: str = "Qwen/Qwen3-ForcedAligner-0.6B",
 ) -> BrokerConfig:
     if not sys.platform.startswith("linux"):
         raise ValueError("use_linux_or_wsl2")
@@ -84,39 +79,6 @@ def build_config(
                 else "",
             )
         )
-    if audio_python is not None:
-        from app.local_inference.audio import AUDIO_OUTPUT_TOKENS
-
-        audio_executable = Path(audio_python).expanduser().absolute()
-        if not audio_executable.is_file() or not os.access(audio_executable, os.X_OK):
-            raise ValueError("invalid_audio_python")
-        for role, model_id, reservation in (
-            ("transcription", asr_model, 7000),
-            ("alignment", alignment_model, 3500),
-        ):
-            revision = settings.MODEL_REVISIONS_JSON.get(model_id)
-            asset = inspect_model(
-                model_id,
-                model_root=model_root,
-                cache_root=cache_root / "huggingface",
-                revision=revision,
-                verify_hashes=True,
-            )
-            if not asset.loadable_candidate or asset.layout != "transformers":
-                raise ValueError(f"{role}_requires_complete_local_weights")
-            specs.append(
-                ModelSpec(
-                    role,
-                    model_id,
-                    asset.path,
-                    str(audio_executable),
-                    device=device,
-                    revision=revision,
-                    dimension=1,
-                    max_tokens=AUDIO_OUTPUT_TOKENS,
-                    reservation_mib=reservation,
-                )
-            )
     if diarization_python is not None:
         from app.local_inference.speaker_audio import DIARIZATION_BINDING_TOKENS
 
@@ -148,44 +110,6 @@ def build_config(
                 reservation_mib=3000,
             )
         )
-    if tts_python is not None:
-        from app.local_inference.synthesis_audio import SYNTHESIS_TOKENS
-
-        executable = Path(tts_python).expanduser().absolute()
-        if not executable.is_file() or not os.access(executable, os.X_OK):
-            raise ValueError("invalid_tts_python")
-        revision = settings.MODEL_REVISIONS_JSON.get(tts_model)
-        asset = inspect_model(
-            tts_model,
-            model_root=model_root,
-            cache_root=cache_root / "huggingface",
-            revision=revision,
-            verify_hashes=True,
-        )
-        if not asset.loadable_candidate or asset.layout != "transformers":
-            raise ValueError("tts_requires_complete_local_weights")
-        # The codec is a required local submodel, not a permitted Hub fallback.
-        codec = Path(asset.path) / "speech_tokenizer"
-        weights = list(codec.glob("*.safetensors"))
-        required = {
-            "speech_tokenizer/config.json",
-            *(f"speech_tokenizer/{p.name}" for p in weights),
-        }
-        if not weights or not required <= set(asset.checked_files):
-            raise ValueError("tts_requires_verified_speech_tokenizer_manifest")
-        specs.append(
-            ModelSpec(
-                "synthesis",
-                tts_model,
-                asset.path,
-                str(executable),
-                device=device,
-                revision=revision,
-                dimension=1,
-                max_tokens=SYNTHESIS_TOKENS,
-                reservation_mib=4000,
-            )
-        )
     return BrokerConfig(
         str(runtime_dir / "worker.sock"),
         str(runtime_dir / "cache"),
@@ -198,21 +122,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python", required=True)
     parser.add_argument(
-        "--audio-python",
-        help="Optional separate qwen-asr interpreter; never installs dependencies",
-    )
-    parser.add_argument(
         "--diarization-python", help="Optional isolated pyannote.audio 4 interpreter"
     )
     parser.add_argument(
         "--diarization-model", default="pyannote/speaker-diarization-community-1"
     )
-    parser.add_argument(
-        "--tts-python", help="Optional separate qwen-tts 0.1.1 interpreter"
-    )
-    parser.add_argument("--tts-model", default="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
-    parser.add_argument("--asr-model", default="Qwen/Qwen3-ASR-1.7B")
-    parser.add_argument("--alignment-model", default="Qwen/Qwen3-ForcedAligner-0.6B")
     parser.add_argument("--device", choices=("cpu", "cuda"), required=True)
     parser.add_argument("--runtime-dir", required=True)
     parser.add_argument("--model-root")
@@ -229,13 +143,8 @@ def main(argv=None):
         ).absolute(),
         cache_root=cache,
         capacity_mib=args.capacity_mib,
-        audio_python=args.audio_python,
-        tts_python=args.tts_python,
-        tts_model=args.tts_model,
         diarization_python=args.diarization_python,
         diarization_model=args.diarization_model,
-        asr_model=args.asr_model,
-        alignment_model=args.alignment_model,
     )
     private_directory(runtime_dir)
     target = runtime_dir / "config.json"

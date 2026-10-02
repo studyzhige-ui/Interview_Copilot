@@ -1,7 +1,7 @@
 """Tests for the vendor adapter base (P7-A).
 
 Locked behaviours:
-  - 9 vendor spec files are all importable + registered in ALL_SPECS
+  - 8 vendor spec files are all importable + registered in ALL_SPECS
   - Each spec's chat_filter correctly drops the non-chat hints we saw
     in the live verification responses
   - fetch_one_vendor:
@@ -29,7 +29,7 @@ from app.providers.catalog.vendors.base import fetch_one_vendor
 # ── Registry sanity ─────────────────────────────────────────────────
 
 
-def test_all_nine_specs_registered():
+def test_all_eight_specs_registered():
     """Adding/removing a vendor MUST go through the central registry."""
     ids = sorted(s.provider for s in ALL_SPECS)
     assert ids == sorted(
@@ -42,7 +42,6 @@ def test_all_nine_specs_registered():
             "xiaomi",
             "moonshot",
             "zai",
-            "qwen",
         ]
     )
 
@@ -80,15 +79,6 @@ def test_get_spec_returns_none_for_unknown():
         ("nvidia_nim", "nvidia/nemotron-parse", False),
         ("nvidia_nim", "nvidia/nemoretriever-parse", False),
         ("nvidia_nim", "nvidia/nvclip", False),
-        # Qwen — keep only qwen* brand, drop third-party + non-chat variants
-        ("qwen", "qwen3-max", True),
-        ("qwen", "qwen3-coder-plus", True),
-        ("qwen", "qwq-32b-preview", True),
-        ("qwen", "ZHIPU/GLM-5", False),  # third-party gateway
-        ("qwen", "deepseek-v3.1", False),  # third-party gateway
-        ("qwen", "qwen3-vl-image-plus", False),  # image variant
-        ("qwen", "qwen-asr-realtime", False),
-        ("qwen", "text-embedding-v3", False),
     ],
 )
 def test_chat_filter(vendor, bare_id, kept):

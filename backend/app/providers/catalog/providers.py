@@ -31,7 +31,7 @@ from .base import ProviderDefaults
 # Default-enabled providers — the 9 vendors that ship with a working
 # adapter and a card on the new-user Models page:
 #
-# DeepSeek / OpenAI / Anthropic / Google Gemini / Alibaba Qwen /
+# DeepSeek / OpenAI / Anthropic / Google Gemini /
 # Moonshot Kimi / Zhipu GLM / Xiaomi MiMo / NVIDIA NIM.
 #
 # Opt-in providers (Cohere / Mistral / Together / etc.) come AFTER
@@ -76,22 +76,6 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         ),
         api_key_env="GOOGLE_API_KEY",
         icon_slug="googlegemini",
-        enabled_by_default=True,
-    ),
-    # Qwen models come from Alibaba's DashScope OpenAI-compatible
-    # endpoint. The vendor's /v1/models returns 200+ ids including
-    # third-party gateway models (ZHIPU/GLM, deepseek-*, llama-*);
-    # the qwen adapter's chat_filter keeps only qwen*/qwq* brand ids
-    # so other vendors' models stay in THEIR own cards.
-    "qwen": ProviderDefaults(
-        id="qwen",
-        display_label="通义 Qwen",
-        default_api_base=os.getenv(
-            "DASHSCOPE_API_BASE",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        ),
-        api_key_env="DASHSCOPE_API_KEY",
-        icon_slug="alibabacloud",
         enabled_by_default=True,
     ),
     "moonshot": ProviderDefaults(
@@ -214,7 +198,7 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         icon_slug="x",
         enabled_by_default=False,
     ),
-    # Novita — a third-party gateway that resells Qwen / Xiaomi MiMo /
+    # Novita — a third-party gateway that resells Xiaomi MiMo /
     # Zhipu GLM / Meta Llama / many other open-source models behind one
     # OpenAI-compatible endpoint. Opt-in; useful when a user wants
     # access without configuring each direct vendor key.

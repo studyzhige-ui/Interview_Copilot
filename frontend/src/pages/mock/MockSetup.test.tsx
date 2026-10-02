@@ -125,7 +125,7 @@ it('old Edge preferences do not silently select a local voice', () => {
   localStorage.setItem('mock.ttsVoice', 'zh-CN-YunxiNeural');
   expect(loadPreferredVoice()).toBe('default');
   localStorage.setItem('mock.ttsVoice.v2', 'Serena');
-  expect(loadPreferredVoice()).toBe('Serena');
+  expect(loadPreferredVoice()).toBe('default');
   localStorage.setItem('mock.ttsVoice.v2', 'unknown');
   expect(loadPreferredVoice()).toBe('default');
   localStorage.clear();

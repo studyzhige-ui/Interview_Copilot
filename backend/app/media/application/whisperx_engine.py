@@ -418,8 +418,8 @@ def collect_interview_evidence_sync(
     """Legacy WhisperX adapter: collect observations, not canonical evidence.
 
     The application captures the source and composes the evidence. This
-    migration/benchmark adapter still decodes the recording as a whole; it
-    must not be described as the bounded Qwen long-form implementation.
+    adapter still decodes the recording as a whole. It is finite upload
+    recognition, not native incremental model streaming.
     """
     from app.media.application.evidence_contracts import (
         AlignedTranscript,

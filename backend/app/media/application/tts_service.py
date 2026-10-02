@@ -1,16 +1,19 @@
-"""One speech operation for local TTS and explicitly selected legacy Edge.
+"""Bounded synthesis through the existing explicitly selected Edge provider.
 
-The generated audio format travels with its bytes. An unavailable local model
-never falls back to a network provider. Generation is not evidence of playback.
+Synthesis is disabled by default. Removing a local model never selects a network
+provider automatically. Generated MP3 bytes do not certify actual playback.
 """
 
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass
 
 from app.core.config import settings
 from app.core.model_policy import require_local_model
+
+MAX_TEXT_CHARACTERS = 600
 
 
 @dataclass(frozen=True)
@@ -23,89 +26,54 @@ class SynthesizedAudio:
 
 class TTSService:
     async def synthesize(self, text: str, voice: str | None = None) -> SynthesizedAudio:
-        from app.local_inference.synthesis_audio import MAX_TEXT_CHARACTERS, VOICES
         from app.usage import runtime
 
         if not isinstance(text, str) or len(text) > MAX_TEXT_CHARACTERS:
             raise ValueError("tts_input_capacity")
         text = text.strip()
-        provider, model = settings.TTS_PROVIDER, settings.TTS_MODEL
+        provider = settings.TTS_PROVIDER
         voice = voice if voice is not None else settings.TTS_DEFAULT_VOICE
-        language = settings.TTS_LANGUAGE
         maximum = settings.USAGE_TTS_MAX_BYTES
-        if provider not in {"local_qwen3_tts", "edge"}:
-            raise ValueError("unsupported_tts_provider")
-        is_local = provider == "local_qwen3_tts"
-        media_type = "audio/wav" if is_local else "audio/mpeg"
+        if provider != "edge":
+            raise ValueError("tts_disabled_or_unsupported")
+        if not isinstance(voice, str) or not re.fullmatch(
+            r"[a-z]{2,3}-[A-Z]{2}-[A-Za-z][A-Za-z0-9]*Neural", voice
+        ):
+            raise ValueError("invalid_tts_voice")
         if not text:
-            return SynthesizedAudio(b"", media_type, provider, model)
-        require_local_model("tts", is_local=is_local)
+            return SynthesizedAudio(b"", "audio/mpeg", provider, voice)
+        require_local_model("tts", is_local=False)
+        import edge_tts
+        from app.core.provider_streams import close_provider_stream
 
-        if is_local:
-            from app.local_inference.synthesis import (
-                SynthesisClient,
-                make_synthesis_request,
-            )
-
-            client = SynthesisClient(
-                model=model, revision=settings.MODEL_REVISIONS_JSON.get(model)
-            )
-            # Pure validation before usage admission or any model dispatch.
-            make_synthesis_request(
-                client.binding, text, voice, language, timeout=client.client.timeout
-            )
-
-            async def generate():
-                audio = await client.synthesize(text, voice, language)
-                if len(audio) > maximum:
-                    raise ValueError("tts_output_capacity")
+        async def generate():
+            stream = edge_tts.Communicate(text, voice).stream()
+            buffer = io.BytesIO()
+            try:
+                async for chunk in stream:
+                    if chunk["type"] == "audio":
+                        if buffer.tell() + len(chunk["data"]) > maximum:
+                            raise ValueError("tts_output_capacity")
+                        buffer.write(chunk["data"])
+                audio = buffer.getvalue()
+                if not audio:
+                    raise ValueError("tts_empty_audio")
                 return audio
-
-            identity = {"binding": client.binding, "language": language, "voice": voice}
-        else:
-            if (
-                not isinstance(voice, str)
-                or not voice.strip()
-                or len(voice) > 100
-                or voice in VOICES
-            ):
-                raise ValueError("invalid_tts_voice")
-            # Legacy network synthesis exists only for explicitly configured
-            # deployments. Policy rejection above happens before this import.
-            import edge_tts
-            from app.core.provider_streams import close_provider_stream
-
-            model = voice
-            identity = {"voice": voice}
-
-            async def generate():
-                stream = edge_tts.Communicate(text, voice).stream()
-                buffer = io.BytesIO()
-                try:
-                    async for chunk in stream:
-                        if chunk["type"] == "audio":
-                            if buffer.tell() + len(chunk["data"]) > maximum:
-                                raise ValueError("tts_output_capacity")
-                            buffer.write(chunk["data"])
-                    audio = buffer.getvalue()
-                    if not audio:
-                        raise ValueError("tts_empty_audio")
-                    return audio
-                finally:
-                    await close_provider_stream(stream)
-                    buffer.close()
+            finally:
+                await close_provider_stream(stream)
+                buffer.close()
 
         units = {"requests": 1, "characters": len(text)}
         audio = await runtime.invoke_async(
             generate,
             meter="speech",
             provider=provider,
-            model=model,
-            content={"text": text, **identity},
+            model=voice,
+            content={"text": text, "voice": voice},
             units=units,
             observed=lambda _: units,
         )
-        return SynthesizedAudio(audio, media_type, provider, model)
+        return SynthesizedAudio(audio, "audio/mpeg", provider, voice)
 
 
 tts_service = TTSService()

@@ -20,7 +20,6 @@ from .nvidia_nim import SPEC as NVIDIA_SPEC
 # Default-enabled (the 9 vendors we ship support for, all with
 # /v1/models confirmed working as of P7-A live verification).
 from .openai import SPEC as OPENAI_SPEC
-from .qwen import SPEC as QWEN_SPEC
 from .xiaomi import SPEC as XIAOMI_SPEC
 from .zai import SPEC as ZAI_SPEC
 
@@ -33,7 +32,6 @@ ALL_SPECS: list[VendorAdapterSpec] = [
     XIAOMI_SPEC,
     MOONSHOT_SPEC,
     ZAI_SPEC,
-    QWEN_SPEC,
 ]
 
 

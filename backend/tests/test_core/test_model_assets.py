@@ -362,23 +362,6 @@ def test_doctor_does_not_import_models_or_change_files(tmp_path, monkeypatch):
     assert before == set(tmp_path.rglob("*"))
 
 
-def test_doctor_recognizes_selected_qwen_roles_not_legacy_whisper_only(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(settings, "TRANSCRIPTION_PROVIDER", "local_qwen_asr")
-    monkeypatch.setattr(settings, "TTS_PROVIDER", "local_qwen3_tts")
-    monkeypatch.setattr(settings, "AUXILIARY_MODEL_POLICY", "local_only")
-    monkeypatch.setattr(settings, "DIARIZATION_MODE", "auto")
-    report = build_report(model_root=tmp_path / "models", cache_root=tmp_path / "cache")
-    selected = {row["role"]: row["status"] for row in report["models"]}
-    for role in ("transcription", "alignment", "diarization", "synthesis"):
-        assert selected[role] != "not_selected_local"
-        assert role not in report["policy"]["conflicts"]
-        assert role in report["missing_or_incomplete_roles"]
-    assert report["tts"]["local"] and report["tts"]["enabled_by_policy"]
-    assert report["runtime"]["broker_connection"] == "not_exercised"
-
-
 def test_doctor_realtime_assets_use_explicit_local_hashes_without_loading(
     tmp_path, monkeypatch
 ):

@@ -1,6 +1,6 @@
 import type { TranscriptPage, TranscriptReceipt } from '@/api/transcripts';
 export const transcriptPage: TranscriptPage = {
-  transcript_id: 'tr1', current_transcript_id: 'tr1', source: 'local_qwen_asr', language: 'zh',
+  transcript_id: 'tr1', current_transcript_id: 'tr1', source: 'local_whisperx', language: 'zh',
   audio_file_asset_id: 'fa1', audio_file_asset_version: 'file_asset:fa1', audio_sha256: 'a'.repeat(64),
   duration_seconds: 10, word_count: 2, next_offset: null, speakers: ['s1'],
   confirmed_roles: {}, suggested_roles: { s1: 'candidate' },

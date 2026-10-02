@@ -63,29 +63,10 @@ def test_complete_components_produce_stable_provider_neutral_evidence(parts):
     assert compose(parts).model_dump() == evidence.model_dump()
 
 
-@pytest.mark.parametrize("kind", ["openai_compat", "unknown"])
+@pytest.mark.parametrize("kind", ["openai_compat", "unknown", "retired_local_asr"])
 def test_remote_or_unknown_provider_cannot_claim_complete_evidence(kind):
     with pytest.raises(EvidenceProviderUnsupported, match="provider_unsupported"):
         resolve_evidence_collector(kind)
-
-
-def test_qwen_complete_capability_delegates_without_whisperx_fallback(monkeypatch):
-    from app.media.application import qwen_evidence
-
-    calls = []
-
-    def collect(path, **kwargs):
-        calls.append((path, kwargs))
-        return "qwen-complete-parts"
-
-    monkeypatch.setattr(qwen_evidence, "collect_qwen_evidence_sync", collect)
-    assert (
-        resolve_evidence_collector("local_qwen_asr")(
-            "snapshot.audio", model="frozen-asr", language="zh"
-        )
-        == "qwen-complete-parts"
-    )
-    assert calls == [("snapshot.audio", {"model": "frozen-asr", "language": "zh"})]
 
 
 def test_partial_output_is_never_publishable(parts):

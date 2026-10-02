@@ -14,7 +14,6 @@ from app.models.chat import Conversation, ConversationMessage
 from app.interviews.application import mock_flow, mock_runtime_service
 from app.interviews.application.interview_record_service import STATUS_MOCK_IN_PROGRESS
 from app.media.realtime.asr import LiveASR
-from app.media.application.tts_service import tts_service
 from app.usage import runtime as usage
 
 
@@ -142,17 +141,9 @@ class LiveInterview:
                 }
 
     async def synthesize(self, text):
-        from app.core.config import settings
-
-        if settings.TTS_PROVIDER != "local_qwen3_tts":
-            raise MediaConflict("media_requires_local_tts")
-        with usage.scope(
-            self.user_id, f"media-speech:{uuid.uuid4()}", username=self.username
-        ):
-            result = await tts_service.synthesize(text)
-        if result.media_type != "audio/wav":
-            raise ValueError("media_synthesis_format")
-        return result.data
+        # The retired local synthesizer was the only 24 kHz PCM producer.
+        # Do not dispatch Edge or bill synthesis for an unsupported wire format.
+        raise MediaConflict("live_synthesis_unavailable")
 
     async def playback(self, report):
         # Old connections may finish writing their own playback observation

@@ -1,65 +1,47 @@
-"""Incremental bounded-window ASR adapter over the existing broker.
-
-This adapter re-decodes provisional windows; it is not native stateful Qwen
-streaming. Final text is computed from the complete retained turn, not partials.
-"""
+"""Bounded provisional and final recognition through the existing WhisperX path."""
 
 from __future__ import annotations
 
-import hashlib
+import tempfile
+import wave
+from pathlib import Path
+
 from app.core.config import settings
-from app.local_inference.audio import AUDIO_OUTPUT_TOKENS, MAX_PCM_BYTES, SAMPLE_RATE
-from app.local_inference.client import (
-    Client,
-    configured_socket_path,
-    make_audio_request,
-)
-from app.local_inference.config import binding_for
-from app.usage import runtime
+from app.local_inference.audio import MAX_PCM_BYTES, SAMPLE_RATE
+
+
+def _local_pcm(pcm):
+    # The worker owns its temporary input through completion, even if its async
+    # waiter is cancelled. The existing local clip path owns model/accounting.
+    from app.media.application.short_clip_transcription import _local_clip
+
+    with tempfile.TemporaryDirectory(prefix="copilot-live-asr-") as directory:
+        path = Path(directory) / "window.wav"
+        with wave.open(str(path), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(SAMPLE_RATE)
+            audio.writeframes(pcm)
+        return _local_clip(str(path), "auto")
 
 
 class LiveASR:
     def __init__(self):
-        if settings.TRANSCRIPTION_PROVIDER != "local_qwen_asr":
-            raise ValueError("realtime_requires_local_qwen_asr")
-        self.model = settings.TRANSCRIPTION_MODEL
-        self.binding = binding_for(
-            "transcription",
-            self.model,
-            settings.MODEL_REVISIONS_JSON.get(self.model),
-            1,
-            AUDIO_OUTPUT_TOKENS,
-        )
-        self.client = Client(
-            configured_socket_path(), timeout=settings.LOCAL_INFERENCE_TIMEOUT_SECONDS
-        )
+        if settings.TRANSCRIPTION_PROVIDER != "local_whisperx":
+            raise ValueError("realtime_requires_local_whisperx")
 
     async def window(self, pcm: bytes) -> str:
-        request = make_audio_request(
-            "transcription",
-            self.binding,
-            pcm,
-            language=None,
-            priority="interactive",
-            timeout=self.client.timeout,
-        )
-        units = {
-            "requests": 1,
-            "audio_ms": (len(pcm) * 1000 + SAMPLE_RATE * 2 - 1) // (SAMPLE_RATE * 2),
-        }
-        result = await runtime.invoke_async(
-            lambda: self.client.acall(request, dimension=1),
-            meter="transcription",
-            provider="local_qwen_asr",
-            model=self.model,
-            content={
-                "binding": self.binding,
-                "pcm_sha256": hashlib.sha256(pcm).hexdigest(),
-            },
-            units=units,
-            observed=lambda _: units,
-        )
-        return result["text"].strip()
+        from app.media.application.workers import pool
+
+        if (
+            not isinstance(pcm, bytes)
+            or not 0 < len(pcm) <= MAX_PCM_BYTES
+            or len(pcm) % 2
+        ):
+            raise ValueError("invalid_pcm_size")
+        if settings.TRANSCRIPTION_PROVIDER != "local_whisperx":
+            raise ValueError("realtime_requires_local_whisperx")
+        return await pool("local").run(_local_pcm, pcm)
 
     async def final(self, pcm: bytes) -> str:
         parts = []

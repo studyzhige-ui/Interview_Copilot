@@ -126,8 +126,6 @@ def make_audio_request(
             role=role,
             binding=binding,
             operation={
-                "transcription": "transcribe",
-                "alignment": "align",
                 "diarization": "diarize",
             }.get(role, ""),
             audio=pcm_payload(pcm),

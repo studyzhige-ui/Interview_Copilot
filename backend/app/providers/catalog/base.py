@@ -35,7 +35,7 @@ class ProviderDefaults:
     # uses where possible. Examples: "openai", "anthropic", "deepseek",
     # "gemini" (Google's free generative-language API; "vertex_ai" for
     # the paid enterprise channel), "zai" (Zhipu's English brand),
-    # "nvidia_nim", "moonshot", "qwen", "xiaomi".
+    # "nvidia_nim", "moonshot", "xiaomi".
     id: str
 
     # Human-readable label for the UI vendor card header.
