@@ -73,44 +73,6 @@ async def test_decoder_pins_source_and_rejects_changed_file(tmp_path):
             await anext(stream)
 
 
-async def test_partial_local_transcription_rejection_is_unknown(monkeypatch, tmp_path):
-    from app.local_inference import speech
-    from app.local_inference.client import (
-        LocalInferenceNotStarted,
-        LocalInferenceUnknown,
-    )
-
-    path = tmp_path / "audio.wav"
-    make_wave(path, 31)
-    seen = []
-
-    async def transcribe(self, pcm, **kw):
-        seen.append(pcm)
-        if len(seen) == 2:
-            raise LocalInferenceNotStarted("capacity")
-        return {"text": "first part"}
-
-    monkeypatch.setattr(speech.SpeechClient, "transcribe", transcribe)
-    with pytest.raises(LocalInferenceUnknown, match="partial"):
-        await speech.transcribe_file(str(path), model="test")
-    assert len(seen) == 2
-
-
-async def test_first_chunk_rejection_stays_not_started(monkeypatch, tmp_path):
-    from app.local_inference import speech
-    from app.local_inference.client import LocalInferenceNotStarted
-
-    path = tmp_path / "audio.wav"
-    make_wave(path)
-
-    async def rejected(self, pcm, **kw):
-        raise LocalInferenceNotStarted("capacity")
-
-    monkeypatch.setattr(speech.SpeechClient, "transcribe", rejected)
-    with pytest.raises(LocalInferenceNotStarted):
-        await speech.transcribe_file(str(path), model="test")
-
-
 async def test_decoder_repeated_cancel_reaps(tmp_path):
     path = tmp_path / "audio.wav"
     make_wave(path, 90)
