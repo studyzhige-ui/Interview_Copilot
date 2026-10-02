@@ -97,9 +97,11 @@ class MetricTests(unittest.TestCase):
                 )
             ]
             self.assertEqual(fake.rerank.call_count, 2)  # warmup + one real inference
-            self.assertEqual(len(output), 4)
+            self.assertCountEqual(
+                [row["key"] for row in output], [task["key"] for task in tasks]
+            )
             self.assertEqual(
-                sum(row["reused_identical_inference"] for row in output), 3
+                sum(row["reused_identical_inference"] for row in output), 1
             )
             self.assertTrue(all(row["metrics"]["ndcg@10"] == 1 for row in output))
 

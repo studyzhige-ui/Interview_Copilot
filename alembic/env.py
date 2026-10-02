@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 # ``prepend_sys_path = %(here)s/backend`` — no manual sys.path edits here.
 from app.core.config import settings
 from app.db.database import Base
+from app.db.schema_policy import include_schema_object
 
 # app.models.__init__ imports every model module, so autogenerate sees the
 # complete metadata (a partial list here would diff missing tables as drops).
@@ -46,6 +47,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=database_url,
         target_metadata=target_metadata,
+        include_object=include_schema_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -82,7 +84,11 @@ def run_migrations_online() -> None:
         # Introspection starts an implicit transaction even on an empty DB.
         # End the read-only preflight so Alembic owns and commits its DDL.
         connection.rollback()
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            include_object=include_schema_object,
+        )
 
         with context.begin_transaction():
             context.run_migrations()

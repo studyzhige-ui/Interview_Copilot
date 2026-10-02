@@ -102,3 +102,35 @@ def test_explicit_unprepared_graph_and_empty_corpus(corpus, monkeypatch):
     assert index.dense_search(user_pk=foreign, **args) == []
     with pytest.raises(index.RetrievalIndexUnavailable, match="HNSW index missing"):
         index.dense_search(user_pk=owner, **args)
+
+
+def test_operator_graph_survives_autogenerate_without_hiding_other_indexes(corpus):
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+    from app.db.database import Base
+    from app.db.schema_policy import include_schema_object
+
+    _, factory, (owner, _) = corpus
+    seed(corpus, "own", owner, [("data", [1, 0, 0, 0])])
+    ordinary = "ix_hnsw_probe_unmanaged"
+    same_prefix_btree = "ix_rag_hnsw_" + "a" * 40
+    with factory() as db:
+        graph = hnsw.prepare(db, current_index_identity(), owner)
+        for name in (ordinary, same_prefix_btree):
+            db.execute(text(f"CREATE INDEX {name} ON retrieval_entries (user_id)"))
+        db.commit()
+        connection = db.connection()
+
+        def removed(diffs):
+            return {diff[1].name for diff in diffs if diff[0] == "remove_index"}
+
+        raw = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+        assert {graph, ordinary, same_prefix_btree} <= removed(raw)
+        filtered = compare_metadata(
+            MigrationContext.configure(
+                connection, opts={"include_object": include_schema_object}
+            ),
+            Base.metadata,
+        )
+        assert graph not in removed(filtered)
+        assert {ordinary, same_prefix_btree} <= removed(filtered)
