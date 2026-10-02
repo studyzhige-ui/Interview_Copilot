@@ -95,14 +95,13 @@ def main():
             "encode",
             "dense",
             "rerank-m3",
-            "rerank-qwen",
             "report",
             "all",
         ],
     )
     args = parser.parse_args()
     if args.stage == "all":
-        for stage in ("encode", "dense", "rerank-m3", "rerank-qwen", "report"):
+        for stage in ("encode", "dense", "rerank-m3", "report"):
             print("START M3", stage, flush=True)
             subprocess.run(
                 [sys.executable, "-m", "evaluation.mtrag.m3_campaign", stage],
@@ -129,16 +128,7 @@ def main():
     elif args.stage == "dense":
         dense(p, queries(p), identity, "bge_m3")
     elif args.stage == "rerank-m3":
-        rerank(p, queries(p), identity, "bge_m3", retrievers=("bge_m3", "qwen"))
-    elif args.stage == "rerank-qwen":
-        rerank(
-            p,
-            queries(p),
-            identity,
-            "qwen",
-            retrievers=("bge_m3",),
-            runtime_name="qwen-on-m3-rerank-runtime.json",
-        )
+        rerank(p, queries(p), identity, "bge_m3", retrievers=("bge_m3",))
     else:
         from .m3_report import main as report
 

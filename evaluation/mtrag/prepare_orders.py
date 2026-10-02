@@ -12,7 +12,7 @@ from .rewrite import atomic_json
 
 def main():
     profile = load_profile()
-    for family in ("qwen", "bge"):
+    for family in ("bge",):
         tokenizer = AutoTokenizer.from_pretrained(
             profile["models"][f"{family}_embedding"]["path"], local_files_only=True
         )

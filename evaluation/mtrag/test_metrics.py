@@ -71,7 +71,7 @@ class MetricTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "runs").mkdir()
-            for family in ("bge", "qwen"):
+            for family in ("bge",):
                 (root / "runs" / f"bm25_{family}.jsonl").write_text(
                     "\n".join(json.dumps(row) for row in candidates), encoding="utf-8"
                 )
@@ -88,12 +88,12 @@ class MetricTests(unittest.TestCase):
                 patch.object(run.torch.cuda, "reset_peak_memory_stats"),
                 patch.object(run.torch.cuda, "max_memory_allocated", return_value=0),
             ):
-                run.rerank(load_profile(), tasks, "test-campaign", "qwen")
+                run.rerank(load_profile(), tasks, "test-campaign", "bge")
             output = [
                 row
-                for family in ("bge", "qwen")
+                for family in ("bge",)
                 for row in run.read_rows(
-                    root / "runs" / f"bm25_{family}_rerank_qwen.jsonl"
+                    root / "runs" / f"bm25_{family}_rerank_bge.jsonl"
                 )
             ]
             self.assertEqual(fake.rerank.call_count, 2)  # warmup + one real inference

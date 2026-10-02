@@ -39,9 +39,9 @@ def fingerprint(value: object) -> str:
 
 def comparison_matrix(profile: dict) -> list[dict]:
     variants = [("bm25", None)]
-    for family in ("bge", "qwen"):
+    for family in ("bge",):
         variants.extend([(f"{family}_dense", None), (f"bm25_{family}", None)])
-        variants.extend((f"bm25_{family}", reranker) for reranker in ("bge", "qwen"))
+        variants.extend((f"bm25_{family}", reranker) for reranker in ("bge",))
     return [
         {"retriever": retriever, "reranker": reranker, "query_mode": mode}
         for mode in profile["query_modes"]

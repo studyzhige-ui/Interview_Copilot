@@ -159,7 +159,7 @@ def main():
         ),
     }
     indexes = {}
-    for family in ("bge", "qwen"):
+    for family in ("bge",):
         indexes[family] = {
             p.stem.replace(".meta", ""): json.loads(p.read_text(encoding="utf-8"))
             for p in (ROOT / "vectors" / family).glob("*.meta.json")
@@ -175,7 +175,7 @@ def main():
         "indexing": indexes,
         "results": summary,
         "row_count": sum(len(rows) for rows in run_rows.values()),
-        "configuration_count_per_dataset": 18,
+        "configuration_count_per_dataset": len(comparison_matrix(profile)),
     }
     comparisons = []
     for dataset in profile["datasets"]:
@@ -202,14 +202,12 @@ def main():
         for mode in profile["query_modes"]:
             pairs = [
                 ("bm25", "bge_dense"),
-                ("bm25", "qwen_dense"),
                 ("bge_dense", "bm25_bge"),
-                ("qwen_dense", "bm25_qwen"),
             ]
             pairs.extend(
                 (f"bm25_{retriever}", f"bm25_{retriever}_rerank_{ranker}")
-                for retriever in ("bge", "qwen")
-                for ranker in ("bge", "qwen")
+                for retriever in ("bge",)
+                for ranker in ("bge",)
             )
             for before, after in pairs:
                 first = [
@@ -241,11 +239,9 @@ def main():
                 encoding="utf-8"
             )
         )
-        for family in ("bge", "qwen")
+        for family in ("bge",)
     }
-    out = (
-        Path(__file__).resolve().parents[2] / "docs/reports/mtrag-retrieval-2026-09-26"
-    )
+    out = Path(__file__).resolve().parents[2] / "docs/reports/mtrag-bge-only"
     out.mkdir(parents=True, exist_ok=True)
     atomic_json(out / "results.json", result)
     for name in (

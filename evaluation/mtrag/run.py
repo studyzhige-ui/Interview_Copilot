@@ -353,7 +353,7 @@ def rerank(
     tasks,
     identity,
     family,
-    retrievers=("bge", "qwen"),
+    retrievers=("bge",),
     runtime_name=None,
     run_directory=None,
 ):
@@ -465,7 +465,7 @@ def rerank(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("stage", choices=["lexical", "dense", "rerank"])
-    parser.add_argument("--family", choices=["bge", "qwen"])
+    parser.add_argument("--family", choices=["bge"])
     args = parser.parse_args()
     profile = load_profile()
     tasks = queries(profile)

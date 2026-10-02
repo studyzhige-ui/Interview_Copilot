@@ -39,15 +39,15 @@ class ContractTests(unittest.TestCase):
             {
                 "RAG_MIN_SCORE": "0.99",
                 "RAG_FINAL_COUNT": "3",
-                "INTERNAL_LLM_MODEL": "local-qwen",
+                "INTERNAL_LLM_MODEL": "irrelevant-platform-model",
                 "EMBEDDING_MODEL": "wrong-model",
             },
         ):
             self.assertEqual(load_profile(), self.profile)
             matrix = comparison_matrix(load_profile())
-            self.assertEqual(len(matrix), 18)
+            self.assertEqual(len(matrix), 8)
             self.assertEqual(
-                len({json.dumps(row, sort_keys=True) for row in matrix}), 18
+                len({json.dumps(row, sort_keys=True) for row in matrix}), 8
             )
 
     def test_low_negative_scores_and_distinct_ids_survive(self):

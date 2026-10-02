@@ -6,12 +6,9 @@ import sys
 
 def main():
     steps = [
-        ["evaluation.mtrag.embed_corpus", "--family", "qwen"],
         ["evaluation.mtrag.embed_corpus", "--family", "bge"],
         ["evaluation.mtrag.run", "dense", "--family", "bge"],
-        ["evaluation.mtrag.run", "dense", "--family", "qwen"],
         ["evaluation.mtrag.run", "rerank", "--family", "bge"],
-        ["evaluation.mtrag.run", "rerank", "--family", "qwen"],
         ["evaluation.mtrag.report"],
     ]
     for step in steps:

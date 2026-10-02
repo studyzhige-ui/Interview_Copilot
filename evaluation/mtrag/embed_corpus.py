@@ -14,7 +14,7 @@ from .rewrite import atomic_json
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--family", choices=["bge", "qwen"], required=True)
+    parser.add_argument("--family", choices=["bge"], required=True)
     args = parser.parse_args()
     profile = load_profile()
     encode(profile, args.family)

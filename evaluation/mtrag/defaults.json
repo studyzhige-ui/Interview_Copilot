@@ -1,6 +1,9 @@
 {
-  "profile_version": "mtrag-retrieval-v1",
-  "datasets": ["mtrag-human", "mtragun-human"],
+  "profile_version": "mtrag-bge-retrieval-v2",
+  "datasets": [
+    "mtrag-human",
+    "mtragun-human"
+  ],
   "corpus": {
     "unit": "official_passage",
     "preserve_ids": true,
@@ -43,14 +46,14 @@
       "path": "D:/Models/BAAI/bge-small-zh-v1.5",
       "dimensions": 512
     },
-    "qwen_embedding": {
-      "path": "D:/Models/Qwen/Qwen3-Embedding-0.6B",
-      "dimensions": 1024
-    },
-    "bge_reranker": {"path": "D:/Models/BAAI/bge-reranker-base"},
-    "qwen_reranker": {"path": "D:/Models/Qwen/Qwen3-Reranker-0.6B"}
+    "bge_reranker": {
+      "path": "D:/Models/BAAI/bge-reranker-base"
+    }
   },
-  "query_modes": ["last_turn", "deepseek_rewrite"],
+  "query_modes": [
+    "last_turn",
+    "deepseek_rewrite"
+  ],
   "rewrite": {
     "provider": "deepseek",
     "api_base": "https://api.deepseek.com/v1",
@@ -64,10 +67,21 @@
     "response_format": "json_object"
   },
   "metrics": {
-    "candidate_recall_at": [50],
-    "ndcg_at": [5, 10],
-    "recall_at": [5, 10],
-    "hit_at": [5, 10],
+    "candidate_recall_at": [
+      50
+    ],
+    "ndcg_at": [
+      5,
+      10
+    ],
+    "recall_at": [
+      5,
+      10
+    ],
+    "hit_at": [
+      5,
+      10
+    ],
     "report_per_dataset_and_domain": true,
     "exclude_no_positive_qrels": true
   }
