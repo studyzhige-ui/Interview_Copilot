@@ -1,5 +1,7 @@
 # MTRAG 检索评测统一配置
 
+> 当前运行器（2026-10-02）只支持 BGE；Qwen 模型配置、执行阶段及适配均已删除。下文保留原实验协议和命令作为历史追溯，Qwen 命令已失效。当前默认配置身份为 `mtrag-bge-retrieval-v2`，比较矩阵为 8 个配置。BGE 基线报告写入 `docs/reports/mtrag-bge-only`，M3 报告写入 `docs/reports/mtrag-bge-m3-only`，不覆盖历史结果。
+
 本目录保留历史 BGE/Qwen 对照实验，独立于产品 RAG 主线。主线模型为 BGE；此目录中的 Qwen 路径和实验适配器不表示主线支持或使用 Qwen 检索模型。
 
 本目录独立于旧题库、生产环境 `.env` 的 RAG 设置和旧 release 评测脚本。

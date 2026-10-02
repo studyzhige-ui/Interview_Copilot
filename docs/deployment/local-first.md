@@ -5,6 +5,8 @@ broker are implemented. Real-time audio and all-model scheduling remain open.
 Do not interpret this guide as a tested one-command installation of all future models. No production data is
 migrated and no paid service is invoked by the preflight commands below.
 
+> 当前配置（2026-10-02）：检索仅保留 BGE 主线，Qwen 运行适配已删除。下文 2026-09 的 Qwen 章节仅保留为历史记录，其命令不再适用于当前分支。当前 HNSW、WhisperX 与 TTS 范围见 [BGE/HNSW 集成说明](../implementation/bge-hnsw-cleanup-20261002.md)。
+
 ## Reuse local assets
 
 Merge the values needed from `.env.local-first.example` into your existing `.env`;
