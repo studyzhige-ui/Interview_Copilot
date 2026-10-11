@@ -5,7 +5,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api import workspace
+from app.api import usage, workspace
 from app.api.chat import sessions
 from app.core.security import get_current_user
 from app.db.database import get_db
@@ -13,6 +13,7 @@ from app.models.artifact import Artifact
 from app.models.chat import Conversation
 from app.models.conversation_turn import ConversationTurn
 from app.models.user import User
+from app.models.model_budget import ModelBudgetWindow, UsageAccount
 
 
 @pytest.fixture
@@ -24,6 +25,7 @@ def workspace_api(db_session):
     principal = {"user": owner}
     app = FastAPI()
     app.include_router(workspace.router, prefix="/api/v1")
+    app.include_router(usage.router, prefix="/api/v1")
     app.include_router(sessions.router, prefix="/api/v1")
     app.dependency_overrides[get_current_user] = lambda: principal["user"]
     app.dependency_overrides[get_db] = lambda: db_session
@@ -110,3 +112,31 @@ def test_invalid_creation_identity_is_rejected(workspace_api):
         ).status_code
         == 422
     )
+
+
+def test_existing_usage_address_preserves_wire_contract_and_owner(
+    workspace_api, db_session
+):
+    client, principal, owner, other = workspace_api
+    db_session.add_all([UsageAccount(user_id=owner.id), UsageAccount(user_id=other.id)])
+    db_session.flush()
+    for user, tokens in ((owner, 17), (other, 83)):
+        db_session.add(
+            ModelBudgetWindow(
+                user_id=user.id,
+                window_date=datetime.now(UTC).date(),
+                call_limit=100,
+                token_limit=1000,
+                tokens_used=tokens,
+                cost_used_micros=tokens,
+            )
+        )
+    db_session.commit()
+    for user, tokens in ((owner, 17), (other, 83)):
+        principal["user"] = user
+        old = client.get("/api/v1/workspace/model-usage")
+        current = client.get("/api/v1/usage")
+        assert old.status_code == current.status_code == 200
+        assert old.json()["tokens_used"] == current.json()["tokens_used"] == tokens
+        assert old.json()["rated_cost_used_micros"] == tokens
+        assert current.json()["rated_cost_used_micros"] == str(tokens)
