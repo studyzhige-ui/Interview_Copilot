@@ -1,6 +1,6 @@
 """Build the index-only text used by retrieval models.
 
-Postgres keeps the original chunk as the answer fact. Milvus receives a short,
+Postgres keeps the original chunk as the answer fact. Its retrieval projection receives a short,
 stable structural prefix so dense retrieval, BM25 and the cross-encoder can
 identify otherwise context-free fragments without adding generated text.
 """

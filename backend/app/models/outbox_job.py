@@ -2,8 +2,8 @@
 
 Postgres is the transactional source of truth. Object-storage work and
 background index rebuilds execute after the business transaction commits. Anything that must happen to those external
-systems after a committed business change — delete an object, drop a Milvus
-index, clean up a failed upload, parse/ingest/transcribe — is enqueued here in
+systems after a committed business change — delete an object, rebuild a retrieval
+projection, clean up a failed upload, parse/ingest/transcribe — is enqueued here in
 the SAME transaction as the business write, then drained by a worker.
 
 Jobs are idempotent, retryable with backoff (``attempts`` / ``max_attempts`` /

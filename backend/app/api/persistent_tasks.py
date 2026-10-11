@@ -29,7 +29,7 @@ from app.schemas.persistent_task import (
     PersistentTaskView,
 )
 from app.automation.application import tasks as persistent_task_service
-from app.conversation.application.turn_executor import schedule_turn
+from app.conversation.application.turn_store import schedule_turn
 
 
 router = APIRouter(prefix="/persistent-tasks", tags=["persistent-tasks"])

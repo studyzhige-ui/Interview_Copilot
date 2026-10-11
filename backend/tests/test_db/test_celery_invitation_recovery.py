@@ -1,5 +1,6 @@
 """Real PostgreSQL + Redis + Celery SIGKILL recovery, using offline model output."""
 
+from app.conversation.application import turn_store
 import asyncio
 from datetime import timedelta
 import json
@@ -84,9 +85,9 @@ def test_celery_worker_kill_resumes_same_decision_and_turn(
     queue = "ic-recovery-test-" + uuid4().hex
     sender = Celery("isolated-test-sender", broker=redis_url)
     sender.conf.broker_transport_options = {"global_keyprefix": queue + ":"}
-    monkeypatch.setattr(turn_executor, "SessionLocal", factory)
+    monkeypatch.setattr(turn_store, "SessionLocal", factory)
     monkeypatch.setattr(
-        turn_executor,
+        turn_store,
         "schedule_turn",
         lambda turn_id: sender.send_task(
             "tasks.process_conversation_turn", args=[turn_id], queue=queue
@@ -186,7 +187,7 @@ def test_celery_worker_kill_resumes_same_decision_and_turn(
                 ),
                 resolution_identity="original-user-decision",
             )
-            turn_executor.resume_waiting_turn(db, turn_id=turn_id, user_id=user_id)
+            turn_store.resume_waiting_turn(db, turn_id=turn_id, user_id=user_id)
             db.commit()
 
     boundary = tmp_path / "boundary"

@@ -1,0 +1,203 @@
+{
+  "integrated_base": "c980b228b140c4244365651938160cadf4d5f65f",
+  "round_one_checkpoint": "8d6ef1f0120655252a08091f5e4f8ec0a63f4a51",
+  "original_checkpoint_trees_equal": true,
+  "original_changed_paths": 333,
+  "prior_port_manifest_covers_all_original_changes": true,
+  "prior_manifest_destination_overrides": {
+    "alembic/versions/0047_pgvector_extension.py": "alembic/versions/0069_pgvector_retrieval.py",
+    "alembic/versions/0048_knowledge_index_jobs.py": "alembic/versions/0069_pgvector_retrieval.py",
+    "backend/app/rag/milvus_hybrid.py": null,
+    "backend/app/services/knowledge/index_jobs.py": "backend/app/rag/application/library/index_jobs.py",
+    "backend/tests/test_db/test_knowledge_index_job_migration.py": "backend/tests/test_db/test_pgvector_retrieval_postgres.py",
+    "backend/tests/test_rag/test_milvus_dim_guard.py": null
+  },
+  "all_non_retired_destinations_exist": true,
+  "round_one_delta": [
+    {
+      "source_path": "backend/app/agent_runtime/context_compactor.py",
+      "destination_path": "backend/app/agent_runtime/context_compactor.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/agent_runtime/tools/career_domains.py",
+      "destination_path": "backend/app/agent_runtime/tools/career_domains.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/api/chat/client_actions.py",
+      "destination_path": "backend/app/api/chat/client_actions.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/api/chat/streaming.py",
+      "destination_path": "backend/app/api/chat/streaming.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/api/persistent_tasks.py",
+      "destination_path": "backend/app/api/persistent_tasks.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/conversation/agent_strategy.py",
+      "destination_path": "backend/app/conversation/agent_strategy.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/conversation/agent_turn_state.py",
+      "destination_path": "backend/app/conversation/agent_turn_state.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/conversation/chat_strategy.py",
+      "destination_path": "backend/app/conversation/chat_strategy.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/conversation/tool_batch.py",
+      "destination_path": "backend/app/conversation/tool_batch.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/core/context_messages.py",
+      "destination_path": "backend/app/core/context_messages.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/services/chat/attachment_waiting_service.py",
+      "destination_path": "backend/app/conversation/application/attachment_waiting_service.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/services/chat/turn_executor.py",
+      "destination_path": "backend/app/conversation/application/turn_executor.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/services/chat/turn_store.py",
+      "destination_path": "backend/app/conversation/application/turn_store.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/app/services/persistent_task_service.py",
+      "destination_path": "backend/app/automation/application/tasks.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/conftest.py",
+      "destination_path": "backend/tests/conftest.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_agent_runtime/test_runtime_core.py",
+      "destination_path": "backend/tests/test_agent_runtime/test_runtime_core.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_api/test_chat_api.py",
+      "destination_path": "backend/tests/test_api/test_chat_api.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_api/test_client_actions_api.py",
+      "destination_path": "backend/tests/test_api/test_client_actions_api.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_conversation/test_agent_strategy_stream.py",
+      "destination_path": "backend/tests/test_conversation/test_agent_strategy_stream.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_conversation/test_context_windows.py",
+      "destination_path": "backend/tests/test_conversation/test_context_windows.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_conversation/test_tool_batch.py",
+      "destination_path": "backend/tests/test_conversation/test_tool_batch.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_rag/test_attachment_sources.py",
+      "destination_path": "backend/tests/test_rag/test_attachment_sources.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_release_invariants.py",
+      "destination_path": "backend/tests/test_release_invariants.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_services/chat/test_attachment_waiting_service.py",
+      "destination_path": "backend/tests/test_services/chat/test_attachment_waiting_service.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_services/chat/test_product_object_reference.py",
+      "destination_path": "backend/tests/test_services/chat/test_product_object_reference.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_services/chat/test_turn_executor.py",
+      "destination_path": "backend/tests/test_services/chat/test_turn_executor.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "backend/tests/test_services/test_persistent_task_service.py",
+      "destination_path": "backend/tests/test_services/test_persistent_task_service.py",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "docs/architecture/codebase.md",
+      "destination_path": "docs/architecture/codebase.md",
+      "decision": "ported_or_already_present_in_integrated_owner"
+    },
+    {
+      "source_path": "docs/implementation/runtime-cleanup-round1-20261011.md",
+      "destination_path": "docs/implementation/mainline-convergence-20261011.md",
+      "decision": "replaced_current_guidance_original_report_retained_in_checkpoint"
+    }
+  ],
+  "other_local_refs_already_in_integrated_base": [
+    "refactor/product-runtime-convergence",
+    "origin/main"
+  ],
+  "unchanged_durable_definitions": [
+    "TurnExecution",
+    "AdmissionResult",
+    "SubmissionConflictError",
+    "admit_submission",
+    "update_pending_submission",
+    "retry_pending_submission",
+    "withdraw_pending_submission",
+    "request_turn_interrupt",
+    "_terminalize",
+    "_turn_has_automation_trigger",
+    "_admit_persistent_task_after_user_terminal",
+    "_fail_dispatched_turn_without_handoff",
+    "_dispatch_handoff",
+    "cancel_pending_turn",
+    "fail_pending_turn",
+    "_claim",
+    "_finish",
+    "_finish_automation",
+    "_wait",
+    "resume_waiting_turn",
+    "_heartbeat",
+    "_has_assistant",
+    "_cancellation_requested",
+    "schedule_turn",
+    "_close_expired_turns",
+    "attachment_resume_actions"
+  ],
+  "unchanged_agent_state_definitions": [
+    "_load_agent_task_snapshot",
+    "_current_task_content_with_plan",
+    "_load_tool_resume_snapshot",
+    "_append_replayed_tool",
+    "_load_completed_tool_tail"
+  ],
+  "scope": "AST equality checks behavior preservation of moved definitions only; runtime contracts are validated separately."
+}

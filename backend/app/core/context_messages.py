@@ -45,3 +45,13 @@ def normalize_tool_pairs(messages: list[dict]) -> list[dict]:
                 )
                 seen.add(identity)
     return normalized
+
+
+def runtime_control_message(kind: str, content: str) -> dict:
+    """A loop-control projection that never becomes a new task direction."""
+
+    return {
+        "role": "runtime",
+        "control_type": kind,
+        "content": content,
+    }

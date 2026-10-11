@@ -10,6 +10,7 @@ shared ``db_session`` fixture in ``tests/conftest.py`` references the missing
 
 from __future__ import annotations
 
+from app.conversation.application import turn_store
 import json
 from types import SimpleNamespace
 from typing import Iterator
@@ -156,7 +157,6 @@ def test_new_conversation_inherits_account_execution_mode(
 def test_general_turn_cannot_downgrade_career_runtime_to_chat(
     client: TestClient, db: Session, monkeypatch
 ):
-    from app.conversation.application import turn_executor
     from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
@@ -175,7 +175,7 @@ def test_general_turn_cannot_downgrade_career_runtime_to_chat(
         return None
 
     monkeypatch.setattr(turn_event_buffer, "ping", ping)
-    monkeypatch.setattr(turn_executor, "schedule_turn", lambda _turn_id: None)
+    monkeypatch.setattr(turn_store, "schedule_turn", lambda _turn_id: None)
 
     response = client.post(
         "/api/v1/chat/career_mode/turns",
@@ -194,7 +194,6 @@ def test_general_turn_cannot_downgrade_career_runtime_to_chat(
 
 
 def test_create_turn_is_backgrounded(client: TestClient, db: Session, monkeypatch):
-    from app.conversation.application import turn_executor
     from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
@@ -206,7 +205,7 @@ def test_create_turn_is_backgrounded(client: TestClient, db: Session, monkeypatc
 
     scheduled: list[str] = []
     monkeypatch.setattr(turn_event_buffer, "ping", ping)
-    monkeypatch.setattr(turn_executor, "schedule_turn", scheduled.append)
+    monkeypatch.setattr(turn_store, "schedule_turn", scheduled.append)
     response = client.post(
         "/api/v1/chat/s_turn/turns",
         json={
@@ -238,7 +237,6 @@ def test_create_turn_is_backgrounded(client: TestClient, db: Session, monkeypatc
 
 
 def test_submission_retry_is_idempotent(client: TestClient, db: Session, monkeypatch):
-    from app.conversation.application import turn_executor
     from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
@@ -250,7 +248,7 @@ def test_submission_retry_is_idempotent(client: TestClient, db: Session, monkeyp
 
     scheduled: list[str] = []
     monkeypatch.setattr(turn_event_buffer, "ping", ping)
-    monkeypatch.setattr(turn_executor, "schedule_turn", scheduled.append)
+    monkeypatch.setattr(turn_store, "schedule_turn", scheduled.append)
     payload = {
         "submission_id": "sub-retry",
         "version": 1,
@@ -286,7 +284,6 @@ def test_create_turn_dispatch_failure_is_terminal(
     db: Session,
     monkeypatch,
 ):
-    from app.conversation.application import turn_executor
     from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
@@ -300,7 +297,7 @@ def test_create_turn_dispatch_failure_is_terminal(
         raise ConnectionError("broker offline")
 
     monkeypatch.setattr(turn_event_buffer, "ping", ping)
-    monkeypatch.setattr(turn_executor, "schedule_turn", fail_dispatch)
+    monkeypatch.setattr(turn_store, "schedule_turn", fail_dispatch)
     response = client.post(
         "/api/v1/chat/s_dispatch/turns",
         json={

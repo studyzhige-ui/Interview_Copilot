@@ -30,7 +30,7 @@ def _drain(job_types: Collection[str], *, limit: int) -> dict[str, int]:
     soft_time_limit=840,
 )
 def drain_index_outbox_jobs():
-    """Run Milvus/embedding synchronization without waiting for LLM jobs."""
+    """Run retrieval projection synchronization without waiting for LLM jobs."""
     from app.db.database import SessionLocal
     from app.rag.index.reconciliation import enqueue_stale_documents
     from app.platform.outbox import INDEX_JOB_TYPES

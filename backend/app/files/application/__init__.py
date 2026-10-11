@@ -6,8 +6,8 @@
   file_asset_service — create presigned upload URL + FileAsset row,
                       confirm/consume lifecycle; thin wrapper around
                       app.core.storage
-  outbox_service    — reliable cross-system side effects (object cleanup,
-                      Milvus index maintenance) drained by the worker
+  outbox producers  — reliable object cleanup and retrieval maintenance,
+                      drained by the worker through app.platform.outbox
 
 The shared boto3 wrapper lives at ``app.core.storage`` (not here)
 because it has 8 cross-domain importers — auth uploads avatar images,

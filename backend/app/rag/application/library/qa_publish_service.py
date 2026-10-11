@@ -4,7 +4,7 @@ One ``interview_qa`` -> one ``knowledge_documents(source_kind='improved_qa')``.
 The KB doc's ``content_text`` is only ``question + improved_answer``; the full
 original answer / score / critique / transcript provenance stay on the QA row.
 ``interview_qa.saved_document_id`` is the back-reference. Re-saving refreshes the
-same doc (idempotent reindex: ingest delete-replaces the doc's chunks + Milvus).
+same doc (idempotent reindex replaces the doc's canonical chunks and projection).
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ async def save_qa_to_knowledge(
     document_id = doc.id
     db.commit()  # refresh opened a read transaction; do not keep it over embedding
 
-    # Index the QA as one natural unit (Markdown content_text -> chunks + Milvus).
+    # Index the QA as one natural unit (Markdown -> chunks and retrieval entries).
     from app.rag.ingest.pipeline import ingest_text
 
     try:

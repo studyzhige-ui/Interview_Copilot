@@ -4,6 +4,7 @@ The full strategy tests fake the final model response/catalog discovery only;
 resume selection, policy, tool executor, and canonical domain writes are real.
 """
 
+from app.conversation.application import turn_store
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -13,7 +14,7 @@ from app.agent_runtime import tool_call_executor
 from app.agent_runtime.builtin_tools import registry
 from app.agent_runtime.turn_tool_catalog import TurnToolCatalog
 from app.agent_runtime.tools import interview_invitation as invitation_tool
-from app.conversation import agent_strategy, context_store
+from app.conversation import agent_strategy, agent_turn_state, context_store
 from app.conversation.events import HarnessEvent
 from app.conversation.strategy import StrategyContext, StrategyResult
 from app.db.types import utc_now
@@ -25,7 +26,6 @@ from app.models.interview_record import InterviewRecord
 from app.models.job_opportunity import NextAction, ProcessEvent
 from app.models.model_dispatch import AgentModelDispatch
 from app.schemas.interview_invitation import FactConfirmationResolution
-from app.conversation.application import turn_executor
 from app.conversation.application.interaction_service import resolve_interaction
 from app.conversation.application.invitation_turn_recovery import (
     recover_invitation_turn,
@@ -195,16 +195,16 @@ def test_stale_worker_cannot_heartbeat_wait_finish_or_write_transcript(
     from app.conversation.application.chat_history_service import transcript_service
 
     user, turn, _, _, _ = saved_decision(db_session)
-    patch_session_locals(monkeypatch, db_session, turn_executor, chat_history_service)
-    turn.owner_id = turn_executor._WORKER_ID
+    patch_session_locals(monkeypatch, db_session, turn_store, chat_history_service)
+    turn.owner_id = turn_store._WORKER_ID
     db_session.commit()
     assert recover(db_session, turn) == "pending"
     turn.status = "running"
-    turn.owner_id = turn_executor._WORKER_ID  # even same prefork owner must be fenced
+    turn.owner_id = turn_store._WORKER_ID  # even same prefork owner must be fenced
     db_session.commit()
-    assert not turn_executor._heartbeat(turn.id, 2)
-    assert not turn_executor._wait(turn.id, expected_generation=2)
-    assert not turn_executor._finish(turn.id, "completed", expected_generation=2)
+    assert not turn_store._heartbeat(turn.id, 2)
+    assert not turn_store._wait(turn.id, expected_generation=2)
+    assert not turn_store._finish(turn.id, "completed", expected_generation=2)
     with pytest.raises(ValueError, match="stale_turn_transcript_generation"):
         transcript_service.complete_background_turn(
             turn_id=turn.id,
@@ -212,14 +212,14 @@ def test_stale_worker_cannot_heartbeat_wait_finish_or_write_transcript(
             expected_generation=2,
         )
     assert turn.status == "running" and turn.assistant_message_seq is None
-    assert turn_executor._heartbeat(turn.id, 3)
+    assert turn_store._heartbeat(turn.id, 3)
 
 
 async def execute_real_resume(db, monkeypatch, user, turn):
     patch_session_locals(
         monkeypatch,
         db,
-        agent_strategy,
+        agent_turn_state,
         invitation_tool,
         tool_call_executor,
         context_store,

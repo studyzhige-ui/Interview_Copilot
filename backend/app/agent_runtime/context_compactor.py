@@ -188,16 +188,5 @@ class ActiveTurnContextReducer:
             self._usage_prompt_tokens = int(prompt_tokens)
             self._usage_request_estimate = request_tokens(messages, self.tool_schemas)
 
-    def mark_consumed(self, messages):
-        # Retained as loop observation hook; output admission no longer depends
-        # on a per-tool read-once whitelist.
-        pass
-
     def reset_circuit_breaker(self):
         self.has_attempted_reactive_compact = False
-
-    @staticmethod
-    def _sanitize_tool_pairs(messages):
-        from app.core.context_messages import normalize_tool_pairs
-
-        return normalize_tool_pairs(messages)

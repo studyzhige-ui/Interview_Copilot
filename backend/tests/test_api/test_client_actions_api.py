@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.conversation.application import turn_store
 import uuid
 from collections.abc import Iterator
 
@@ -128,7 +129,6 @@ def test_delivery_takeover_resolution_and_replay_keep_one_turn_call(
     monkeypatch,
 ):
     _user, conversation, turn, interaction, action = _seed(db)
-    from app.conversation.application import turn_executor
     from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     scheduled: list[str] = []
@@ -137,7 +137,7 @@ def test_delivery_takeover_resolution_and_replay_keep_one_turn_call(
         return None
 
     monkeypatch.setattr(turn_event_buffer, "reset", reset)
-    monkeypatch.setattr(turn_executor, "schedule_turn", scheduled.append)
+    monkeypatch.setattr(turn_store, "schedule_turn", scheduled.append)
 
     base = f"/api/v1/chat/{conversation.id}/turns/{turn.id}"
     delivered = client.get(

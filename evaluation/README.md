@@ -1,9 +1,10 @@
 # RAG evaluation
 
 This directory validates the production path: parsing, cleaning, chunking,
-embedding, PostgreSQL/pgvector exact dense + scoped BM25 retrieval, RRF, CrossEncoder reranking, evidence
+embedding, PostgreSQL/pgvector dense + scoped BM25 retrieval, RRF, BGE reranking, evidence
 gating, streaming generation, and citations. Gold annotations are never added
-to retrieval requests.
+to retrieval requests. Dense search defaults to exact; provisioned HNSW uses
+the same retrieval service and canonical projection, not a second pipeline.
 
 ## Scope
 

@@ -55,7 +55,7 @@ from app.core.request_id import (  # noqa: E402
 from app.core.http_log_redaction import (  # noqa: E402
     install_sensitive_query_access_log_filter,
 )
-from app.conversation.application.turn_executor import attachment_resume_actions
+from app.conversation.application.turn_store import attachment_resume_actions
 
 # ``logging.basicConfig`` writes a default Formatter; replace the
 # handler's formatter with our request-id-aware variant so every log
@@ -69,7 +69,7 @@ logging.basicConfig(
     force=True,
 )
 # Quiet noisy third-party loggers
-for _quiet in ("httpx", "httpcore", "urllib3", "openai", "milvus"):
+for _quiet in ("httpx", "httpcore", "urllib3", "openai"):
     logging.getLogger(_quiet).setLevel(logging.WARNING)
 install_sensitive_query_access_log_filter()
 

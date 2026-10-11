@@ -6,9 +6,9 @@ persistence, and post-turn maintenance live in
 this strategy only owns the single LLM call that produces the answer
 (streaming) plus the prompt-rendering choice between direct and RAG modes.
 
-No tools, no while loop, no compaction — that's the agent strategy's
-territory. The chat strategy's whole job is "render the right prompt
-and stream one LLM call."
+The shared context manager prepares and, when needed, compacts history.
+This strategy renders the answer request and streams one LLM call, without
+an autonomous tool loop.
 """
 
 from __future__ import annotations

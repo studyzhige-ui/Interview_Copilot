@@ -97,7 +97,7 @@ def _resume_candidate(
 def wake_attachment_turn_if_terminal(turn_id: str, *, actions: ResumeActions) -> bool:
     """Close the ingestion-before-wait race for one newly waiting Turn.
 
-    ``turn_executor._wait`` calls this *after* committing the
+    ``turn_store._wait`` calls this *after* committing the
     ``attachment_parsing`` reason. If ingestion notified just before that
     commit, this second check observes the already-terminal projection; if the
     ingestion callback wins instead, the same CAS makes this call a no-op.

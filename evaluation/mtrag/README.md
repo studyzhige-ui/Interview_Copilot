@@ -1,8 +1,8 @@
 # MTRAG 检索评测统一配置
 
-> 当前运行器（2026-10-02）只支持 BGE；Qwen 模型配置、执行阶段及适配均已删除。下文保留原实验协议和命令作为历史追溯，Qwen 命令已失效。当前默认配置身份为 `mtrag-bge-retrieval-v2`，比较矩阵为 8 个配置。BGE 基线报告写入 `docs/reports/mtrag-bge-only`，M3 报告写入 `docs/reports/mtrag-bge-m3-only`，不覆盖历史结果。
+> 当前运行器（2026-10-02）只支持 BGE；Qwen 模型配置、执行阶段及适配均已删除。下文命令对应当前 BGE 运行器；原实验协议可从 Git 历史和已有报告追溯。当前默认配置身份为 `mtrag-bge-retrieval-v2`，比较矩阵为 8 个配置。BGE 基线报告写入 `docs/reports/mtrag-bge-only`，M3 报告写入 `docs/reports/mtrag-bge-m3-only`，不覆盖历史结果。
 
-本目录保留历史 BGE/Qwen 对照实验，独立于产品 RAG 主线。主线模型为 BGE；此目录中的 Qwen 路径和实验适配器不表示主线支持或使用 Qwen 检索模型。
+本目录保留官方片段排名的离线对照评测，当前只执行 BGE。它不是产品可切换的 RAG 实现：为保持官方 qrel ID，评测不重新分块，也不应用产品证据门。产品链路验收使用上级目录的 `rag_release` 和 `compare_local_models`，共用 `rag_service`。历史 Qwen 分数仅保留为报告，不存在可执行适配。
 
 本目录独立于旧题库、生产环境 `.env` 的 RAG 设置和旧 release 评测脚本。
 `defaults.json` 是本次实验唯一默认配置；只从环境或项目 `.env` 读取
@@ -16,7 +16,7 @@
 - 向量归一化，精确余弦检索；RRF k=60，两通道等权。
 - BM25 k1=1.2、b=0.75；同一语言分析器必须用于全部配置并记录版本。
 - Embedding 输入上限 512 tokens；重排总输入上限 512，查询最多 96。
-  特殊 token、Qwen 指令和模板均计入总预算。各 tokenizer 截断率分别报告；
+  特殊 token、模型指令和模板均计入总预算。各 tokenizer 截断率分别报告；
   相同 token 上限不意味着相同可见文字量。本轮是统一预算对比。
 - CUDA、batch=8、串行请求；阶段超时 120 秒。失败显式记录，不能按空召回计分。
 - 官方片段原文和 ID 保持不变；按题目所属领域搜索完整语料，不只索引正例。
@@ -24,8 +24,8 @@
 
 ## 模型与 LLM
 
-本地保留 BGE/Qwen 的两个 Embedding 和两个 Reranker，路径及真实维度见 JSON。
-不调用本地 Qwen 生成模型。查询改写统一用官方 DeepSeek API 的 `deepseek-flash`，
+当前基线模型路径及真实维度见 JSON；项目 BGE-M3 补测见文末。
+查询改写使用配置中固定的官方 DeepSeek API 模型，
 temperature=0、thinking=disabled、max_tokens=512、自动重试=0。
 模型名以 https://api-docs.deepseek.com/api/create-chat-completion/ 为依据。
 云端别名可能变化，缓存记录请求模型、响应模型及服务端 fingerprint（如提供）。
@@ -69,7 +69,7 @@ python -m unittest evaluation.mtrag.test_contract -v
 - 改写缓存命中时，`latency_ms` 为最初 API 调用耗时；不能当作本轮缓存读取耗时，
   在线改写延迟和缓存后检索延迟必须分开报告。
 
-`profile` 校验本地文件并输出 18 个配置；`rewrite` 已实现 DeepSeek 调用和缓存；
+`profile` 校验本地文件并输出 8 个配置；`rewrite` 已实现 DeepSeek 调用和缓存；
 `select_ranked_passages` 提供无分数门槛的 Top-k 选择。
 完整检索入口已经实现，评测进度和原始结果写入 `data/evaluation/mtrag/`。
 runner 显式读取本配置，不导入应用默认参数，记录配置/语料/模型指纹，
@@ -88,12 +88,9 @@ python -m evaluation.mtrag.prepare
 python -m evaluation.mtrag.rewrite --input data/evaluation/mtrag/queries.jsonl --output data/evaluation/mtrag/rewritten.jsonl --populate-cache
 & D:/WorkSoftware/anaconda3/envs/Interview_Copilot/python.exe -m evaluation.mtrag.freeze_runtime
 & D:/WorkSoftware/anaconda3/envs/Interview_Copilot/python.exe -m evaluation.mtrag.run lexical
-& D:/WorkSoftware/anaconda3/envs/Interview_Copilot/python.exe -m evaluation.mtrag.embed_corpus --family qwen
 & D:/WorkSoftware/anaconda3/envs/Interview_Copilot/python.exe -m evaluation.mtrag.embed_corpus --family bge
 & D:/WorkSoftware/anaconda3/envs/Interview_Copilot/python.exe -m evaluation.mtrag.run dense --family bge
-& D:/WorkSoftware/anaconda3/envs/Interview_Copilot/python.exe -m evaluation.mtrag.run dense --family qwen
 & D:/WorkSoftware/anaconda3/envs/Interview_Copilot/python.exe -m evaluation.mtrag.run rerank --family bge
-& D:/WorkSoftware/anaconda3/envs/Interview_Copilot/python.exe -m evaluation.mtrag.run rerank --family qwen
 & D:/WorkSoftware/anaconda3/envs/Interview_Copilot/python.exe -m evaluation.mtrag.report
 ```
 
@@ -109,9 +106,9 @@ python -m evaluation.mtrag.rewrite --input data/evaluation/mtrag/queries.jsonl -
 补测使用与原测试相同的 GPU Python 环境。
 
 `python -m evaluation.mtrag.m3_campaign all` 顺序完成 M3 全量建库、
-纯向量/混合检索、M3 与 Qwen 交叉重排、覆盖校验和报告。
-原 BM25/Qwen 结果和 DeepSeek 改写缓存复用；不调用付费 API。
+纯向量/混合检索、M3 重排、覆盖校验和报告。
+复用当前指纹匹配的 BM25 结果和已有 DeepSeek 改写缓存；该阶段不调用付费 API。
 中断后使用同一命令续跑。日志：`data/evaluation/mtrag/m3-campaign.log`。
-完成报告：`docs/reports/mtrag-retrieval-m3/README.md`。
+完成报告：`docs/reports/mtrag-bge-m3-only/README.md`。
 旧 `bge-small-zh-v1.5` / `bge-reranker-base` 结果保留为历史对照，
 不得将其标注成项目 M3 模型的结果。M3 本轮仅测 dense，统一512-token预算。

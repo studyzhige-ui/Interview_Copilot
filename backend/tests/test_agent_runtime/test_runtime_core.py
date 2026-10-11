@@ -85,7 +85,7 @@ def test_budget_tracks_repeated_call_signatures():
 def test_repeat_call_nudge_is_firmer_at_six():
     """The repeated-call nudge is a soft steer at 3 and firmer (still not a hard
     stop) at 6."""
-    from app.conversation.agent_strategy import _repeat_call_nudge
+    from app.conversation.tool_batch import _repeat_call_nudge
 
     soft = _repeat_call_nudge("web_search", 3)
     firm = _repeat_call_nudge("web_search", 6)

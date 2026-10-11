@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.conversation.application import turn_store
 import json
 
 import pytest
@@ -176,7 +177,7 @@ def test_admission_freezes_identity_in_turn_and_history_and_is_idempotent(db_ses
         {"kind": "artifact", "object_id": rows["artifact"]},
     ]
 
-    admitted = turn_executor.admit_submission(
+    admitted = turn_store.admit_submission(
         db_session,
         conversation,
         submission_id="object-admission-input",
@@ -187,7 +188,7 @@ def test_admission_freezes_identity_in_turn_and_history_and_is_idempotent(db_ses
         object_references=references,
     )
     assert admitted.status == "admitted"
-    replay = turn_executor.admit_submission(
+    replay = turn_store.admit_submission(
         db_session,
         conversation,
         submission_id="object-admission-input",
@@ -217,8 +218,8 @@ def test_admission_freezes_identity_in_turn_and_history_and_is_idempotent(db_ses
     ]
     assert object_blocks[0]["label"] == "Example · Backend Engineer"
 
-    with pytest.raises(turn_executor.SubmissionConflictError):
-        turn_executor.admit_submission(
+    with pytest.raises(turn_store.SubmissionConflictError):
+        turn_store.admit_submission(
             db_session,
             conversation,
             submission_id="object-admission-input",
@@ -245,7 +246,7 @@ def test_cross_tenant_claim_is_retained_failed_without_turn_or_history(db_sessio
     db_session.add(conversation)
     db_session.commit()
 
-    result = turn_executor.admit_submission(
+    result = turn_store.admit_submission(
         db_session,
         conversation,
         submission_id="cross-tenant-reference",
@@ -289,7 +290,7 @@ def test_queued_edit_and_retry_preserve_the_versioned_reference_snapshot(db_sess
     db_session.add_all([conversation, active])
     db_session.commit()
 
-    queued = turn_executor.admit_submission(
+    queued = turn_store.admit_submission(
         db_session,
         conversation,
         submission_id="object-queued-input",
@@ -302,7 +303,7 @@ def test_queued_edit_and_retry_preserve_the_versioned_reference_snapshot(db_sess
     assert queued.status == "queued"
     assert db_session.query(ConversationMessage).count() == 0
 
-    edited = turn_executor.update_pending_submission(
+    edited = turn_store.update_pending_submission(
         db_session,
         conversation.id,
         user.id,
@@ -326,7 +327,7 @@ def test_queued_edit_and_retry_preserve_the_versioned_reference_snapshot(db_sess
     edited.status = "failed"
     edited.error = "retry"
     db_session.commit()
-    retried = turn_executor.retry_pending_submission(
+    retried = turn_store.retry_pending_submission(
         db_session,
         conversation.id,
         user.id,
@@ -358,11 +359,11 @@ def test_queued_reference_deleted_before_claim_becomes_failed_hold(db_session):
         mode="agent",
         message="current",
         status="running",
-        owner_id=turn_executor._WORKER_ID,
+        owner_id=turn_store._WORKER_ID,
     )
     db_session.add_all([conversation, active])
     db_session.commit()
-    queued = turn_executor.admit_submission(
+    queued = turn_store.admit_submission(
         db_session,
         conversation,
         submission_id="object-stale-queued-input",
@@ -383,13 +384,13 @@ def test_queued_reference_deleted_before_claim_becomes_failed_hold(db_session):
     ).delete()
     db_session.commit()
 
-    changed, next_turn_id = turn_executor._terminalize(
+    changed, next_turn_id = turn_store._terminalize(
         db_session,
         active.id,
         allowed_statuses={"running"},
         status="completed",
         error=None,
-        owner_id=turn_executor._WORKER_ID,
+        owner_id=turn_store._WORKER_ID,
     )
     assert changed is True
     assert next_turn_id is None
@@ -468,7 +469,7 @@ def test_object_projection_is_low_authority_and_adjacent_to_current_query():
 
 @pytest.mark.asyncio
 async def test_execution_persists_unavailable_reference_failure(monkeypatch):
-    turn = turn_executor.TurnExecution(
+    turn = turn_store.TurnExecution(
         id="object-unavailable-turn",
         conversation_id="object-unavailable-session",
         username="alice",
@@ -477,10 +478,8 @@ async def test_execution_persists_unavailable_reference_failure(monkeypatch):
         message="分析它",
         object_references=({"kind": "artifact", "object_id": "art_deleted"},),
     )
-    monkeypatch.setattr(turn_executor, "_claim", lambda _turn_id: turn)
-    monkeypatch.setattr(
-        turn_executor, "_cancellation_requested", lambda _turn_id: False
-    )
+    monkeypatch.setattr(turn_store, "_claim", lambda _turn_id: turn)
+    monkeypatch.setattr(turn_store, "_cancellation_requested", lambda _turn_id: False)
     monkeypatch.setattr(
         turn_executor,
         "build_product_object_context",
@@ -498,7 +497,7 @@ async def test_execution_persists_unavailable_reference_failure(monkeypatch):
     )
     finished: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
-        turn_executor,
+        turn_store,
         "_finish",
         lambda _turn_id, status, error=None, **_fence: (
             finished.append((status, error)) or True

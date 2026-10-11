@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.conversation.application import turn_store
 from sqlalchemy.orm import sessionmaker
 
 from app.db.types import utc_now
@@ -12,7 +13,6 @@ from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 from app.conversation.application import attachment_waiting_service
-from app.conversation.application import turn_executor
 from app.conversation.application.attachment_waiting_service import (
     ATTACHMENT_PARSING_WAIT_REASON,
 )
@@ -103,10 +103,9 @@ def _patch_runtime(db_session, monkeypatch, scheduled, reset) -> None:
         "_reset_events",
         lambda turn_id: reset.append(turn_id),
     )
-    import app.conversation.application.turn_executor as turn_executor
 
     monkeypatch.setattr(
-        turn_executor,
+        turn_store,
         "schedule_turn",
         lambda turn_id: scheduled.append(turn_id),
     )
@@ -120,7 +119,7 @@ def test_last_terminal_projection_resumes_same_turn_once(db_session, monkeypatch
 
     assert (
         wake_attachment_turns_for_projection(
-            "kdoc-attachment-wait-0", actions=turn_executor.attachment_resume_actions()
+            "kdoc-attachment-wait-0", actions=turn_store.attachment_resume_actions()
         )
         == []
     )
@@ -132,7 +131,7 @@ def test_last_terminal_projection_resumes_same_turn_once(db_session, monkeypatch
     second.status = "ready"
     db_session.commit()
     assert wake_attachment_turns_for_projection(
-        second.id, actions=turn_executor.attachment_resume_actions()
+        second.id, actions=turn_store.attachment_resume_actions()
     ) == [turn_id]
 
     db_session.refresh(waiting)
@@ -144,7 +143,7 @@ def test_last_terminal_projection_resumes_same_turn_once(db_session, monkeypatch
 
     assert (
         wake_attachment_turns_for_projection(
-            second.id, actions=turn_executor.attachment_resume_actions()
+            second.id, actions=turn_store.attachment_resume_actions()
         )
         == []
     )
@@ -161,7 +160,7 @@ def test_failed_projection_stays_on_same_turn_until_retry_is_ready(
 
     assert (
         wake_attachment_turns_for_projection(
-            "kdoc-attachment-wait-1", actions=turn_executor.attachment_resume_actions()
+            "kdoc-attachment-wait-1", actions=turn_store.attachment_resume_actions()
         )
         == []
     )
@@ -185,7 +184,7 @@ def test_failed_projection_stays_on_same_turn_until_retry_is_ready(
     failed_document.status = "ready"
     db_session.commit()
     assert wake_attachment_turns_for_projection(
-        failed_document.id, actions=turn_executor.attachment_resume_actions()
+        failed_document.id, actions=turn_store.attachment_resume_actions()
     ) == [turn_id]
     assert scheduled == [turn_id]
 
@@ -206,7 +205,7 @@ def test_explicit_failed_source_removal_resumes_when_remaining_sources_are_ready
 
     assert (
         wake_attachment_turn_if_terminal(
-            turn_id, actions=turn_executor.attachment_resume_actions()
+            turn_id, actions=turn_store.attachment_resume_actions()
         )
         is True
     )
@@ -221,16 +220,15 @@ def test_dispatch_failure_terminalizes_resumed_turn(db_session, monkeypatch):
     scheduled: list[str] = []
     reset: list[str] = []
     _patch_runtime(db_session, monkeypatch, scheduled, reset)
-    import app.conversation.application.turn_executor as turn_executor
 
     def _dispatch_failure(_turn_id: str) -> None:
         raise ConnectionError("queue unavailable")
 
-    monkeypatch.setattr(turn_executor, "schedule_turn", _dispatch_failure)
+    monkeypatch.setattr(turn_store, "schedule_turn", _dispatch_failure)
 
     assert (
         wake_attachment_turns_for_projection(
-            "kdoc-attachment-wait-1", actions=turn_executor.attachment_resume_actions()
+            "kdoc-attachment-wait-1", actions=turn_store.attachment_resume_actions()
         )
         == []
     )
@@ -248,13 +246,13 @@ def test_post_wait_recheck_closes_ingestion_before_wait_race(db_session, monkeyp
 
     assert (
         wake_attachment_turn_if_terminal(
-            turn_id, actions=turn_executor.attachment_resume_actions()
+            turn_id, actions=turn_store.attachment_resume_actions()
         )
         is True
     )
     assert (
         wake_attachment_turn_if_terminal(
-            turn_id, actions=turn_executor.attachment_resume_actions()
+            turn_id, actions=turn_store.attachment_resume_actions()
         )
         is False
     )
@@ -268,11 +266,11 @@ def test_repair_scan_retries_durable_missed_wakeup(db_session, monkeypatch):
     _patch_runtime(db_session, monkeypatch, scheduled, reset)
 
     assert recover_terminal_attachment_turns(
-        limit=10, actions=turn_executor.attachment_resume_actions()
+        limit=10, actions=turn_store.attachment_resume_actions()
     ) == [turn_id]
     assert (
         recover_terminal_attachment_turns(
-            limit=10, actions=turn_executor.attachment_resume_actions()
+            limit=10, actions=turn_store.attachment_resume_actions()
         )
         == []
     )

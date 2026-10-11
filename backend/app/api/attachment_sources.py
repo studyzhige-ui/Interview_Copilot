@@ -65,7 +65,7 @@ from app.career.application.resumes import resume_artifact_service
 from app.career.application.resumes.resume_dispatch_service import (
     dispatch_parse_after_commit,
 )
-from app.conversation.application.turn_executor import attachment_resume_actions
+from app.conversation.application.turn_store import attachment_resume_actions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["attachment-sources"])

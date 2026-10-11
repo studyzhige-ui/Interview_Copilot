@@ -1,9 +1,9 @@
 """Knowledge document lifecycle services.
 
-  knowledge_service        — CRUD for KnowledgeDocument rows; deletes Milvus
-                             vectors + document_chunks on hard delete
+  knowledge_service        — CRUD for KnowledgeDocument rows; deletes canonical
+                             retrieval entries and chunks on hard delete
   document_formats         — upload format whitelist + validation
-  index_jobs               — durable Milvus index job producers
+  index_jobs               — durable retrieval projection job producers
   qa_publish_service       — publish interview QAs as knowledge documents
 
 Chunk-level modules (``document_chunk_service`` fact table read/write and

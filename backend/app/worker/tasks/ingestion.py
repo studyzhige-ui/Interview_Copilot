@@ -5,7 +5,7 @@ import logging
 from app.db.database import SessionLocal
 from app.models.knowledge import KnowledgeDocument
 from app.task_queue.celery_app import celery_app
-from app.conversation.application.turn_executor import attachment_resume_actions
+from app.conversation.application.turn_store import attachment_resume_actions
 
 from app.rag.application.ingestion_job import (
     TRANSIENT_INGEST_ERRORS,

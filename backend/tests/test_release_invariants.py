@@ -1,5 +1,6 @@
 """Release regressions converted from the original audit failure cases."""
 
+from app.conversation.application import turn_store
 import asyncio
 from types import SimpleNamespace
 import pytest
@@ -44,7 +45,6 @@ def test_running_cancel_survives_transport_loss(db_session, monkeypatch):
     from app.models.user import User
     from app.models.chat import Conversation
     from app.models.conversation_turn import ConversationTurn
-    from app.conversation.application import turn_executor
 
     user = User(username="cancel-owner", hashed_password="x")
     db_session.add(user)
@@ -66,7 +66,7 @@ def test_running_cancel_survives_transport_loss(db_session, monkeypatch):
     )
     db_session.add_all([conversation, turn])
     db_session.commit()
-    assert not turn_executor.cancel_pending_turn(db_session, turn.id, user.id)
+    assert not turn_store.cancel_pending_turn(db_session, turn.id, user.id)
     db_session.expire_all()
     assert db_session.get(ConversationTurn, turn.id).cancel_requested is True
     assert db_session.get(ConversationTurn, turn.id).status == "running"
@@ -84,7 +84,7 @@ async def test_turn_commits_before_done_and_survives_event_loss(
 
     order = []
     attempts = []
-    turn = executor.TurnExecution(
+    turn = turn_store.TurnExecution(
         id="durable",
         mode="chat",
         conversation_id="session",
@@ -92,11 +92,11 @@ async def test_turn_commits_before_done_and_survives_event_loss(
         username="user",
         user_pk=1,
     )
-    monkeypatch.setattr(executor, "_claim", lambda _: turn)
-    monkeypatch.setattr(executor, "_cancellation_requested", lambda _: False)
-    monkeypatch.setattr(executor, "_has_assistant", lambda _: True)
+    monkeypatch.setattr(turn_store, "_claim", lambda _: turn)
+    monkeypatch.setattr(turn_store, "_cancellation_requested", lambda _: False)
+    monkeypatch.setattr(turn_store, "_has_assistant", lambda _: True)
     monkeypatch.setattr(
-        executor, "_finish", lambda *args, **kwargs: order.append("committed")
+        turn_store, "_finish", lambda *args, **kwargs: order.append("committed")
     )
 
     class Engine:
@@ -137,7 +137,7 @@ async def test_lost_cancellation_control_stops_the_paid_execution(monkeypatch):
     started = asyncio.Event()
     stopped = []
     settled = []
-    turn = executor.TurnExecution(
+    turn = turn_store.TurnExecution(
         id="control-loss",
         mode="chat",
         conversation_id="session",
@@ -145,7 +145,7 @@ async def test_lost_cancellation_control_stops_the_paid_execution(monkeypatch):
         username="user",
         user_pk=1,
     )
-    monkeypatch.setattr(executor, "_claim", lambda _: turn)
+    monkeypatch.setattr(turn_store, "_claim", lambda _: turn)
 
     def unavailable(_):
         raise ConnectionError("database unavailable")
@@ -155,10 +155,10 @@ async def test_lost_cancellation_control_stops_the_paid_execution(monkeypatch):
             await started.wait()
         return fn(*args, **kwargs)
 
-    monkeypatch.setattr(executor, "_cancellation_requested", unavailable)
+    monkeypatch.setattr(turn_store, "_cancellation_requested", unavailable)
     monkeypatch.setattr(executor.asyncio, "to_thread", read_control)
     monkeypatch.setattr(
-        executor, "_finish", lambda *args, **kwargs: settled.append(args)
+        turn_store, "_finish", lambda *args, **kwargs: settled.append(args)
     )
 
     class Engine:
@@ -317,10 +317,10 @@ async def test_queue_wait_does_not_expire_running_lease(monkeypatch):
         )
         db.add_all([conv, turn])
         db.commit()
-    monkeypatch.setattr(executor, "SessionLocal", sessions)
+    monkeypatch.setattr(turn_store, "SessionLocal", sessions)
     monkeypatch.setattr(executor.settings, "TURN_STALE_SECONDS", 60)
     monkeypatch.setattr(
-        executor, "_admit_persistent_task_after_user_terminal", lambda *a, **k: None
+        turn_store, "_admit_persistent_task_after_user_terminal", lambda *a, **k: None
     )
     monkeypatch.setattr(
         executor.transcript_service, "complete_background_turn", lambda **k: 2
@@ -387,3 +387,71 @@ def test_expired_outbox_owner_cannot_overwrite_new_owner_success(monkeypatch):
             assert db.get(OutboxJob, "audit-job").status == "succeeded"
     finally:
         engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_user_cancellation_stops_engine_and_commits_before_done(monkeypatch):
+    import json
+
+    import app.conversation.engine as conversation
+    from app.conversation.application import turn_executor
+
+    started = asyncio.Event()
+    order = []
+    turn = turn_store.TurnExecution(
+        id="cancel-running",
+        user_pk=1,
+        mode="agent",
+        conversation_id="session",
+        message="work",
+        username="user",
+    )
+    monkeypatch.setattr(turn_store, "_claim", lambda _: turn)
+
+    def cancelled(_):
+        return True
+
+    async def read_control(fn, *args, **kwargs):
+        if fn is cancelled:
+            # Force the read to race with an active engine, not setup timing.
+            await started.wait()
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(turn_store, "_cancellation_requested", cancelled)
+    monkeypatch.setattr(turn_executor.asyncio, "to_thread", read_control)
+    monkeypatch.setattr(
+        turn_store, "_finish", lambda _, status, error, **_fence: order.append(status)
+    )
+
+    class Engine:
+        outcome = "completed"
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def submit_message(self):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+                yield
+            finally:
+                order.append("engine_stopped")
+
+        async def persist_background_failure(self, _):
+            raise AssertionError("user cancellation is not an execution failure")
+
+    async def append(_, raw):
+        event = json.loads(raw)
+        if event["type"] == "done":
+            order.append("done:" + event["data"]["outcome"])
+
+    monkeypatch.setattr(conversation, "ConversationEngine", Engine)
+    monkeypatch.setattr(turn_executor.turn_event_buffer, "append", append)
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(turn_executor.execute_turn(turn.id), timeout=2)
+    assert order == ["engine_stopped", "cancelled", "done:cancelled"]
+    assert not any(
+        task.get_name().startswith(("chat-turn-cancel:", "chat-turn-heartbeat:"))
+        for task in asyncio.all_tasks()
+        if not task.done()
+    )

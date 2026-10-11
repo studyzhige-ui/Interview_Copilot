@@ -141,7 +141,7 @@ def main():
         "- 不将Human与UN简单当成互不重叠的独立样本合并宣传；不挑选最接近6%的划分。",
         "- 内部验证集被多次查看，全量也被用于优化；不能宣称独立盲测、线上A/B或统计显著。",
         "",
-        "源码入口：backend/app/rag/pgvector_hybrid.py、backend/app/rag/retrieval/reranking.py；复算脚本evaluation/mtrag/top1_audit.py。",
+        "当前生产源码入口：backend/app/rag/hybrid_index.py、backend/app/rag/retrieval/reranking.py；离线历史指标复算脚本evaluation/mtrag/top1_audit.py。这些指标不代表当前规范检索投影的实测效果。",
         "",
     ]
     (OUT / "README.md").write_text("\n".join(lines), encoding="utf-8")

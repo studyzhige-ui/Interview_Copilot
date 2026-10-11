@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.conversation.application import turn_store
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -19,7 +20,7 @@ from app.schemas.persistent_task import (
     PersistentTaskTriggerInput,
     PersistentTaskUpdate,
 )
-from app.conversation.application import turn_executor
+from app.conversation.application import turn_admission
 from app.automation.application.tasks import PersistentTaskDeleteConflictError
 from app.automation.application.tasks import PersistentTaskIdempotencyConflictError
 from app.automation.application.tasks import PersistentTaskNotFoundError
@@ -450,7 +451,7 @@ def test_user_pending_submission_wins_without_entering_trigger_intake(db_session
     assert db_session.query(PersistentTaskTrigger).count() == 1
     assert db_session.query(ConversationTurn).count() == 0
 
-    user_turn = turn_executor._create_turn_from_submission_locked(
+    user_turn = turn_admission._create_turn_from_submission_locked(
         db_session,
         conversation,
         submission,
@@ -529,7 +530,7 @@ def test_automation_terminal_handoff_reuses_user_fifo_before_compensation(db_ses
     user_turn.status = "running"
     user_turn.owner_id = "user-turn-worker"
     db_session.flush()
-    changed, compensation_turn_id = turn_executor._terminalize(
+    changed, compensation_turn_id = turn_store._terminalize(
         db_session,
         user_turn.id,
         allowed_statuses={"running"},

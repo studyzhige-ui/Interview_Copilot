@@ -308,7 +308,7 @@ def test_cache_prefix_and_intent_survive_dynamic_context_change():
 
 
 def test_crash_replay_includes_completed_tools_only(checkpoint_db, monkeypatch):
-    from app.conversation import agent_strategy
+    from app.conversation import agent_turn_state
     from app.models.chat import Conversation
     from app.models.conversation_turn import ConversationTurn
     from app.models.agent_execution import AgentToolCall
@@ -344,13 +344,13 @@ def test_crash_replay_includes_completed_tools_only(checkpoint_db, monkeypatch):
         )
     checkpoint_db.commit()
     monkeypatch.setattr(
-        agent_strategy, "SessionLocal", lambda: NoCloseSession(checkpoint_db)
+        agent_turn_state, "SessionLocal", lambda: NoCloseSession(checkpoint_db)
     )
     assert [
         c["call_id"]
-        for c in agent_strategy._load_completed_tool_tail("crashed", user_pk)
+        for c in agent_turn_state._load_completed_tool_tail("crashed", user_pk)
     ] == ["done"]
-    assert agent_strategy._load_completed_tool_tail("crashed", user_pk + 1) == []
+    assert agent_turn_state._load_completed_tool_tail("crashed", user_pk + 1) == []
 
 
 def test_manual_context_endpoints_enforce_owner_and_idle(checkpoint_db):

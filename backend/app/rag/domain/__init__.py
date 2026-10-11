@@ -1,7 +1,7 @@
 """Stable domain contracts for the complete RAG lifecycle.
 
 The package is deliberately dependency-light.  Infrastructure adapters
-(Milvus, SQLAlchemy, model clients) consume these contracts but never define
+(pgvector, SQLAlchemy, model clients) consume these contracts but never define
 their own competing result shapes.
 """
 

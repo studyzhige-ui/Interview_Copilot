@@ -289,10 +289,10 @@ def resolve_turn_interaction(
     )
     from app.conversation.application.interaction_service import resolve_interaction
     from app.conversation.application.turn_event_buffer import turn_event_buffer
-    from app.conversation.application.turn_executor import cancel_pending_turn
-    from app.conversation.application.turn_executor import fail_pending_turn
-    from app.conversation.application.turn_executor import resume_waiting_turn
-    from app.conversation.application.turn_executor import schedule_turn
+    from app.conversation.application.turn_store import cancel_pending_turn
+    from app.conversation.application.turn_store import fail_pending_turn
+    from app.conversation.application.turn_store import resume_waiting_turn
+    from app.conversation.application.turn_store import schedule_turn
 
     user_pk = resolve_user_pk(db, current_user.username)
     turn = db.get(ConversationTurn, turn_id)
@@ -526,10 +526,10 @@ def create_chat_turn(
             status_code=404, detail="Session not found or access denied"
         )
     from app.conversation.application.turn_event_buffer import turn_event_buffer
-    from app.conversation.application.turn_executor import SubmissionConflictError
-    from app.conversation.application.turn_executor import admit_submission
-    from app.conversation.application.turn_executor import fail_pending_turn
-    from app.conversation.application.turn_executor import schedule_turn
+    from app.conversation.application.turn_store import SubmissionConflictError
+    from app.conversation.application.turn_store import admit_submission
+    from app.conversation.application.turn_store import fail_pending_turn
+    from app.conversation.application.turn_store import schedule_turn
 
     try:
         result = admit_submission(
@@ -698,8 +698,8 @@ def edit_pending_submission(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db, scope="function"),
 ):
-    from app.conversation.application.turn_executor import SubmissionConflictError
-    from app.conversation.application.turn_executor import update_pending_submission
+    from app.conversation.application.turn_store import SubmissionConflictError
+    from app.conversation.application.turn_store import update_pending_submission
 
     user_pk = resolve_user_pk(db, current_user.username)
     _owned_conversation_or_404(db, session_id, user_pk)
@@ -736,9 +736,9 @@ def withdraw_pending_submission_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db, scope="function"),
 ):
-    from app.conversation.application.turn_executor import SubmissionConflictError
-    from app.conversation.application.turn_executor import schedule_turn
-    from app.conversation.application.turn_executor import withdraw_pending_submission
+    from app.conversation.application.turn_store import SubmissionConflictError
+    from app.conversation.application.turn_store import schedule_turn
+    from app.conversation.application.turn_store import withdraw_pending_submission
 
     user_pk = resolve_user_pk(db, current_user.username)
     _owned_conversation_or_404(db, session_id, user_pk)
@@ -758,7 +758,7 @@ def withdraw_pending_submission_endpoint(
             schedule_turn(next_turn_id)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Could not dispatch Turn %s after withdraw", next_turn_id)
-            from app.conversation.application.turn_executor import fail_pending_turn
+            from app.conversation.application.turn_store import fail_pending_turn
 
             fail_pending_turn(db, next_turn_id, user_pk, "后台任务队列暂时不可用")
             raise HTTPException(
@@ -769,10 +769,7 @@ def withdraw_pending_submission_endpoint(
 
 def _dispatch_admission_result(db: Session, user_pk: int, result):
     from app.conversation.application.turn_event_buffer import turn_event_buffer
-    from app.conversation.application.turn_executor import (
-        fail_pending_turn,
-        schedule_turn,
-    )
+    from app.conversation.application.turn_store import fail_pending_turn, schedule_turn
 
     if not result.should_dispatch:
         return
@@ -800,8 +797,8 @@ def retry_pending_submission_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db, scope="function"),
 ):
-    from app.conversation.application.turn_executor import SubmissionConflictError
-    from app.conversation.application.turn_executor import retry_pending_submission
+    from app.conversation.application.turn_store import SubmissionConflictError
+    from app.conversation.application.turn_store import retry_pending_submission
 
     user_pk = resolve_user_pk(db, current_user.username)
     _owned_conversation_or_404(db, session_id, user_pk)
@@ -844,9 +841,9 @@ def interrupt_turn_for_submission(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db, scope="function"),
 ):
-    from app.conversation.application.turn_executor import SubmissionConflictError
-    from app.conversation.application.turn_executor import cancel_pending_turn
-    from app.conversation.application.turn_executor import request_turn_interrupt
+    from app.conversation.application.turn_store import SubmissionConflictError
+    from app.conversation.application.turn_store import cancel_pending_turn
+    from app.conversation.application.turn_store import request_turn_interrupt
 
     user_pk = resolve_user_pk(db, current_user.username)
     _owned_conversation_or_404(db, session_id, user_pk)
@@ -970,7 +967,7 @@ def cancel_chat_turn(
         raise HTTPException(status_code=404, detail="Turn not found or access denied")
     if turn.status not in {"pending", "running", "waiting"}:
         return {"turn_id": turn_id, "status": turn.status, "cancelled": False}
-    from app.conversation.application.turn_executor import cancel_pending_turn
+    from app.conversation.application.turn_store import cancel_pending_turn
 
     cancelled_before_start = cancel_pending_turn(db, turn_id, user_pk)
     return {

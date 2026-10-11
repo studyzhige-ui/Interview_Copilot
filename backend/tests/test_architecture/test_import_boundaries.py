@@ -133,12 +133,39 @@ def test_scan_is_real_and_retired_owners_cannot_return():
         "app.rag.retrieval.pipeline",
     } <= modules.keys(), "architecture test must inspect the actual application"
     assert "app.conversation" in modules  # __init__ side effects count too
-    assert not (APP_ROOT / "services").exists(), "no duplicate legacy service owner"
+    assert not list((APP_ROOT / "services").rglob("*.py")), (
+        "no duplicate legacy service owner"
+    )
+    for retired in ("rag/pgvector_hybrid.py", "rag/qwen_local.py"):
+        assert not (APP_ROOT / retired).exists(), (
+            "retired RAG implementations must not return"
+        )
     for module, path in modules.items():
         for _, target in _raw_imports(path, module):
             assert not (target == "app.services" or target.startswith("app.services."))
             if target == "app.maintenance" or target.startswith("app.maintenance."):
                 assert module.startswith("app.maintenance"), (module, target)
+
+
+def test_turn_supervision_and_state_reads_do_not_own_each_others_work():
+    modules = _modules()
+    forbidden = {
+        "app.conversation.application.turn_executor": ("app.db", "app.models"),
+        "app.conversation.application.turn_store": (
+            "app.conversation.engine",
+            "app.conversation.factory",
+        ),
+        "app.conversation.agent_turn_state": (
+            "app.conversation.agent_strategy",
+            "app.conversation.tool_batch",
+        ),
+    }
+    for owner, blocked in forbidden.items():
+        for line, target in _raw_imports(modules[owner], owner):
+            assert not any(
+                target == prefix or target.startswith(prefix + ".")
+                for prefix in blocked
+            ), (owner, line, target)
 
 
 def test_only_application_owners_create_domain_rows():

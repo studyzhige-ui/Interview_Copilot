@@ -116,9 +116,9 @@ async def resolve_client_action(
     """Persist ack/refusal/failure and resume the same Turn/Tool Call once."""
 
     from app.conversation.application.turn_event_buffer import turn_event_buffer
-    from app.conversation.application.turn_executor import fail_pending_turn
-    from app.conversation.application.turn_executor import resume_waiting_turn
-    from app.conversation.application.turn_executor import schedule_turn
+    from app.conversation.application.turn_store import fail_pending_turn
+    from app.conversation.application.turn_store import resume_waiting_turn
+    from app.conversation.application.turn_store import schedule_turn
 
     user_pk = resolve_user_pk(db, current_user.username)
     try:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.conversation.application import turn_store
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -65,7 +66,7 @@ async def test_fail_orphaned_turns_closes_active_rows(db_session, monkeypatch):
     db_session.commit()
 
     monkeypatch.setattr(
-        turn_executor, "SessionLocal", lambda: _NonClosingSession(db_session)
+        turn_store, "SessionLocal", lambda: _NonClosingSession(db_session)
     )
     monkeypatch.setattr(
         turn_executor.transcript_service,
@@ -112,7 +113,7 @@ async def test_fail_orphaned_turns_keeps_live_heartbeat(db_session, monkeypatch)
     db_session.add_all([conversation, turn])
     db_session.commit()
     monkeypatch.setattr(
-        turn_executor, "SessionLocal", lambda: _NonClosingSession(db_session)
+        turn_store, "SessionLocal", lambda: _NonClosingSession(db_session)
     )
 
     assert await turn_executor.fail_orphaned_turns() == 0
@@ -121,12 +122,12 @@ async def test_fail_orphaned_turns_keeps_live_heartbeat(db_session, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_execute_turn_marks_error_event_failed(monkeypatch):
+async def test_execute_turn_preserves_declared_failure(monkeypatch):
     import app.conversation.engine as conversation_module
     import app.conversation.factory as factory_module
     from app.conversation.events import HarnessEvent
 
-    turn = turn_executor.TurnExecution(
+    turn = turn_store.TurnExecution(
         id="turn-error",
         mode="agent",
         conversation_id="session",
@@ -134,13 +135,11 @@ async def test_execute_turn_marks_error_event_failed(monkeypatch):
         username="alice",
         user_pk=1,
     )
-    monkeypatch.setattr(turn_executor, "_claim", lambda _turn_id: turn)
-    monkeypatch.setattr(
-        turn_executor, "_cancellation_requested", lambda _turn_id: False
-    )
+    monkeypatch.setattr(turn_store, "_claim", lambda _turn_id: turn)
+    monkeypatch.setattr(turn_store, "_cancellation_requested", lambda _turn_id: False)
     marks: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
-        turn_executor,
+        turn_store,
         "_finish",
         lambda _turn_id, status, error=None, **_fence: (
             marks.append((status, error)) or True
@@ -148,6 +147,8 @@ async def test_execute_turn_marks_error_event_failed(monkeypatch):
     )
 
     class FakeEngine:
+        outcome = "failed"
+
         def __init__(self, **_kwargs):
             pass
 
@@ -169,13 +170,16 @@ async def test_execute_turn_marks_error_event_failed(monkeypatch):
     assert marks[-1] == ("failed", "model unavailable")
 
 
+@pytest.mark.parametrize("expected_outcome", ["blocked", "completed"])
 @pytest.mark.asyncio
-async def test_execute_turn_preserves_authoritative_blocked_outcome(monkeypatch):
+async def test_execute_turn_preserves_authoritative_outcome_after_diagnostic(
+    monkeypatch, expected_outcome
+):
     import app.conversation.engine as conversation_module
     import app.conversation.factory as factory_module
     from app.conversation.events import HarnessEvent
 
-    turn = turn_executor.TurnExecution(
+    turn = turn_store.TurnExecution(
         id="turn-blocked",
         mode="agent",
         conversation_id="session",
@@ -183,14 +187,12 @@ async def test_execute_turn_preserves_authoritative_blocked_outcome(monkeypatch)
         username="alice",
         user_pk=1,
     )
-    monkeypatch.setattr(turn_executor, "_claim", lambda _turn_id: turn)
-    monkeypatch.setattr(
-        turn_executor, "_cancellation_requested", lambda _turn_id: False
-    )
-    monkeypatch.setattr(turn_executor, "_has_assistant", lambda _turn_id: True)
+    monkeypatch.setattr(turn_store, "_claim", lambda _turn_id: turn)
+    monkeypatch.setattr(turn_store, "_cancellation_requested", lambda _turn_id: False)
+    monkeypatch.setattr(turn_store, "_has_assistant", lambda _turn_id: True)
     marks: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
-        turn_executor,
+        turn_store,
         "_finish",
         lambda _turn_id, status, error=None, **_fence: (
             marks.append((status, error)) or True
@@ -198,7 +200,7 @@ async def test_execute_turn_preserves_authoritative_blocked_outcome(monkeypatch)
     )
 
     class FakeEngine:
-        outcome = "blocked"
+        outcome = expected_outcome
 
         def __init__(self, **_kwargs):
             pass
@@ -206,7 +208,7 @@ async def test_execute_turn_preserves_authoritative_blocked_outcome(monkeypatch)
         async def submit_message(self):
             # A diagnostic event must not override the Kernel outcome.
             yield HarnessEvent.error("completion gate retained partial results")
-            yield HarnessEvent.done(step=3, elapsed_ms=1, outcome="blocked")
+            yield HarnessEvent.done(step=3, elapsed_ms=1, outcome=expected_outcome)
 
         async def persist_background_failure(self, _message: str):
             raise AssertionError("blocked is not failed")
@@ -222,8 +224,8 @@ async def test_execute_turn_preserves_authoritative_blocked_outcome(monkeypatch)
 
     await turn_executor.execute_turn(turn.id)
 
-    assert marks == [("blocked", None)]
-    assert events[-1]["data"]["outcome"] == "blocked"
+    assert marks == [(expected_outcome, None)]
+    assert events[-1]["data"]["outcome"] == expected_outcome
 
 
 @pytest.mark.asyncio
@@ -234,7 +236,7 @@ async def test_execute_automation_reuses_engine_with_frozen_builtin_allowlist(
     import app.conversation.factory as factory_module
     from app.conversation.events import HarnessEvent
 
-    turn = turn_executor.TurnExecution(
+    turn = turn_store.TurnExecution(
         id="automation-turn",
         mode="agent",
         conversation_id="automation-conversation",
@@ -247,14 +249,12 @@ async def test_execute_automation_reuses_engine_with_frozen_builtin_allowlist(
         automation_tool_names=("read_url", "web_search"),
         execution_mode="auto",
     )
-    monkeypatch.setattr(turn_executor, "_claim", lambda _turn_id: turn)
-    monkeypatch.setattr(
-        turn_executor, "_cancellation_requested", lambda _turn_id: False
-    )
-    monkeypatch.setattr(turn_executor, "_has_assistant", lambda _turn_id: True)
+    monkeypatch.setattr(turn_store, "_claim", lambda _turn_id: turn)
+    monkeypatch.setattr(turn_store, "_cancellation_requested", lambda _turn_id: False)
+    monkeypatch.setattr(turn_store, "_has_assistant", lambda _turn_id: True)
     settled: list[tuple[str, str, str | None]] = []
     monkeypatch.setattr(
-        turn_executor,
+        turn_store,
         "_finish_automation",
         lambda claimed, status, error=None: (
             settled.append((claimed.id, status, error)) or True
@@ -301,7 +301,7 @@ async def test_execute_turn_waits_for_attachment_without_failing(monkeypatch):
     import app.conversation.factory as factory_module
     from app.rag.application.attachment_sources import AttachmentParsingPendingError
 
-    turn = turn_executor.TurnExecution(
+    turn = turn_store.TurnExecution(
         id="turn-attachment-wait",
         mode="agent",
         conversation_id="session",
@@ -310,21 +310,19 @@ async def test_execute_turn_waits_for_attachment_without_failing(monkeypatch):
         user_pk=1,
         attachments=({"attachment_ref_id": "ref-1"},),
     )
-    monkeypatch.setattr(turn_executor, "_claim", lambda _turn_id: turn)
-    monkeypatch.setattr(
-        turn_executor, "_cancellation_requested", lambda _turn_id: False
-    )
+    monkeypatch.setattr(turn_store, "_claim", lambda _turn_id: turn)
+    monkeypatch.setattr(turn_store, "_cancellation_requested", lambda _turn_id: False)
     waits: list[tuple[str, str]] = []
     finishes: list[str] = []
     monkeypatch.setattr(
-        turn_executor,
+        turn_store,
         "_wait",
         lambda turn_id, reason="interaction", **_fence: (
             waits.append((turn_id, reason)) or True
         ),
     )
     monkeypatch.setattr(
-        turn_executor,
+        turn_store,
         "_finish",
         lambda _turn_id, status, error=None, **_fence: finishes.append(status) or True,
     )
@@ -382,19 +380,19 @@ def test_claim_and_finish_are_owner_fenced(db_session, monkeypatch):
     db_session.add_all([conversation, turn])
     db_session.commit()
     monkeypatch.setattr(
-        turn_executor, "SessionLocal", lambda: _NonClosingSession(db_session)
+        turn_store, "SessionLocal", lambda: _NonClosingSession(db_session)
     )
 
-    claimed = turn_executor._claim(turn.id)
+    claimed = turn_store._claim(turn.id)
     assert claimed is not None
-    assert turn_executor._claim(turn.id) is None
+    assert turn_store._claim(turn.id) is None
     db_session.refresh(turn)
     assert turn.status == "running"
-    assert turn.owner_id == turn_executor._WORKER_ID
+    assert turn.owner_id == turn_store._WORKER_ID
 
     turn.owner_id = "replacement-worker"
     db_session.commit()
-    assert turn_executor._finish(turn.id, "completed") is False
+    assert turn_store._finish(turn.id, "completed") is False
     db_session.refresh(turn)
     assert turn.status == "running"
 
@@ -423,7 +421,7 @@ def test_terminalization_freezes_agent_task_in_same_transaction(
         mode="agent",
         message="complex work",
         status="running",
-        owner_id=turn_executor._WORKER_ID,
+        owner_id=turn_store._WORKER_ID,
     )
     db_session.add_all([conversation, turn])
     db_session.flush()
@@ -443,13 +441,13 @@ def test_terminalization_freezes_agent_task_in_same_transaction(
     )
     db_session.commit()
     monkeypatch.setattr(
-        turn_executor,
+        turn_store,
         "SessionLocal",
         lambda: _NonClosingSession(db_session),
     )
     monkeypatch.setattr(turn_executor.settings, "AGENT_MEMORY_PRODUCER_ENABLED", True)
 
-    assert turn_executor._finish(turn.id, "blocked") is True
+    assert turn_store._finish(turn.id, "blocked") is True
     db_session.refresh(turn)
     db_session.refresh(task)
     assert turn.status == "blocked"
@@ -479,12 +477,12 @@ def test_only_completed_user_turn_schedules_delayed_memory_consolidation(
         mode="agent",
         message="work",
         status="running",
-        owner_id=turn_executor._WORKER_ID,
+        owner_id=turn_store._WORKER_ID,
     )
     db_session.add_all([conversation, turn])
     db_session.commit()
     monkeypatch.setattr(
-        turn_executor,
+        turn_store,
         "SessionLocal",
         lambda: _NonClosingSession(db_session),
     )
@@ -495,7 +493,7 @@ def test_only_completed_user_turn_schedules_delayed_memory_consolidation(
         lambda turn_id, *, countdown: scheduled.append((turn_id, countdown)),
     )
 
-    assert turn_executor._finish(turn.id, "completed") is True
+    assert turn_store._finish(turn.id, "completed") is True
     assert scheduled == [(turn.id, turn_executor.settings.AGENT_MEMORY_IDLE_SECONDS)]
 
 
@@ -517,7 +515,7 @@ def test_terminal_turn_atomically_claims_fifo_submission(db_session, monkeypatch
         mode="agent",
         message="current",
         status="running",
-        owner_id=turn_executor._WORKER_ID,
+        owner_id=turn_store._WORKER_ID,
     )
     first = PendingSubmission(
         id="fifo-first",
@@ -546,12 +544,12 @@ def test_terminal_turn_atomically_claims_fifo_submission(db_session, monkeypatch
     db_session.add_all([conversation, active, first, second])
     db_session.commit()
     monkeypatch.setattr(
-        turn_executor, "SessionLocal", lambda: _NonClosingSession(db_session)
+        turn_store, "SessionLocal", lambda: _NonClosingSession(db_session)
     )
     dispatched: list[str] = []
-    monkeypatch.setattr(turn_executor, "schedule_turn", dispatched.append)
+    monkeypatch.setattr(turn_store, "schedule_turn", dispatched.append)
 
-    assert turn_executor._finish(active.id, "completed") is True
+    assert turn_store._finish(active.id, "completed") is True
 
     db_session.expire_all()
     conversation = db_session.get(Conversation, conversation.id)
@@ -654,7 +652,7 @@ def test_claim_failure_retains_hold_and_never_falls_back(db_session, monkeypatch
         mode="agent",
         message="current",
         status="running",
-        owner_id=turn_executor._WORKER_ID,
+        owner_id=turn_store._WORKER_ID,
     )
     first = _pending_row(
         row_id="claim-hold-first", conversation=conversation, user=user, position=1
@@ -673,13 +671,13 @@ def test_claim_failure_retains_hold_and_never_falls_back(db_session, monkeypatch
         return original(db, **kwargs)
 
     monkeypatch.setattr(turn_admission, "preflight_attachment_drafts", reject_first)
-    changed, next_turn_id = turn_executor._terminalize(
+    changed, next_turn_id = turn_store._terminalize(
         db_session,
         active.id,
         allowed_statuses={"running"},
         status="completed",
         error=None,
-        owner_id=turn_executor._WORKER_ID,
+        owner_id=turn_store._WORKER_ID,
     )
     assert changed is True
     assert next_turn_id is None
@@ -707,7 +705,7 @@ def test_failed_hold_queues_new_input_without_history(db_session):
     db_session.add_all([conversation, failed])
     db_session.commit()
 
-    result = turn_executor.admit_submission(
+    result = turn_store.admit_submission(
         db_session,
         conversation,
         submission_id="new-behind-hold-input",
@@ -739,7 +737,7 @@ def test_edit_then_retry_failed_submission_uses_new_version(db_session):
     db_session.add_all([conversation, failed])
     db_session.commit()
 
-    edited = turn_executor.update_pending_submission(
+    edited = turn_store.update_pending_submission(
         db_session,
         conversation.id,
         user.id,
@@ -759,7 +757,7 @@ def test_edit_then_retry_failed_submission_uses_new_version(db_session):
     edited.status = "failed"
     edited.error = "retry me"
     db_session.commit()
-    result = turn_executor.retry_pending_submission(
+    result = turn_store.retry_pending_submission(
         db_session,
         conversation.id,
         user.id,
@@ -790,7 +788,7 @@ def test_interrupt_admits_only_selected_submission(db_session):
         mode="agent",
         message="current",
         status="running",
-        owner_id=turn_executor._WORKER_ID,
+        owner_id=turn_store._WORKER_ID,
         dispatch_generation=1,
     )
     first = _pending_row(
@@ -854,7 +852,7 @@ def test_interrupt_admits_only_selected_submission(db_session):
     )
     db_session.commit()
 
-    status, generation = turn_executor.request_turn_interrupt(
+    status, generation = turn_store.request_turn_interrupt(
         db_session,
         conversation.id,
         active.id,
@@ -878,7 +876,7 @@ def test_interrupt_admits_only_selected_submission(db_session):
     assert read_call.timeline_json[-1]["event"] == "interrupted"
     assert write_call.timeline_json[-1]["event"] == "interrupted"
     assert deferred_call.timeline_json[-1]["event"] == "interrupted"
-    changed, next_turn_id = turn_executor._terminalize(
+    changed, next_turn_id = turn_store._terminalize(
         db_session,
         active.id,
         allowed_statuses={"running"},
@@ -910,7 +908,7 @@ def test_interrupt_selected_failure_never_falls_back(db_session, monkeypatch):
         mode="agent",
         message="current",
         status="running",
-        owner_id=turn_executor._WORKER_ID,
+        owner_id=turn_store._WORKER_ID,
     )
     first = _pending_row(
         row_id="interrupt-fail-first", conversation=conversation, user=user, position=1
@@ -923,7 +921,7 @@ def test_interrupt_selected_failure_never_falls_back(db_session, monkeypatch):
     )
     db_session.add_all([conversation, active, first, selected])
     db_session.commit()
-    turn_executor.request_turn_interrupt(
+    turn_store.request_turn_interrupt(
         db_session,
         conversation.id,
         active.id,
@@ -939,7 +937,7 @@ def test_interrupt_selected_failure_never_falls_back(db_session, monkeypatch):
             AttachmentDraftUnavailableError("no")
         ),
     )
-    changed, next_turn_id = turn_executor._terminalize(
+    changed, next_turn_id = turn_store._terminalize(
         db_session,
         active.id,
         allowed_statuses={"running"},

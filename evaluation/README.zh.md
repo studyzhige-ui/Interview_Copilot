@@ -1,7 +1,8 @@
 # RAG 评测
 
-本目录验证实际生产链路：上传后的解析、清洗、分块、Embedding、Milvus
-Dense/BM25 混合检索、RRF、CrossEncoder 重排、证据门、流式回答与引用。评测代码不会
+本目录验证实际生产链路：上传后的解析、清洗、分块、BGE Embedding、PostgreSQL/pgvector
+Dense/BM25 混合检索、RRF、BGE 重排、证据门、流式回答与引用。Dense 默认精确检索，
+准备对应用户及代次的索引后可使用 HNSW；两者共用同一检索流程。评测代码不会
 把金标词或答案偷偷加入检索请求。
 
 ## 评测边界

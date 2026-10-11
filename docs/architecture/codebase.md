@@ -24,7 +24,7 @@ guide for maintenance work, not a proposal for extra framework layers.
 | `backend/app/maintenance/` | Explicit operator-only legacy migration; runtime must not import this package |
 | `backend/app/conversation/` | Chat/Agent conversation engine, strategy selection, planning, and event contracts |
 | `backend/app/agent_runtime/` | Current ReAct execution, turn-local Tool catalog, MCP clients, Tool Calls, cancellation, and result storage; target Harness/Tool/Policy semantics are defined by `career-agent-os-blueprint.md` and future formal Contracts |
-| `backend/app/rag/` | Parsing, cleaning, chunking, embedding/reranking providers, Milvus indexing, retrieval, and hydration |
+| `backend/app/rag/` | Parsing, cleaning, chunking, BGE embedding/reranking, canonical PostgreSQL/pgvector projections, retrieval, and hydration |
 | `backend/app/prompts/` | Production prompt text and prompt builders grouped by business purpose |
 | `backend/app/models/` | SQLAlchemy persistence models only |
 | `backend/app/db/` | SQLAlchemy and Redis connection ownership |
@@ -86,12 +86,47 @@ still require runtime validation and behavior tests. Official generation APIs:
 
 ## Runtime flow
 
+### Maintained conversation owners
+
+`conversation/engine.py` owns the conversation lifecycle; `agent_strategy.py`
+owns the model/tool loop. `tool_batch.py` preflights and schedules a whole
+model-issued batch, and `agent_runtime/tool_call_executor.py` owns each durable
+tool call. `agent_turn_state.py` reads task/replay state for resumption.
+
+Within `conversation/application`, `turn_admission.py` owns locked FIFO claims,
+`turn_store.py` owns durable transitions, leases and queue handoffs, and
+`turn_executor.py` supervises the asynchronous engine, cancellation and event
+delivery. Consumers import the responsible owner directly. Engine outcomes are
+explicit; an error event alone never changes the terminal status.
+
+### Maintained RAG path
+
+Knowledge commands and the ingestion worker share `rag/application` owners.
+Parsing, cleaning and chunking produce canonical document facts; index writes
+use `rag/index/knowledge.py` and `rag/hybrid_index.py` to update
+`retrieval_entries`. Source identity and generation checks prevent stale writes.
+Deletion and publication use the same canonical document/projection lifecycle.
+
+Chat, Agent knowledge tools, diagnostic HTTP and production-path evaluation
+call `rag/application/service.py`: BGE dense + scoped BM25, RRF, BGE reranking,
+evidence selection, fact hydration and citations. Private attachments retain
+their explicit conversation/document scope. Exact and HNSW share the same
+projection, authorization and retrieval pipeline; HNSW provisioning belongs
+to `scripts/prepare_rag_hnsw.py`, never an HTTP request.
+
+Offline MTRAG ranking baselines preserve official passage IDs and benchmark
+semantics; they are evaluation tools, not selectable application backends.
+They cannot stand in for `evaluation.rag_release` production-path acceptance.
+Historical reports are evidence for their recorded source versions, not current
+deployment instructions. See the [convergence audit](../implementation/mainline-convergence-20261011.md)
+for checkpoints, preserved capabilities and verification scope.
+
 ```text
 React page
   -> frontend API client
   -> FastAPI route / SSE endpoint
   -> domain service or conversation entry point
-  -> PostgreSQL / Redis / S3 / Milvus / model provider
+  -> PostgreSQL (including pgvector) / Redis / object storage / model provider
 
 Long-running request
   -> API persists a job or turn
@@ -123,9 +158,9 @@ same.
 Redis transports work; it is not the business source of truth. Worker tasks may
 be delivered more than once, so handlers must claim or status-gate work before
 side effects. Cross-system changes use the typed outbox and are claimed by
-`job_type`; a slow LLM review job must never block a Milvus update or object
+`job_type`; a slow LLM review job must never block a retrieval projection update or object
 cleanup. PostgreSQL owns lifecycle state, object storage owns file bytes, and
-Milvus is a rebuildable retrieval index.
+`retrieval_entries` is a rebuildable projection of canonical document chunks.
 
 ## Shared invitation ingress and unified consumption accounting
 
@@ -307,7 +342,7 @@ outside Git. This CLI does not contact suppliers or charge/refund money.
 | Gmail/plugin/web/search resources | Authorized external resource request tariff; control-plane reads are not resource results |
 | Opaque MCP tool | Invocation tariff, not a claim to observe the remote server's private model/tool calls |
 | OAuth bootstrap/refresh/revoke, provider catalog, parser status polls | Explicit control plane; not a second billable resource request |
-| SQL/Redis/S3/Milvus infrastructure, hosting, local electricity | Deployment costs, outside per-call supplier metering |
+| SQL/pgvector/Redis/object-storage infrastructure, hosting, local electricity | Deployment costs, outside per-call supplier metering |
 | Optional independent benchmark generator/judge | Separate benchmark keys/checkpoint accounting; production provider calls still require an owned scope |
 
 The cloud parser no longer uses the retired LlamaParse SDK. `fast` returns the

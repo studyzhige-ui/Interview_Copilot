@@ -1,7 +1,8 @@
 """Create and restore portable PostgreSQL + object-storage backups.
 
-Milvus is intentionally not backed up: PostgreSQL document chunks are the
-source of truth and ``scripts/reingest_hybrid.py`` rebuilds the vector index.
+PostgreSQL backups include canonical chunks and retrieval projections.
+``scripts/reingest_hybrid.py`` rebuilds projections from source documents;
+``scripts/prepare_rag_hnsw.py`` prepares the optional physical HNSW indexes.
 """
 
 from __future__ import annotations
