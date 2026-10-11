@@ -39,7 +39,6 @@ def build_canva_search_designs_tool(connector: OAuthPluginConnector) -> ToolDefi
         effect=ToolEffect.READ,
         preflight=lambda args, ctx: _preflight("canva", ctx),
         concurrency_safe=False,
-        max_result_chars=12_000,
         emoji="🎨",
     )
 
@@ -62,7 +61,6 @@ def build_notion_search_pages_tool(connector: OAuthPluginConnector) -> ToolDefin
         effect=ToolEffect.READ,
         preflight=lambda args, ctx: _preflight("notion", ctx),
         concurrency_safe=False,
-        max_result_chars=12_000,
         emoji="📓",
     )
 

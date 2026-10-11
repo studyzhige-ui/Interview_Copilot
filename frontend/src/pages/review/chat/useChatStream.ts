@@ -212,8 +212,8 @@ export function useChatStream({
           summary: result_summary,
           // Full content now streams alongside the summary, so the
           // expanded card renders immediately — no more "refresh to
-          // load" placeholder. ``result_content`` is already capped
-          // by the tool's ``max_result_chars`` so this stays bounded.
+          // load" placeholder. Model-context projection is separate
+          // from this redacted result shown in the tool card.
           content: result_content,
         };
         rt.inflightBlocks.push(block);

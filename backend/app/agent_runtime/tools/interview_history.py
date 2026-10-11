@@ -157,7 +157,6 @@ registry.register(
         handler=_read_interview_history_handler,
         effect=ToolEffect.READ,
         concurrency_safe=True,
-        max_result_chars=10_000,
         emoji="📊",
     )
 )

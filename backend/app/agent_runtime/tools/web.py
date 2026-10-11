@@ -487,7 +487,6 @@ registry.register(
         preflight=_web_search_preflight,
         # Deployment connector availability is checked at execution time.
         concurrency_safe=False,
-        max_result_chars=12_000,
         emoji="🔍",
     )
 )
@@ -505,7 +504,6 @@ registry.register(
         handler=_read_url_handler,
         effect=ToolEffect.READ,
         concurrency_safe=True,
-        max_result_chars=16_000,
         emoji="📄",
     )
 )

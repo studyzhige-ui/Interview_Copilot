@@ -233,15 +233,6 @@ class Settings(BaseSettings):
     AGENT_MEMORY_RECALL_INPUT_TOKENS: int = Field(default=8000, ge=1000)
     AGENT_MEMORY_RECALL_OUTPUT_TOKENS: int = Field(default=2400, ge=256)
     AGENT_MEMORY_CONSOLIDATION_INPUT_TOKENS: int = 16000
-    # Model-visible Tool-result projection thresholds. The canonical redacted
-    # result remains on AgentToolCall and is paged by exact call identity.
-    AGENT_RESULT_INLINE_THRESHOLD: int = 50_000
-    AGENT_TURN_BUDGET_CHARS: int = (
-        200_000  # per-turn aggregate: project largest until < 200K
-    )
-    AGENT_RESULT_PREVIEW_SIZE: int = (
-        2_000  # preview size (chars) in canonical Tool-result reference
-    )
     # User-managed MCP servers. stdio is disabled by default because it executes
     # a user-supplied command in the API process; private HTTP targets are opt-in
     # for trusted local/single-tenant deployments.

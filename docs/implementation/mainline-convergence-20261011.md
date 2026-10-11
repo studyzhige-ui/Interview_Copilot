@@ -136,3 +136,48 @@ Community-1 每窗的说话人向量映射到录音内固定身份；局部标�
 - Ruff 检查、914 个 Python 文件格式检查、编译、共享协议快照、Compose 配置与差异检查通过。
 - 5 项跳过：下载语料、真实本地 embedding/reranker、可选 aiortc、2 项真实 S3 HTTP；
   未将离线回归当作真实模型质量或外部服务验收。业务数据库未迁移，远端未发布。
+
+## 本地单主线整理（2026-10-11）
+
+当前唯一开发目录为 `D:/Projects/Python/Interview_Copilot`，唯一开发分支为
+`codex/mainline-convergence`。清理前恢复点是 `checkpoint/local-single-mainline-20261011`
+（`c5cf319`）。上文旧分支名称是历史记录，不再代表当前开发入口；全部原始 refs、两项
+stash 与提交历史保存于 `D:/Projects/Archives/Interview_Copilot-20261011/history.bundle`。
+远端分支未修改，远端跟踪引用与只读 checkpoint 标签不是第二套本地源码。
+
+核对并注销另外三份工作树：集成 `c980b22`、optimization `2803c79`、non-RAG `812bf76`
+均为当前 HEAD 的祖先，无未合入提交。optimization 唯一未跟踪文件是 Qwen 模型下载脚本；
+它已独立归档，当前模型准备由 `scripts/init_models.py` 承接，不重新引入 Qwen。
+三份工作树的已跟踪、未跟踪及忽略文件都先压缩并逐文件 SHA-256 校验，清单与 ZIP 在上述归档目录。
+原本未合并的两个源码检查点改保留为标签，并由先前的功能迁入记录解释其承接关系。
+
+用户明确选择将 Career OS 原型移出：`product-rebuild`（含本地数据）和桌面原型代码完整
+归档；移除 `--prototype`、原型 preload/UI 与安装包内的 UI 入口。桌面保留唯一正式启动器，
+快捷入口改名为 `Start-InterviewCopilot.cmd`。旧验证源码 tar 也移到外部归档。
+
+本轮清理依据：
+
+- `tool_result_storage.py` 的旧字符预算/预览实现已由 Chat 的 `context_manager` 和 Agent 的
+  `context_compactor` 共同调用的 `context_reduction` 承接。删除旧模块、自身测试、无效配置和
+  无消费者的 `max_result_chars` 元数据；完整结果仍保存并按 turn/call 身份分页回读。
+- 本地 embedding/reranking 已由隔离子进程直接使用 SentenceTransformer/CrossEncoder，
+  删除两个不再导入的 LlamaIndex 本地适配依赖，保留远程计量适配器与文件解析依赖。
+- 删除退役 `requirements/local-tts.txt`；部署指南移除不可执行的 Qwen ASR 安装/配置步骤，
+  历史评审明确标记退役。此举不代表补齐本地 TTS：能力缺口仍然存在。
+
+审计保留项与边界：迁移脚本、旧数据引用、密码升级、独立评测、提供者适配和编译期 wire
+合同检查有独立职责，不能按 legacy/compatibility 命名删除。`prompts/resume.py` 的旧语义分段
+提示与 broker 的 `DiarizationClient` 目前只有测试引用；当前简历走 Artifact/资料候选抽取，
+WhisperX 直接观察说话人。二者是否包含仍需接回的语义分段/资源隔离能力，尚未证明完全等价，
+本轮保留并明确列为待核对项，不把无调用者当作功能已替代的证据。
+
+对已跟踪源码及 Git 工作树完成核对；扫描忽略目录时，12 个旧测试临时目录返回访问拒绝，
+未修改 ACL 或绕过权限。不能宣称这些不可读目录内部也已逐文件查清；业务数据、模型缓存保留。
+
+本轮验证：Linux 上 Agent runtime、上下文压缩/工具批次、架构、embedding 合同与模型适配
+共 **318 passed**（110.55 秒）。同组选项在 Windows 为 317 passed、1 failed，失败来自
+Linux 文件存储的 `O_DIRECTORY` 平台要求；随后完整同组在 Linux 通过，没有跳过该测试。
+最初的 Windows 架构读取错误以 UTF-8 测试进程环境解决，没有放宽代码检查。
+桌面 **31 passed**；前端 typecheck、lint；Ruff 检查、839 个 Python 文件格式、JS 语法、
+共享 Pydantic 协议快照和 `git diff --check` 通过。本轮没有重新执行全量后端、真实录音或
+安装包/UI 验收；WhisperX 算法未改动。日志位于 `data/mainline-convergence/single-mainline-*.log`。

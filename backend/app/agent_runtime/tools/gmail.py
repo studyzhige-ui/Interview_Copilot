@@ -61,7 +61,6 @@ def build_gmail_search_messages_tool(
         preflight=_gmail_search_messages_preflight,
         # Missing connection/scope must pause the untouched batch on this call.
         concurrency_safe=False,
-        max_result_chars=12_000,
         emoji="📨",
     )
 

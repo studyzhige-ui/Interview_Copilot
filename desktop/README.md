@@ -4,8 +4,7 @@ This is a Windows x64 Electron launcher for the existing local Docker runtime.
 It keeps PostgreSQL/pgvector, Redis, Celery workers, local files and BYOK.
 New files use the private filesystem provider by default. An explicitly configured
 S3 endpoint remains optional; existing URI schemes keep their original provider.
-Supabase handles identity only. The prior static-page prototype is retained as
-`npm run prototype` and is not the production workspace.
+Supabase handles identity only. The launcher starts the canonical workspace.
 
 ## End-user runtime contract
 

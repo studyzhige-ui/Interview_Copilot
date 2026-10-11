@@ -9,8 +9,6 @@ hosts the lower-layer building blocks the strategy depends on:
   * :mod:`tool_registry`       — self-registration + OpenAI schema export
   * :mod:`tool_call_streaming` — incremental tool_call accumulator from
                                   OpenAI streaming responses
-  * :mod:`tool_result_storage` — on-disk persistence + per-turn budget
-                                  for oversized tool outputs
   * :mod:`context_compactor`   — multi-layer context-window compaction
   * :mod:`retry_utils`         — retry-on-context-too-long helper
   * :mod:`react_agent`         — :class:`AgentRunState` telemetry +

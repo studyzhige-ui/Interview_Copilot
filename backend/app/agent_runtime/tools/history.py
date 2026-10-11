@@ -93,7 +93,6 @@ registry.register(
         handler=_search_history_handler,
         effect=ToolEffect.READ,
         concurrency_safe=True,
-        max_result_chars=12_000,
         emoji="🕘",
     )
 )
@@ -110,7 +109,6 @@ registry.register(
         handler=_read_history_handler,
         effect=ToolEffect.READ,
         concurrency_safe=True,
-        max_result_chars=20_000,
         emoji="🧾",
     )
 )

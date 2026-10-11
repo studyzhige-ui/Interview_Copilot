@@ -148,7 +148,6 @@ registry.register(
         effect=ToolEffect.READ,
         concurrency_safe=True,
         # The handler caps full_text at 18K, leaving headroom for the envelope.
-        max_result_chars=20000,
         emoji="📄",
     )
 )
@@ -180,7 +179,6 @@ registry.register(
         effect=ToolEffect.READ,
         concurrency_safe=True,
         max_argument_chars=60_000,
-        max_result_chars=500_000,
         emoji="📋",
     )
 )

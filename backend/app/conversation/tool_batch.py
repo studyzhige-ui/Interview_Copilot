@@ -483,11 +483,9 @@ async def execute_tool_batch(
             messages.append(tool_msg)
 
             # Persistent chain (frontend folded-card replay).
-            # ``content`` carries the full LLM-visible result text,
-            # which is either the raw JSON observation or a
-            # ``<tool-result-reference ...>`` pointer string. The frontend
-            # uses ``content`` to render the expanded view and
-            # ``summary`` as the always-visible folded label.
+            # Keep the redacted result for replay; model-only projection
+            # happens later in the shared context reducer. The frontend
+            # renders content in the expanded view and summary in its label.
             blocks.append(
                 {
                     "type": "tool_use",

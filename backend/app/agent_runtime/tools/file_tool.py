@@ -392,7 +392,6 @@ registry.register(
         handler=_read_file_handler,
         effect=ToolEffect.READ,
         concurrency_safe=True,
-        max_result_chars=200_000,
         emoji="📂",
     )
 )
@@ -408,7 +407,6 @@ registry.register(
         args_model=WriteFileArgs,
         handler=_write_file_handler,
         effect=ToolEffect.INTERNAL_WRITE,
-        max_result_chars=2000,
         emoji="💾",
     )
 )

@@ -88,7 +88,6 @@ class ToolDefinition:
     description: str
     args_model: type[BaseModel]
     handler: Callable[[BaseModel, AgentToolContext], Awaitable[dict[str, Any]]]
-    max_result_chars: int = 8000
     # Trusted implementation metadata; never supplied by a model or MCP server.
     max_argument_chars: int | None = None
     emoji: str = "🔧"

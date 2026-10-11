@@ -118,9 +118,6 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
         fake_dispatch,
     )
 
-    # project_oversized_result / enforce_turn_budget are imported into
-    # the strategy module — patch at the use site.
-
     # Build the minimum input set for execute_tool_batch.
     ctx = StrategyContext(
         user_id="alice",

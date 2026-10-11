@@ -117,8 +117,8 @@ class HarnessEvent:
         the frontend renders this in the expanded tool card. Pre-fix
         the event only carried ``result_summary``, so the live UI
         showed "(刷新会话以加载完整输出)" until the user reloaded;
-        now the content is inline. Already bounded by the per-tool
-        ``max_result_chars`` limit so SSE frame size stays sane.
+        now the content is inline. Context projection is applied separately
+        when constructing model requests; this event retains the tool output.
 
         ``tool_call_id`` mirrors the matching ``tool_start`` so the
         frontend can pair live-stream tool_use/tool_result blocks by

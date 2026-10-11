@@ -184,7 +184,6 @@ registry.register(
         handler=read_gmail_observations,
         effect=ToolEffect.READ,
         concurrency_safe=True,
-        max_result_chars=24_000,
         emoji="📬",
     )
 )

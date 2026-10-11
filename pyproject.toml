@@ -78,8 +78,6 @@ local = [
     "transformers==4.57.6",
     "huggingface-hub==0.36.2",
     "sentence-transformers==5.7.0",
-    "llama-index-embeddings-huggingface==0.7.0",
-    "llama-index-postprocessor-sbert-rerank==0.5.0",
     "docling[rapidocr]==2.118.1",
     "faster-whisper==1.2.1",
     "whisperx==3.8.6",

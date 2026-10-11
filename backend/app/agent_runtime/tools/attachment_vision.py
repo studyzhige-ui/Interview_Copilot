@@ -545,7 +545,6 @@ registry.register(
         effect=ToolEffect.READ,
         concurrency_safe=True,
         resource_resolver=_resource_identity,
-        max_result_chars=30_000,
         emoji="👁️",
         prompt=(
             "When [Attachments] says visual_layout_requested=true, use this Tool "

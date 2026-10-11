@@ -250,7 +250,6 @@ registry.register(
         # Deployment readiness is resolved at call time. Keep this call
         # serial so its provider resource is never raced within a batch.
         concurrency_safe=False,
-        max_result_chars=12_000,
         emoji="💼",
     )
 )
