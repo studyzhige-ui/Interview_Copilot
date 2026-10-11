@@ -130,7 +130,7 @@ def test_scan_is_real_and_retired_owners_cannot_return():
         "app.main",
         "app.conversation",
         "app.usage.runtime",
-        "app.rag.retrieval.pipeline",
+        "app.rag.application.service",
     } <= modules.keys(), "architecture test must inspect the actual application"
     assert "app.conversation" in modules  # __init__ side effects count too
     assert not list((APP_ROOT / "services").rglob("*.py")), (

@@ -58,7 +58,7 @@ import type { MockClientActionName } from '@/types/clientAction';
  * requests server-side turn cancellation, then aborts this stream.
  */
 
-/** Mirrors HarnessEventType in backend/app/agent_runtime/harness_events.py. */
+/** Mirrors HarnessEventType in backend/app/conversation/events.py. */
 type HarnessEventType =
   | 'status'
   | 'sources'

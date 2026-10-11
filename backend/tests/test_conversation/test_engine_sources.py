@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 
-from app.agent_runtime.harness_events import HarnessEventType
+from app.conversation.events import HarnessEventType
 from app.conversation.engine import ConversationEngine
 from app.conversation.events import HarnessEvent
 from app.conversation.strategy import StrategyContext
@@ -104,7 +104,7 @@ def test_non_rag_turn_emits_no_sources_event(monkeypatch):
 
 
 def test_sources_event_serializes_to_wire_shape():
-    from app.agent_runtime.harness_events import HarnessEvent
+    from app.conversation.events import HarnessEvent
 
     ev = HarnessEvent.sources([{"ref": "K1"}], step=0, elapsed_ms=1.0)
     wire = ev.to_dict()

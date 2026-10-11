@@ -1,7 +1,6 @@
 """Chronological tool-pair normalization shared by replay and reduction."""
 
 from __future__ import annotations
-from app.core.context_wire import wire as wire
 
 
 def normalize_tool_pairs(messages: list[dict]) -> list[dict]:
@@ -55,3 +54,9 @@ def runtime_control_message(kind: str, content: str) -> dict:
         "control_type": kind,
         "content": content,
     }
+
+
+def wire(messages: list[dict]) -> list[dict]:
+    return [
+        {k: v for k, v in message.items() if k != "_context"} for message in messages
+    ]

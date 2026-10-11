@@ -141,7 +141,7 @@ def test_local_tool_recovery_incidents_reset_after_genuine_progress():
 
 def test_harness_event_serialization():
     """HarnessEvent serializes to JSON correctly."""
-    from app.agent_runtime.harness_events import HarnessEvent
+    from app.conversation.events import HarnessEvent
 
     event = HarnessEvent.tool_start(
         "web_search", "query=test", step=1, elapsed_ms=100.0

@@ -19,7 +19,7 @@ def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
     factory — the factory test would still pass while the wire goes
     silently broken.
     """
-    from app.agent_runtime.harness_events import HarnessEventType
+    from app.conversation.events import HarnessEventType
     from app.agent_runtime.react_agent import AgentRunState
     from app.agent_runtime.tool_call_streaming import _ToolCallAccumulator
     from app.conversation.strategy import StrategyContext

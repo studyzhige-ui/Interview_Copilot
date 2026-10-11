@@ -77,7 +77,7 @@ def main():
     from evaluation.retrieval_gates import retrieval_release_gates
     from evaluation.report import hardware_metadata
     from app.conversation.query_planner import QueryPlan
-    from app.rag.retrieval.pipeline import KnowledgeRetrievalPipeline
+    from app.rag.application.service import RagService
     from app.rag.retrieval import candidates
     from app.rag import hybrid_index
     from app.rag.application.service import rag_service
@@ -159,7 +159,7 @@ def main():
             )
         durations = defaultdict(list)
         pipeline_timings = []
-        original_retrieve = KnowledgeRetrievalPipeline.retrieve
+        original_retrieve = RagService.retrieve
         original_embedding = candidates._query_embedding
 
         async def retrieve(self, **kwargs):
@@ -189,7 +189,7 @@ def main():
             return call
 
         with (
-            patch.object(KnowledgeRetrievalPipeline, "retrieve", retrieve),
+            patch.object(RagService, "retrieve", retrieve),
             patch.object(candidates, "_query_embedding", embedding),
             patch.object(
                 hybrid_index,

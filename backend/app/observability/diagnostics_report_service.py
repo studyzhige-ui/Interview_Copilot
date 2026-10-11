@@ -20,18 +20,6 @@ _AXIS_BY_SKILL_TYPE = {
 FIXED_AXES = tuple(_AXIS_BY_SKILL_TYPE.values())
 
 
-def _evidence_count(refs: Any) -> int:
-    if not isinstance(refs, list):
-        return 0
-    return len(
-        {
-            (str(ref.get("type") or ""), str(ref.get("id") or ""))
-            for ref in refs
-            if isinstance(ref, dict) and ref.get("id")
-        }
-    )
-
-
 def _extract_ability_records(db: Any, user_id: str) -> list[dict[str, Any]]:
     """Read the one canonical inferred-state owner used by product surfaces."""
     from app.core.user_identity import resolve_user_pk

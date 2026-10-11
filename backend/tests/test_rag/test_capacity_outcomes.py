@@ -10,7 +10,7 @@ from app.core.execution_errors import (
     ModelOutcomeUnknownError,
 )
 from app.usage.service import ModelBudgetExceededError
-from app.rag.retrieval import pipeline as module
+from app.rag.application import service as module
 from app.rag.retrieval.candidates import IntentCandidates
 
 
@@ -40,7 +40,7 @@ def pipeline(monkeypatch):
 
     monkeypatch.setattr(module, "SessionLocal", Session)
     monkeypatch.setattr(module, "resolve_user_pk", lambda *_args: 7)
-    instance = module.KnowledgeRetrievalPipeline()
+    instance = module.RagService()
     instance._reranker = object()
     return instance
 
@@ -69,10 +69,13 @@ async def test_capacity_is_not_no_candidates(pipeline, monkeypatch, stage):
     monkeypatch.setattr(module, "search_intent_candidates", search)
     monkeypatch.setattr(module, "rerank_groups", rerank)
     monkeypatch.setattr(pipeline, "_hydrate", hydrate)
-    result = await pipeline.retrieve(intents=[{"query": "redis"}], user_id="alice")
+    result = await pipeline.retrieve(
+        intents=[{"query": "redis"}], user_id="alice", planner_failed=True
+    )
     assert result.chunks == []
     assert result.state.degraded
     assert result.state.empty_reason == "capacity_exhausted"
+    assert result.state.planner_failed is True
 
 
 @pytest.mark.asyncio

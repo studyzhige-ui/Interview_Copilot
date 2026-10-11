@@ -301,10 +301,6 @@ export interface ConversationAttachmentRemovalResp {
   resumed_turn: boolean;
 }
 
-export interface DebriefSourcePromotionResp {
-  source: AttachmentSource;
-}
-
 export interface AttachmentArtifactPromotionResp {
   source_id: string;
   file_asset_id: string;
@@ -312,14 +308,6 @@ export interface AttachmentArtifactPromotionResp {
   artifact: Artifact;
   resume_parse_dispatched: boolean;
 }
-
-export type AgentInteractionKind =
-  | 'clarification'
-  | 'connection'
-  | 'approval'
-  | 'client_readiness'
-  | 'fact_confirmation'
-  | 'profile_update_confirmation';
 
 interface AgentInteractionBase {
   schema_version?: number;

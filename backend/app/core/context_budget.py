@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass
 
 from app.core.tokens import token_count
+from app.core.context_messages import wire
 from app.core.config import settings
 
 
@@ -58,7 +59,7 @@ class RequestBudget:
 
 def request_tokens(messages: list[dict], tools: list[dict] | None = None) -> int:
     payload = {
-        "messages": [{k: v for k, v in m.items() if k != "_context"} for m in messages],
+        "messages": wire(messages),
         "tools": sorted(
             tools or [], key=lambda t: str((t.get("function") or {}).get("name", ""))
         ),

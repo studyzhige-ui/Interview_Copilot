@@ -38,7 +38,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.agent_runtime.harness_events import HarnessEvent
+from app.conversation.events import HarnessEvent
 from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
@@ -414,11 +414,6 @@ def resolve_turn_interaction(
         turn_status="pending",
         dispatch_generation=generation,
     )
-
-
-def _turn_terminal_state(turn_id: str) -> tuple[str | None, str | None]:
-    status, error, _ = _turn_stream_state(turn_id)
-    return status, error
 
 
 def _turn_stream_state(turn_id: str) -> tuple[str | None, str | None, int | None]:

@@ -104,7 +104,7 @@ async def test_candidate_search_runs_lexical_once_and_dense_per_variant(monkeypa
 @pytest.mark.asyncio
 async def test_pipeline_preserves_missing_intent_for_grounding_gate(monkeypatch):
     from app.rag.grounding.builder import grounding_builder
-    from app.rag.retrieval import pipeline as pipeline_module
+    from app.rag.application import service as pipeline_module
 
     policy = SimpleNamespace(
         retrieval=SimpleNamespace(
@@ -162,7 +162,7 @@ async def test_pipeline_preserves_missing_intent_for_grounding_gate(monkeypatch)
 
     monkeypatch.setattr(pipeline_module, "search_intent_candidates", search)
     monkeypatch.setattr(pipeline_module, "rerank_groups", rerank)
-    instance = pipeline_module.KnowledgeRetrievalPipeline()
+    instance = pipeline_module.RagService()
     instance._reranker = object()
     monkeypatch.setattr(
         instance,
@@ -181,10 +181,12 @@ async def test_pipeline_preserves_missing_intent_for_grounding_gate(monkeypatch)
         intents=[SearchIntent(query="first"), SearchIntent(query="second")],
         user_id="alice",
         include_diagnostics=True,
+        planner_failed=True,
     )
     grounding = grounding_builder.build(result, token_budget=200)
 
     assert result.retrieval_hit is True
+    assert result.state.planner_failed is True
     assert [intent.intent_id for intent in result.intents] == ["I1", "I2"]
     assert grounding.supported is False
     assert grounding.missing_intent_ids == ["I2"]
@@ -231,7 +233,7 @@ def test_coverage_selection_reserves_each_intent_before_global_fill():
 
 @pytest.mark.asyncio
 async def test_pipeline_reranker_failure_fails_closed(monkeypatch):
-    from app.rag.retrieval import pipeline as pipeline_module
+    from app.rag.application import service as pipeline_module
 
     policy = SimpleNamespace(
         retrieval=SimpleNamespace(
@@ -278,7 +280,7 @@ async def test_pipeline_reranker_failure_fails_closed(monkeypatch):
 
     monkeypatch.setattr(pipeline_module, "search_intent_candidates", search)
     monkeypatch.setattr(pipeline_module, "rerank_groups", fail_rerank)
-    instance = pipeline_module.KnowledgeRetrievalPipeline()
+    instance = pipeline_module.RagService()
     instance._reranker = object()
 
     result = await instance.retrieve(

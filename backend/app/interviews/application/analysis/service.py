@@ -63,12 +63,6 @@ def _clean_json_response(raw_text: str) -> dict[str, Any]:
     return value
 
 
-def _validated_score(value: Any) -> float | None:
-    if value is None:
-        return None
-    return validate_score(value)
-
-
 def _validate_batch_result(
     payload: dict[str, Any],
     expected_indexes: list[int],

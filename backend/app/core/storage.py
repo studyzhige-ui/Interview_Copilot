@@ -52,8 +52,7 @@ def validate_s3_configuration():
 
 
 class _LazyS3Client:
-    def __init__(self, public=False):
-        self.public = public
+    def __init__(self):
         self.client = None
 
     def __getattr__(self, name):
@@ -66,10 +65,7 @@ class _LazyS3Client:
                 aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
                 aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
                 region_name=settings.AWS_REGION,
-                endpoint_url=(
-                    settings.S3_PUBLIC_ENDPOINT_URL.strip() if self.public else ""
-                )
-                or settings.AWS_ENDPOINT_URL,
+                endpoint_url=settings.AWS_ENDPOINT_URL,
                 config=Config(
                     connect_timeout=5,
                     read_timeout=10,
@@ -80,7 +76,6 @@ class _LazyS3Client:
 
 
 s3_client = _LazyS3Client()
-s3_signing_client = _LazyS3Client(public=True)
 
 
 def sanitize_filename(filename: str) -> str:
@@ -280,10 +275,6 @@ def download_file_from_storage(
         raise
 
 
-# Compatibility for external callers; URI dispatch is intentionally generic.
-download_file_from_s3 = download_file_from_storage
-
-
 def check_free_space(required_bytes=0):
     root = Path(settings.STORAGE_DIR)
     root.mkdir(parents=True, exist_ok=True)
@@ -373,34 +364,3 @@ def materialize_object(uri: str, *, max_bytes=MAX_OBJECT_BYTES, deadline=None):
         path = str(Path(root) / ("source" + Path(object_key_from_uri(uri)).suffix))
         download_file_from_storage(uri, path, max_bytes=max_bytes, deadline=deadline)
         yield path
-
-
-def generate_presigned_get_url(uri: str, expiration: int = 600) -> str:
-    bucket, key = parse_s3_uri(uri)
-    return s3_signing_client.generate_presigned_url(
-        "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expiration
-    )
-
-
-def generate_presigned_upload_url_for_key(
-    object_key: str, content_type="application/octet-stream", expiration=3600
-) -> dict:
-    """Legacy adapter retained for integrations; first-party uploads use asset capabilities."""
-    uri = f"s3://{settings.S3_BUCKET_NAME}/{object_key}"
-    _safe_relative(object_key)
-    url = s3_signing_client.generate_presigned_url(
-        "put_object",
-        Params={
-            "Bucket": settings.S3_BUCKET_NAME,
-            "Key": object_key,
-            "ContentType": content_type,
-            "IfNoneMatch": "*",
-        },
-        ExpiresIn=expiration,
-    )
-    return {
-        "upload_url": url,
-        "file_path": uri,
-        "storage_uri": uri,
-        "object_key": object_key,
-    }

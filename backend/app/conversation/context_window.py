@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from app.core.context_budget import ContextCapacityError, RequestBudget, request_tokens
 from app.core.context_messages import normalize_tool_pairs
-from app.core.context_wire import wire
+from app.core.context_messages import wire
 from app.core.tokens import token_count, truncate_to_tokens
 from app.core.config import settings
 from app.conversation.context_reduction import result_reference, split_recent

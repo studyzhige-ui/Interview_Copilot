@@ -261,24 +261,6 @@ def get_file_asset(db: Session, file_asset_id: str) -> FileAsset | None:
     )
 
 
-def list_user_file_assets(
-    db: Session,
-    *,
-    user_id: str,
-    purpose: str | None = None,
-) -> list[FileAsset]:
-    user_pk = resolve_user_pk(db, user_id)
-    if user_pk is None:
-        return []
-    query = db.query(FileAsset).filter(
-        FileAsset.user_id == user_pk,
-        FileAsset.deleted_at.is_(None),
-    )
-    if purpose:
-        query = query.filter(FileAsset.purpose == purpose)
-    return query.order_by(FileAsset.created_at.desc()).all()
-
-
 def confirm_file_asset(
     db: Session,
     *,

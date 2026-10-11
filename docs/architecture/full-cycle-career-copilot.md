@@ -1559,7 +1559,7 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 - frontend/src/pages/review/chat/SessionCapabilities.tsx
 - frontend/src/components/layout/AppShell.tsx、frontend/src/router.tsx、frontend/src/pages/chat/GeneralChatPage.tsx、frontend/src/api/chat.ts
 - frontend/src/pages/review/chat/ChatToolbar.tsx、ChatPanel.tsx、useChatStream.ts、types.ts
-- backend/app/agent_runtime/harness_events.py、backend/app/agent_runtime/tool_call_executor.py
+- backend/app/conversation/events.py、backend/app/agent_runtime/tool_call_executor.py
 - backend/app/agent_runtime/mcp/manager.py、backend/app/agent_runtime/tools/web.py
 - backend/app/models/user_model_credentials.py、backend/app/identity/application/user_api_key_service.py
 - frontend/src/pages/review/chat/MessageList.tsx、MessageBlocks.tsx、Bubble.tsx、useSessionRuntimes.ts

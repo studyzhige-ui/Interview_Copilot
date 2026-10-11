@@ -10,7 +10,7 @@ def test_tool_start_and_tool_done_carry_tool_call_id():
     The empty-default keeps the wire backwards-compatible with any
     older client that ignores the field.
     """
-    from app.agent_runtime.harness_events import HarnessEvent
+    from app.conversation.events import HarnessEvent
 
     start = HarnessEvent.tool_start(
         "search_jobs",
@@ -67,7 +67,7 @@ def test_tool_done_event_carries_full_result_content():
     Pre-fix the wire format only carried ``result_summary`` and the
     frontend showed "(刷新会话以加载完整输出)" until reload.
     """
-    from app.agent_runtime.harness_events import HarnessEvent
+    from app.conversation.events import HarnessEvent
 
     ev = HarnessEvent.tool_done(
         "search_jobs",
@@ -100,7 +100,7 @@ def test_tool_done_event_carries_full_result_content():
 
 
 def test_tool_sse_redacts_nested_credentials_and_obvious_values():
-    from app.agent_runtime.harness_events import HarnessEvent
+    from app.conversation.events import HarnessEvent
 
     sentinel = "sk-proj-NESTED_SENTINEL_123456789"
     start = HarnessEvent.tool_start(

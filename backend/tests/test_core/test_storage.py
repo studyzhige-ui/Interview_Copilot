@@ -94,15 +94,6 @@ def test_storage_outage_is_not_missing(monkeypatch):
         )
 
 
-def test_create_only_s3_signing_client(monkeypatch):
-    signer = MagicMock()
-    monkeypatch.setattr(storage, "s3_signing_client", signer)
-    storage.generate_presigned_upload_url_for_key("uploads/1/fa_a/a.txt")
-    assert (
-        signer.generate_presigned_url.call_args.kwargs["Params"]["IfNoneMatch"] == "*"
-    )
-
-
 def test_missing_s3_configuration_never_initializes_client(monkeypatch):
     monkeypatch.setattr(storage.settings, "AWS_ENDPOINT_URL", "")
     monkeypatch.setattr(

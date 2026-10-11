@@ -43,11 +43,7 @@ def agent_system_prompt_for_runtime(runtime_profile: str) -> str:
     )
 
 
-# Compatibility export for callers that need the default Agent prompt.
-AGENT_SYSTEM_PROMPT = CAREER_AGENT_SYSTEM_PROMPT
-
 __all__ = [
-    "AGENT_SYSTEM_PROMPT",
     "CAREER_AGENT_SYSTEM_PROMPT",
     "DEBRIEF_AGENT_SYSTEM_PROMPT",
     "agent_system_prompt_for_runtime",

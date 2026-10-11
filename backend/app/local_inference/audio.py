@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import unicodedata
 
 from .errors import ProtocolError
 
@@ -60,11 +59,3 @@ def decode_pcm(value) -> bytes:
     ):
         _fail("audio_identity_mismatch")
     return pcm
-
-
-def _lexical(text):
-    return "".join(
-        c
-        for c in unicodedata.normalize("NFKC", text)
-        if not c.isspace() and not unicodedata.category(c).startswith("P")
-    )

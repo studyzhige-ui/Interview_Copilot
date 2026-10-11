@@ -399,7 +399,6 @@ class Settings(BaseSettings):
     # Browser-facing endpoint used only to sign presigned URLs. Containers use
     # AWS_ENDPOINT_URL=http://minio:9000 for server I/O while browsers need a
     # host/public address such as http://localhost:9000.
-    S3_PUBLIC_ENDPOINT_URL: str = ""
     S3_BUCKET_NAME: str = "interview-copilot-bucket"
 
     # Per-process budget, including every API and worker process:

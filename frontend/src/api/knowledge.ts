@@ -76,41 +76,6 @@ export async function deleteKnowledgeDocument(id: string): Promise<void> {
   await apiClient.delete(`/knowledge/documents/${encodeURIComponent(id)}`);
 }
 
-export async function getKnowledgeDocument(
-  id: string,
-  opts: { signal?: AbortSignal } = {},
-): Promise<KnowledgeDoc> {
-  const res = await apiClient.get(`/knowledge/documents/${encodeURIComponent(id)}`, {
-    signal: opts.signal,
-  });
-  return res.data?.document;
-}
-
-export async function waitForKnowledgeDocument(
-  id: string,
-  opts: { signal?: AbortSignal; pollMs?: number } = {},
-): Promise<KnowledgeDoc> {
-  const pollMs = Math.max(250, opts.pollMs ?? 800);
-  while (true) {
-    const document = await getKnowledgeDocument(id, { signal: opts.signal });
-    if (document.status === 'ready') return document;
-    if (document.status === 'failed') {
-      throw new Error(document.error_message || `文件解析失败：${document.title}`);
-    }
-    await new Promise<void>((resolve, reject) => {
-      const onAbort = () => {
-        clearTimeout(timer);
-        reject(new DOMException('Aborted', 'AbortError'));
-      };
-      const timer = setTimeout(() => {
-        opts.signal?.removeEventListener('abort', onAbort);
-        resolve();
-      }, pollMs);
-      opts.signal?.addEventListener('abort', onAbort, { once: true });
-    });
-  }
-}
-
 // One-shot helper: presigned-url → PUT → create-document.
 export async function uploadKnowledgeFile(
   file: File,
