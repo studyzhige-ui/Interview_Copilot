@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 from sqlalchemy.orm import Session
 
 from app.core.llm_client_factory import get_internal_llm
@@ -70,6 +70,7 @@ class ResumeArtifactRecord:
 class ExtractedProfileCandidates:
     facts: list[PersonalFactInput]
     directions: list[DirectionInput]
+    sections: list[dict]
 
 
 def list_resume_artifacts(
@@ -485,6 +486,7 @@ def persist_extracted_resume(
                     ],
                 ),
             )
+    owned.state.section_spans_json = json.dumps(candidates.sections, ensure_ascii=False)
     owned.state.parse_status = "ready"
     owned.state.parse_error = None
     owned.state.parse_version_id = candidate_version.id
@@ -501,22 +503,71 @@ async def extract_profile_candidates(
 
     normalized = text.strip()
     if not normalized:
-        return ExtractedProfileCandidates(facts=[], directions=[])
-    prompt = _candidate_prompt(normalized)
-    try:
-        response = await get_internal_llm("worker").acomplete(
-            prompt,
-            response_format={"type": "json_object"},
+        return ExtractedProfileCandidates(facts=[], directions=[], sections=[])
+    response = await get_internal_llm("worker").acomplete(
+        _candidate_prompt(normalized), response_format={"type": "json_object"}
+    )
+    payload = _json_payload(str(response.text))
+    sections = _section_spans(normalized, payload.get("sections"))
+    facts = _FACTS.validate_python(payload.get("facts") or [])
+    directions = _DIRECTIONS.validate_python(payload.get("directions") or [])
+    return ExtractedProfileCandidates(
+        facts=facts, directions=directions, sections=sections
+    )
+
+
+def _section_spans(text: str, rows: Any) -> list[dict]:
+    """Store offsets into the canonical text, never an LLM-rewritten copy."""
+    lines = text.splitlines(keepends=True)
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+    if not isinstance(rows, list) or not 1 <= len(rows) <= len(lines):
+        raise ResumeArtifactError("resume_sections_required")
+    sections, next_line = [], 1
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {
+            "section_type",
+            "title",
+            "start_line",
+            "end_line",
+        }:
+            raise ResumeArtifactError("invalid_resume_section")
+        start, end = row["start_line"], row["end_line"]
+        if (
+            type(start) is not int
+            or type(end) is not int
+            or start != next_line
+            or not start <= end <= len(lines)
+            or row["section_type"]
+            not in {"summary", "experience", "project", "education", "skill", "other"}
+            or not isinstance(row["title"], str)
+            or not 1 <= len(row["title"].strip()) <= 200
+        ):
+            raise ResumeArtifactError("invalid_resume_section_span")
+        sections.append(
+            {
+                "section_type": row["section_type"],
+                "title": row["title"].strip(),
+                "start": offsets[start - 1],
+                "end": offsets[end],
+            }
         )
-        payload = _json_payload(str(response.text))
-        facts = _FACTS.validate_python(payload.get("facts") or [])
-        directions = _DIRECTIONS.validate_python(payload.get("directions") or [])
-        return ExtractedProfileCandidates(facts=facts, directions=directions)
-    except (ValueError, ValidationError, json.JSONDecodeError):
-        # A malformed model response must not invent or partially confirm
-        # personal facts. The Artifact remains usable and the empty candidate
-        # result is visible as "no structured candidates".
-        return ExtractedProfileCandidates(facts=[], directions=[])
+        next_line = end + 1
+    if next_line != len(lines) + 1:
+        raise ResumeArtifactError("incomplete_resume_sections")
+    return sections
+
+
+def read_resume_sections(record: ResumeArtifactRecord) -> list[dict]:
+    """Derived spans are valid only for the current, successfully parsed version."""
+    if (
+        record.state.parse_status != "ready"
+        or record.state.parse_version_id != record.current_version.id
+        or not record.state.section_spans_json
+    ):
+        return []
+    return json.loads(record.state.section_spans_json)
 
 
 def read_resume_text(record: ResumeArtifactRecord) -> str:
@@ -614,10 +665,14 @@ def _json_payload(raw: str) -> dict[str, Any]:
 
 
 def _candidate_prompt(text: str) -> str:
+    from app.prompts.resume import RESUME_SECTION_INSTRUCTIONS
+
+    numbered = "\n".join(f"{i}: {line}" for i, line in enumerate(text.splitlines(), 1))
     return f"""你负责把用户明确导入的简历整理为“待用户确认”的求职档案候选。
 只抽取文档明确陈述的事实；不要推断能力、人格、资历水平或未写明的目标。
 不要把简历措辞当成已确认事实。返回严格 JSON：
-{{"facts": [...], "directions": [...]}}
+{{"facts": [...], "directions": [...], "sections": [...]}}
+{RESUME_SECTION_INSTRUCTIONS}
 
 facts 允许的结构：
 - education: kind,institution,degree?,field_of_study?,description?,start_date?,end_date?
@@ -633,7 +688,7 @@ salary_currency,industries,technologies,exclusions), lifecycle(exploring), prior
 日期使用 YYYY-MM-DD；不确定日期留空，不要猜测。
 
 <resume>
-{text[:30000]}
+{numbered}
 </resume>"""
 
 
@@ -660,6 +715,7 @@ __all__ = [
     "new_operation_key",
     "persist_extracted_resume",
     "read_resume_text",
+    "read_resume_sections",
     "register_resume_artifact",
     "resolve_owned_resume",
     "set_default_resume_artifact",

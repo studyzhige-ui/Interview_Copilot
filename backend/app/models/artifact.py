@@ -290,6 +290,8 @@ class ArtifactResumeState(Base):
         nullable=True,
         index=True,
     )
+    # Derived semantic offsets only; text remains on ArtifactVersion.
+    section_spans_json = Column(Text, nullable=True)
     legacy_resume_id = Column(String(128), nullable=True)
     created_at = Column(DateTime, nullable=False, default=utc_now)
     updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)

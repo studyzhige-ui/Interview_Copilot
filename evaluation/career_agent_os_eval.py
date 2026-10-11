@@ -1,4 +1,4 @@
-"""Release gate for Career Agent OS vertical-slice scenario manifests."""
+"""Executable gate for the current mainline contract manifest."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = Path(__file__).with_name("career_agent_os_scenarios.json")
-VS01_SCENARIOS = frozenset(f"VS01-S{index:02d}" for index in range(1, 16))
 
 
 class CareerAgentOSGateError(RuntimeError):
@@ -55,7 +54,7 @@ def validate_manifest(
         )
     required_documents = [
         expected_architecture,
-        str(manifest.get("vertical_slice") or ""),
+        str(manifest.get("test_strategy") or ""),
         *[str(item) for item in manifest.get("contracts") or []],
     ]
     for relative in required_documents:
@@ -64,20 +63,15 @@ def validate_manifest(
     scenarios = manifest.get("scenarios")
     if not isinstance(scenarios, list):
         raise CareerAgentOSGateError("scenarios must be a list")
-    if len(scenarios) != len(VS01_SCENARIOS) or not all(
-        isinstance(item, dict) for item in scenarios
+    if (
+        manifest.get("version") != 2
+        or not scenarios
+        or not all(isinstance(item, dict) for item in scenarios)
     ):
-        raise CareerAgentOSGateError(
-            "VS-01 requires exactly 15 unique scenario objects"
-        )
-    actual_ids = {
-        str(item.get("id") or "") for item in scenarios if isinstance(item, dict)
-    }
-    if actual_ids != VS01_SCENARIOS:
-        raise CareerAgentOSGateError(
-            f"VS-01 scenario set mismatch: missing={sorted(VS01_SCENARIOS - actual_ids)}, "
-            f"extra={sorted(actual_ids - VS01_SCENARIOS)}"
-        )
+        raise CareerAgentOSGateError("current contract manifest version 2 is required")
+    actual_ids = {str(item.get("id") or "") for item in scenarios}
+    if "" in actual_ids or len(actual_ids) != len(scenarios):
+        raise CareerAgentOSGateError("contract identifiers must be unique and nonempty")
 
     incomplete: list[str] = []
     backend_tests: list[str] = []
@@ -121,7 +115,7 @@ def validate_manifest(
         "scenario_count": len(scenarios),
         "scenario_ids": sorted(actual_ids),
         "incomplete_scenarios": sorted(incomplete),
-        "release_ready": not incomplete,
+        "contracts_complete": not incomplete,
         "backend_tests": list(dict.fromkeys(backend_tests)),
         "frontend_tests": list(dict.fromkeys(frontend_tests)),
     }
@@ -280,10 +274,10 @@ def run_gate(
         if frontend_only
         else "full",
         "passed": full
-        and validation["release_ready"]
+        and validation["contracts_complete"]
         and executed
         and set(reports) == {"backend", "frontend"},
-        "scope": "VS-01 deterministic contracts; not live model or product-quality acceptance",
+        "scope": "Rebuilt mainline contract baseline; not exhaustive historical coverage or model-quality acceptance",
     }
 
 

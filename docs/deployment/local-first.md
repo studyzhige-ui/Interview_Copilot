@@ -194,8 +194,9 @@ https://www.postgresql.org/docs/current/explicit-locking.html 。
 现有模型目录只读复用，不下载新模型、不启用远端 fallback。普通 CPU tokenizer
 仍可本地加载，但强制 `local_files_only`，不加载 Embedding 权重。
 
-这是 **P2 的已接入子集**：支持 SentenceTransformer / CrossEncoder（当前 BGE 基线）。
-不是声称已接入 Qwen ASR、CosyVoice、ForcedAligner、说话人和 Docling，也不是实时媒体服务。
+当前接入 SentenceTransformer / CrossEncoder（BGE 基线）和 Pyannote Community-1
+说话人观察。WhisperX 负责 ASR、字词对齐与窗口编排；Pyannote 只在 broker 子进程执行。
+Qwen 分支没有恢复；Docling 和实时媒体不属于这个 broker 合同。
 缺少模型不会妨碍代码回归；实际权重、GPU内核、精度和显存峰值在用户实机另验。
 
 ### 明确准备、启动与诊断
@@ -210,6 +211,7 @@ SentenceTransformers；不要把 WhisperX/Qwen/vLLM 的不同依赖强行装进�
 # 运行目录选 Linux 文件系统，保持 Unix socket 路径短于 100 字节。
 python scripts/prepare_local_inference.py \
   --python /home/your-user/venvs/local-rag/bin/python --device cuda \
+  --diarization-python /home/your-user/venvs/whisperx/bin/python \
   --runtime-dir /home/your-user/.ic-inference \
   --model-root /mnt/d/Projects/Python/Interview_Copilot/data/cache/models
 
@@ -275,3 +277,21 @@ SDK模型逻辑另外用小型替身检查前缀、长度和结果形状。没�
 模型通过 `scripts/init_models.py` 准备；不要安装退役 Qwen ASR/TTS 环境或配置其提供者。
 长录音实现、验证与限制见 [主线收敛记录](../implementation/mainline-convergence-20261011.md#whisperx-长录音补齐)。
 本地 TTS/实时合成目前仍未补齐；Edge TTS 只可显式启用，不能视为本地功能替代。
+
+
+### 2026-10-11 说话人主线接入
+
+准备脚本复用 WhisperX 的启用判定：`auto` + 本地 WhisperX 或显式 `pyannote`
+加入 diarization 角色；远端 ASR 的 `auto` 不额外要求本地语音权重。可用
+`--diarization-python` 指向已有 Pyannote 环境，否则复用 `--python`。模型 ID 取
+`DIARIZATION_MODEL_ID`（默认 `pyannote-community/speaker-diarization-community-1`）。
+仅使用 RAG 且不装语音模型时明确设置 `DIARIZATION_MODE=none`。
+
+当前音频 wire 合同为 `pyannote-community-pcm16-speaker-vectors-v2`，请求显式携带
+`max_speakers`，每个观察窗口最多 30 秒 PCM16。窗口局部标签经现有 SpeakerIdentity
+合并成整段身份。旧 broker 配置应停止后重新准备、切换；不保留 v1 兼容分支。
+说话人 CUDA 预约 3000 MiB，同样只是调度估算；WhisperX ASR/对齐仍不受 broker 显存预算控制。
+本轮真实 CPU 121.617375 秒录音通过 6 次 broker 请求，393 字无漏识别/重复，仍有两处同音字错误。
+
+简历分段需迁移 `0074`。已有简历保留原文、候选和版本；主动调用现有重新解析入口后生成
+对应当前版本的分段，不会悄悄触发历史简历的付费模型调用。新上传使用同一次解析请求生成分段。

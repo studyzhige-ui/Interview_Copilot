@@ -144,22 +144,24 @@ npm run build
 
 Release validation must not compete with locally running model services for
 GPU memory. Run broad backend groups serially with CUDA hidden, or use the
-cross-stage runner, which enforces that policy for its child processes and
-terminates a timed-out child before continuing:
+current contract gate. Set the environment explicitly for its child processes:
 
 ```powershell
 $env:CUDA_VISIBLE_DEVICES = "-1"
 $env:TOKENIZERS_PARALLELISM = "false"
-python evaluation/career_scenario_eval.py
+python evaluation/career_agent_os_eval.py
 ```
 
 ```bash
 CUDA_VISIBLE_DEVICES=-1 TOKENIZERS_PARALLELISM=false \
-  python evaluation/career_scenario_eval.py
+  python evaluation/career_agent_os_eval.py
 ```
 
 Do not launch overlapping full-suite `pytest` commands in the same checkout.
 Protocol-faithful provider tests do not require a GPU.
+The rebuilt coverage and explicit fixture requirements are listed in
+[the current test baseline](docs/implementation/current-test-baseline.md); it does
+not claim all historical Stage 0-5 or VS01 scenarios are covered.
 
 Database schema changes use Alembic:
 

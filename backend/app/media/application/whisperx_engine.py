@@ -103,7 +103,7 @@ def _is_local_asr_active() -> bool:
 
 
 def _should_load_diarization() -> bool:
-    """Return True if Pyannote should be loaded into this worker process."""
+    """Return True if this worker should request broker diarization."""
     mode = (settings.DIARIZATION_MODE or "auto").strip().lower()
     if mode == "none":
         return False
@@ -162,10 +162,10 @@ def _init_whisper_only():
 
 
 def _init_diarize_only():
-    """Load Pyannote into ``diarize_model``. No-op if already loaded / not needed.
+    """Bind the broker client in ``diarize_model``; never load Pyannote here.
 
     Independent from WhisperX so hybrid mode (remote ASR + local diarization)
-    can opt in just to Pyannote without forcing a WhisperX download.
+    can request broker diarization without forcing a WhisperX ASR download.
     """
     global diarize_model, _diarization_model_id
     if diarize_model is not None:
@@ -173,32 +173,11 @@ def _init_diarize_only():
     if not _should_load_diarization():
         return
 
-    device = _local_device()
-    prepare_hf_runtime()
-    diarization_model_path = resolve_local_snapshot(settings.DIARIZATION_MODEL_ID)
-    if diarization_model_path is None:
-        from app.core.hf_runtime import format_missing_model_error
+    from app.local_inference.diarization import DiarizationClient
 
-        raise RuntimeError(
-            format_missing_model_error(
-                model_id=settings.DIARIZATION_MODEL_ID,
-                role="Diarization",
-                filter_substring="diariz",
-                fix_hint="python scripts/init_models.py --only diarization",
-            )
-        )
-    # whisperx.diarize.DiarizationPipeline is a thin wrapper around the real
-    # pyannote pipeline — using it here means we get the same speaker label
-    # format as the pure-local path, so downstream alignment / formatting
-    # code is identical regardless of which ASR produced the words.
-    from whisperx.diarize import DiarizationPipeline
-
-    diarize_model = DiarizationPipeline(
-        model_name=diarization_model_path,
-        device=device,
-    )
+    diarize_model = DiarizationClient(model=settings.DIARIZATION_MODEL_ID)
     _diarization_model_id = settings.DIARIZATION_MODEL_ID
-    logger.info("Pyannote diarization ready (mode=%s).", settings.DIARIZATION_MODE)
+    logger.info("Pyannote broker client ready (mode=%s).", settings.DIARIZATION_MODE)
 
 
 def _get_alignment_model(language: str) -> tuple[Any, dict[str, Any], str]:
@@ -269,15 +248,7 @@ def init_whisper_model():
             logger.error("WhisperX load failed: %s", exc)
             raise
     if _should_load_diarization():
-        try:
-            _init_diarize_only()
-        except Exception as exc:
-            # Hybrid mode is opt-in — if Pyannote can't load, downgrade to
-            # single-speaker rather than failing the whole worker.
-            logger.warning(
-                "Pyannote load failed; diarization disabled for this worker: %s",
-                exc,
-            )
+        _init_diarize_only()
 
 
 # ── Local-only synchronous pipeline (used by registry's local profile) ─
@@ -360,71 +331,65 @@ def _run_whisperx_sync(file_path: str, language: str | None = "zh") -> str:
     )
     result = _transcribe_with_word_timestamps(audio, language=effective_lang)
     if diarize_model is not None:
-        diarize_segments = diarize_model(
-            audio,
-            min_speakers=settings.DIARIZATION_MIN_SPEAKERS,
-            max_speakers=settings.DIARIZATION_MAX_SPEAKERS,
-        )
+        from app.core.async_runtime import run_async
+
+        diarize_segments = run_async(_diarization_frame(audio))
         result = whisperx.assign_word_speakers(diarize_segments, result)
     return _segments_to_markdown(result.get("segments", []))
 
 
-def _annotation_intervals(annotation: Any) -> list[dict[str, Any]]:
-    return [
-        {
-            "start": float(segment.start),
-            "end": float(segment.end),
-            "speaker_id": str(speaker),
-        }
-        for segment, _track, speaker in annotation.itertracks(yield_label=True)
-    ]
-
-
-def _run_diarization_observations(audio: Any) -> dict[str, Any]:
-    """Validated per-window Community-1 tracks and acoustic identities."""
+async def _run_diarization_observations(audio: Any) -> dict[str, Any]:
+    """The broker is the sole owner of the Community-1 model and execution."""
     if diarize_model is None:
         raise RuntimeError("interview_evidence_requires_diarization")
-    import torch
-    from pyannote.core import Segment
-    from app.local_inference.speaker_audio import validate_diarization_result
+    import numpy as np
 
-    # Recording bounds cannot force two people into a window containing one.
-    with torch.inference_mode():
-        output = diarize_model.model(
-            {"waveform": torch.from_numpy(audio[None, :]), "sample_rate": 16_000},
-            min_speakers=1,
-            max_speakers=settings.DIARIZATION_MAX_SPEAKERS,
-        )
-    labels = output.speaker_diarization.labels()
-    embeddings = output.speaker_embeddings
-    if labels and (
-        embeddings is None or embeddings.ndim != 2 or len(embeddings) != len(labels)
-    ):
-        raise ValueError("diarization_embeddings_missing")
-    # Pyannote's padded analysis frames can extend beyond a fractional input
-    # duration. Its annotation crop defines observations on the real PCM extent;
-    # the strict wire validator below still receives only physical audio times.
-    extent = Segment(0, len(audio) / 16_000)
-    regular = output.speaker_diarization.crop(extent)
-    exclusive = output.exclusive_speaker_diarization.crop(extent)
-    identities = regular.labels()
-    return validate_diarization_result(
-        {"audio": {"samples": len(audio)}},
-        {
-            "regular": sorted(
-                _annotation_intervals(regular),
-                key=lambda r: (r["start"], r["end"], r["speaker_id"]),
-            ),
-            "exclusive": _annotation_intervals(exclusive),
-            "speakers": [
-                {
-                    "speaker_id": label,
-                    "embedding": embeddings[labels.index(label)].tolist(),
-                }
-                for label in identities
-            ],
-        },
+    if not np.isfinite(audio).all() or np.any(audio < -1) or np.any(audio > 1):
+        raise ValueError("invalid_diarization_audio")
+    pcm = np.clip(np.rint(audio * 32768), -32768, 32767).astype("<i2").tobytes()
+    return await diarize_model.diarize(
+        pcm, max_speakers=settings.DIARIZATION_MAX_SPEAKERS
     )
+
+
+async def _diarization_frame(audio: Any):
+    """Bound generic/hybrid observations too, with one recording identity map."""
+    import numpy as np
+    import pandas as pd
+    from app.media.application.evidence_windows import evidence_windows
+    from app.media.application.speaker_identity import SpeakerIdentity
+
+    if not np.isfinite(audio).all() or np.any(audio < -1) or np.any(audio > 1):
+        raise ValueError("invalid_diarization_audio")
+    identities = SpeakerIdentity(max_speakers=settings.DIARIZATION_MAX_SPEAKERS)
+
+    async def chunks():
+        for i in range(0, len(audio), 16000):
+            yield (
+                np.clip(np.rint(audio[i : i + 16000] * 32768), -32768, 32767)
+                .astype("<i2")
+                .tobytes()
+            )
+
+    rows = []
+    async for window in evidence_windows(
+        chunks(),
+        max_samples=settings.USAGE_AUDIO_MAX_MS * 16,
+        choose_end=lambda pcm, start, end: end,
+    ):
+        samples = np.frombuffer(window.pcm, dtype="<i2").astype(np.float32) / 32768.0
+        result = await _run_diarization_observations(samples)
+        mapping = identities.assign(result["speakers"])
+        for row in result["regular"]:
+            start = max(window.core_start / 16000, window.start / 16000 + row["start"])
+            end = min(window.core_end / 16000, window.start / 16000 + row["end"])
+            if end > start:
+                rows.append(
+                    {"start": start, "end": end, "speaker": mapping[row["speaker_id"]]}
+                )
+    if len({row["speaker"] for row in rows}) < settings.DIARIZATION_MIN_SPEAKERS:
+        raise ValueError("recording_speaker_count_below_minimum")
+    return pd.DataFrame(rows, columns=["start", "end", "speaker"])
 
 
 def _speech_core_end(pcm: bytes, start: int, limit: int) -> int:
@@ -550,7 +515,7 @@ async def _collect_windowed_evidence(
             # The timestamp-aware decoder advances through every utterance.
             # Each sample is transcribed once; context is only for diarization.
             result = _transcribe_with_word_timestamps(core_audio, language=language)
-            diarization = _run_diarization_observations(audio)
+            diarization = await _run_diarization_observations(audio)
             mapping = speakers.assign(diarization["speakers"])
             for name, rows in tracks.items():
                 for row in diarization[name]:
@@ -701,11 +666,12 @@ def align_remote_words_with_local_diarization(
     ``assign_word_speakers`` to label each word, and finally collapse
     consecutive same-speaker words into a single ``**[Speaker]**:`` line.
 
-    If diarization isn't loaded for this worker (DIARIZATION_MODE=none, or
-    Pyannote model missing) we degrade to single-speaker output instead of
-    raising.
+    Explicitly disabled diarization returns a single-speaker transcript.
+    A configured but unavailable broker must fail instead of inventing a label.
     """
     if diarize_model is None:
+        if _should_load_diarization():
+            raise RuntimeError("configured_diarization_client_unavailable")
         logger.info(
             "Hybrid diarization requested but diarize_model not loaded; "
             "returning single-speaker output."
@@ -717,11 +683,9 @@ def align_remote_words_with_local_diarization(
     import whisperx
 
     audio = whisperx.load_audio(file_path)
-    diarize_segments = diarize_model(
-        audio,
-        min_speakers=settings.DIARIZATION_MIN_SPEAKERS,
-        max_speakers=settings.DIARIZATION_MAX_SPEAKERS,
-    )
+    from app.core.async_runtime import run_async
+
+    diarize_segments = run_async(_diarization_frame(audio))
     # whisperx.assign_word_speakers wants a dict with "segments" containing
     # word-level entries. The OpenAI verbose_json shape is already close —
     # word entries use "word"/"start"/"end" keys, exactly what whisperx expects.

@@ -114,12 +114,18 @@ def _read_resume_inner(
         if args.offset > len(text):
             return {"error": "resume_page_out_of_range", "raw_resume_available": False}
         end = min(len(text), args.offset + args.limit)
+        sections = resume_artifact_service.read_resume_sections(primary)
         return {
             "resume_id": primary.artifact.id,
             "artifact_version_id": primary.current_version.id,
             "title": primary.current_version.title,
             "is_default": bool(primary.state.is_default),
-            "section_count": 0,
+            "section_count": len(sections),
+            "sections": [
+                row
+                for row in sections
+                if row["end"] > args.offset and row["start"] < end
+            ],
             "raw_resume_available": True,
             "source": "artifact_version",
             "parse_status": primary.state.parse_status,

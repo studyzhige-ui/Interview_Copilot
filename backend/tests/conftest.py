@@ -1,221 +1,52 @@
-"""Shared pytest fixtures for the whole backend test suite.
-
-What lives here vs. per-file fixtures
--------------------------------------
-* Cross-cutting setup (env defaults, stubbing heavy ML imports) goes here.
-* ``test_engine`` / ``db_session`` provide an in-memory SQLite with every ORM
-  model loaded, using a SAVEPOINT pattern so a test can call
-  ``session.rollback()`` after an ``IntegrityError`` without losing the
-  outer transaction.
-* The rate-limit autouse fixture flips slowapi off so per-endpoint 5/min
-  caps don't cascade-fail later tests.
-
-If a test directory needs its own engine (e.g. spinning up real Postgres),
-it can ignore these fixtures and create its own — they're independent.
-"""
+"""Current mainline contracts: isolated database and explicit provider doubles."""
 
 import os
-import sys
-from unittest.mock import MagicMock
+
+os.environ.update(
+    DATABASE_URL="sqlite://",
+    SECRET_KEY="contract-suite-not-a-production-secret",
+    LANGSMITH_TRACING="false",
+)
 
 import pytest
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
-
-# ── Stub heavy ML modules so importing app.* never blows up at test time ──
-_MAYBE_MISSING = [
-    "whisperx",
-    "whisperx.diarize",
-    "pyannote",
-    "pyannote.audio",
-]
-for module_name in _MAYBE_MISSING:
-    if module_name not in sys.modules:
-        sys.modules[module_name] = MagicMock()
-
-
-# ── Test-safe env defaults — set BEFORE app.core.config gets imported ─────
-# In-memory URL: it only exists so app.core.config validates; every test that
-# touches a DB uses the fixtures below. A file path here would litter the
-# repo with stray ``test_unit.db`` files whenever something connects.
-os.environ.setdefault("DATABASE_URL", "sqlite://")
-os.environ.setdefault("DEEPSEEK_API_KEY", "test-key-not-real")
-os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production-32-bytes")
-
-
-# ── In-memory SQLite engine shared across the test session ───────────────
-# StaticPool keeps one connection so tests + dependency-overridden ``get_db``
-# see the same schema/data. Required for SQLite-in-memory.
-TEST_DB_URL = "sqlite://"
 
 
 @pytest.fixture(scope="session")
-def test_engine():
-    """Single engine for the whole pytest run, all ORM tables created once."""
-    engine = create_engine(
-        TEST_DB_URL,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-
-    # app.models.__init__ imports every model module, so this single import
-    # registers all tables on Base.metadata. New models only need to be added
-    # to app/models/__init__.py (alembic/env.py relies on the same package).
+def engine():
     import app.models  # noqa: F401
     from app.db.database import Base
 
-    Base.metadata.create_all(bind=engine)
-    yield engine
-    Base.metadata.drop_all(bind=engine)
-    engine.dispose()
+    value = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(value)
+    yield value
+    value.dispose()
 
 
 @pytest.fixture
-def db_session(test_engine):
-    """Per-test SQLAlchemy session with SAVEPOINT-style rollback.
-
-    Each test runs in an outer transaction that auto-rolls back at teardown,
-    AND inside a nested SAVEPOINT that auto-restarts after every
-    ``session.commit()`` / ``session.rollback()`` the test does. That lets
-    tests assert ``IntegrityError`` (which dirties the transaction state)
-    without poisoning the rest of the test or its peers.
-    """
-    connection = test_engine.connect()
-    outer = connection.begin()
-    session = sessionmaker(bind=connection, expire_on_commit=False)()
-
-    nested = connection.begin_nested()
-
-    @event.listens_for(session, "after_transaction_end")
-    def _restart_savepoint(sess, trans):
-        nonlocal nested
-        if trans.nested and not trans._parent.nested:
-            nested = connection.begin_nested()
-
-    try:
+def db(engine):
+    connection = engine.connect()
+    transaction = connection.begin()
+    with Session(
+        connection, join_transaction_mode="create_savepoint", expire_on_commit=False
+    ) as session:
         yield session
-    finally:
-        session.close()
-        if outer.is_active:
-            outer.rollback()
-        connection.close()
-
-
-# ── Autouse: keep slowapi from rate-limiting tests ────────────────────────
-# Every auth endpoint has ``@limiter.limit(RATE_AUTH)`` (5/min). Without this
-# fixture, a test file that hits /login a few times to set up state would
-# start getting 429s mid-file. Disabling the limiter at module level is the
-# standard slowapi pattern for tests.
-@pytest.fixture(autouse=True)
-def _disable_rate_limiter():
-    try:
-        from app.core.rate_limit import limiter
-
-        prev = limiter.enabled
-        limiter.enabled = False
-        yield
-        limiter.enabled = prev
-    except ImportError:
-        # rate_limit module not imported yet — nothing to disable.
-        yield
-
-
-class NoCloseSession:
-    """Forward attribute access to a shared test session; ``close()``
-    becomes a commit so cross-call state survives service-owned
-    ``SessionLocal()`` usage. Context-manager protocol supported for
-    ``with SessionLocal() as db`` call sites."""
-
-    def __init__(self, inner):
-        self._inner = inner
-
-    def __getattr__(self, name):
-        return getattr(self._inner, name)
-
-    def close(self):
-        self._inner.commit()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-        return False
-
-
-def patch_session_locals(monkeypatch, db_session, *modules) -> None:
-    """Route every listed module's ``SessionLocal`` at the test session.
-
-    NB: enumerated modules only — a new module that owns sessions must be
-    added by its tests explicitly (silently escaping to the real DB is the
-    failure mode this helper documents).
-    """
-    for mod in modules:
-        monkeypatch.setattr(mod, "SessionLocal", lambda: NoCloseSession(db_session))
-
-
-@pytest.fixture(autouse=True)
-def isolate_unit_task_transport(request, monkeypatch):
-    """Unit tests must not publish real work or wait on an external broker."""
-    if request.node.get_closest_marker("integration"):
-        return
-    from types import SimpleNamespace
-    from uuid import uuid4
-    from app.task_queue.celery_app import celery_app
-
-    monkeypatch.setattr(
-        celery_app, "send_task", lambda *args, **kwargs: SimpleNamespace(id=uuid4().hex)
-    )
+    transaction.rollback()
+    connection.close()
 
 
 @pytest.fixture
-def usage_database(tmp_path, monkeypatch):
-    """Real independent short transactions for provider-wire unit tests.
-
-    Opt-in, not a global accounting bypass. The provider is faked by the test;
-    admission/settlement persist to a real SQLite file with owner constraints.
-    Integration/browser tests use their PostgreSQL and real authentication.
-    """
-    from app.db.database import Base
+def owners(db):
     from app.models.user import User
-    from app.models.model_budget import UsageAccount
-    from app.usage import runtime
 
-    ledger_engine = create_engine(
-        f"sqlite:///{tmp_path / 'consumption.sqlite'}",
-        connect_args={"check_same_thread": False},
-    )
-
-    @event.listens_for(ledger_engine, "connect")
-    def enable_fk(connection, _record):
-        connection.execute("PRAGMA foreign_keys=ON")
-
-    Base.metadata.create_all(ledger_engine)
-    factory = sessionmaker(bind=ledger_engine, expire_on_commit=False)
-    with factory() as session:
-        session.add_all(
-            [
-                User(id=1, username="alice", hashed_password="x"),
-                User(id=2, username="bob", hashed_password="x"),
-                User(id=7, username="mcp-owner", hashed_password="x"),
-            ]
-        )
-        session.flush()
-        session.add_all([UsageAccount(user_id=i) for i in (1, 2, 7)])
-        session.commit()
-    monkeypatch.setattr(runtime, "SessionLocal", factory)
-    token = runtime._scope.set(None)
-    try:
-        yield factory
-    finally:
-        runtime.reset(token)
-        ledger_engine.dispose()
-
-
-@pytest.fixture
-def usage_scope(usage_database):
-    from app.usage import runtime
-
-    with runtime.scope(1, "provider-wire-unit", username="alice"):
-        yield usage_database
+    users = [
+        User(username=name, hashed_password="not-a-login-hash")
+        for name in ("contract_owner", "contract_other")
+    ]
+    db.add_all(users)
+    db.flush()
+    return users

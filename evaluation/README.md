@@ -245,8 +245,8 @@ interview. The current model-backed fixture campaign covers the full-interview
 path; deterministic tests cover the other two purposes. Do not claim live
 quality coverage for them from the old full-interview fixture results.
 
-Source correction PostgreSQL tests live in
-`backend/tests/test_db/test_review_corrections_postgres.py`. They use the existing
-required-PG fixture in CI. A skip in an environment without PostgreSQL is not a
-pass. New migration rollback is allowed only before nonreconstructable new
+The 2026-10-11 test rebuild replaces the historical test paths; current coverage
+and fixture requirements are documented in `docs/implementation/current-test-baseline.md`.
+Source-correction end-to-end coverage has not been re-established by that smaller baseline.
+New migration rollback is allowed only before nonreconstructable new
 versions/history are stored; export and migrate explicitly afterwards.

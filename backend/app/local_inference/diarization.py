@@ -24,12 +24,12 @@ class DiarizationClient:
             configured_socket_path(), timeout=settings.LOCAL_INFERENCE_TIMEOUT_SECONDS
         )
 
-    async def diarize(self, pcm: bytes, *, priority="background"):
+    async def diarize(self, pcm: bytes, *, max_speakers: int):
         task = make_audio_request(
             "diarization",
             self.binding,
             pcm,
-            priority=priority,
+            max_speakers=max_speakers,
             timeout=self.client.timeout,
         )
         return await self.client.acall(task, dimension=1)

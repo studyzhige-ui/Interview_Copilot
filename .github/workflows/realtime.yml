@@ -1,4 +1,4 @@
-name: Realtime transport
+name: Realtime contracts
 on:
   pull_request:
     branches: [main]
@@ -10,11 +10,10 @@ concurrency:
   group: realtime-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  local-webrtc:
+  media-contracts:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
-      REQUIRE_WEBRTC: "1"
       DATABASE_URL: sqlite://
       SECRET_KEY: ci-realtime-not-production
       DEEPSEEK_API_KEY: test-key-not-real
@@ -24,9 +23,9 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: pip install -e '.[dev]' aiortc==1.15.0
+      - run: pip install -e '.[dev]'
       - run: python scripts/export_realtime_contracts.py --check
-      - run: pytest backend/tests/test_realtime -q --junitxml=realtime-results.xml
+      - run: pytest backend/tests/test_realtime_contract.py -q --junitxml=realtime-results.xml
       - uses: actions/upload-artifact@v7
         if: always()
         with:

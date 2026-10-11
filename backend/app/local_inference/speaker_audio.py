@@ -13,7 +13,7 @@ import re
 from .audio import SAMPLE_RATE, decode_pcm
 from .errors import ProtocolError
 
-DIARIZATION_CONTRACT = "pyannote-community-pcm16-speaker-vectors-v1"
+DIARIZATION_CONTRACT = "pyannote-community-pcm16-speaker-vectors-v2"
 DIARIZATION_MAX_SPEAKERS = 32
 DIARIZATION_MAX_INTERVALS = 4096
 DIARIZATION_MAX_DIMENSION = 1024
@@ -24,8 +24,8 @@ def validate_diarization_request(task):
     decode_pcm(task["audio"])
     if (
         task["operation"] != "diarize"
-        or task["text"] != ""
-        or task["language"] is not None
+        or type(task["max_speakers"]) is not int
+        or not 1 <= task["max_speakers"] <= DIARIZATION_MAX_SPEAKERS
     ):
         raise ProtocolError("invalid_diarization_operation")
     return task

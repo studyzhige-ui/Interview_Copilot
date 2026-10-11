@@ -49,7 +49,7 @@ jobs:
         run: node desktop/scripts/build-acceptance.cjs
       - name: Inspect installer and bundled source integrity
         run: node desktop/scripts/verify-package.cjs --installer
-      - name: Verify installed Windows protocol and single-instance dispatch
+      - name: Verify packaged startup and single-instance dispatch
         shell: pwsh
         run: ./desktop/scripts/test-windows-dispatch.ps1
       - name: Preserve OS dispatch report even when acceptance fails
@@ -131,7 +131,7 @@ jobs:
               assert error.code in (401, 403), 'Fixture must enforce S3 authentication'
           PY
       - name: Verify optional S3 over real HTTP
-        run: python -m pytest backend/tests/test_storage/test_s3_http.py -q --junitxml=test-results/s3-http.xml
+        run: python -m pytest backend/tests/test_s3_http.py -q --junitxml=test-results/s3-http.xml
       - name: Preserve protocol fixture evidence
         if: always()
         uses: actions/upload-artifact@v4

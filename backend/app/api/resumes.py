@@ -203,3 +203,22 @@ def delete_resume(
         db.rollback()
         raise HTTPException(status_code=404, detail="简历不存在")
     return {"status": "deleted"}
+
+
+@router.get("/resumes/{resume_id}/sections")
+def resume_sections(
+    resume_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db, scope="function"),
+):
+    try:
+        record = resume_artifact_service.resolve_owned_resume(
+            db, user_pk=current_user.id, resume_id=resume_id
+        )
+    except resume_artifact_service.ResumeArtifactNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="resume_not_found") from exc
+    return {
+        "artifact_version_id": record.current_version.id,
+        "parse_status": record.state.parse_status,
+        "sections": resume_artifact_service.read_resume_sections(record),
+    }

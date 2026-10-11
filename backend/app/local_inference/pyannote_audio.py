@@ -7,7 +7,7 @@ at most 30 seconds of PCM, never an arbitrary file path, URL or cloud token.
 from __future__ import annotations
 
 from .audio import SAMPLE_RATE, decode_pcm
-from .speaker_audio import DIARIZATION_MAX_SPEAKERS, validate_diarization_result
+from .speaker_audio import validate_diarization_result
 
 
 def load(spec):
@@ -29,6 +29,7 @@ def load(spec):
 def infer(model, spec, task):
     import numpy as np
     import torch
+    from pyannote.core import Segment
 
     samples = np.frombuffer(decode_pcm(task["audio"]), dtype="<i2").astype(np.float32)
     samples /= 32768.0
@@ -39,16 +40,16 @@ def infer(model, spec, task):
                 "sample_rate": SAMPLE_RATE,
             },
             min_speakers=1,
-            max_speakers=DIARIZATION_MAX_SPEAKERS,
+            max_speakers=task["max_speakers"],
         )
-        regular = output.speaker_diarization
-        exclusive = output.exclusive_speaker_diarization
+        labels = output.speaker_diarization.labels()
+        extent = Segment(0, len(samples) / SAMPLE_RATE)
+        regular = output.speaker_diarization.crop(extent)
+        exclusive = output.exclusive_speaker_diarization.crop(extent)
         identities = regular.labels()
         embeddings = output.speaker_embeddings
-        if (
-            embeddings is None
-            or embeddings.ndim != 2
-            or len(embeddings) != len(identities)
+        if labels and (
+            embeddings is None or embeddings.ndim != 2 or len(embeddings) != len(labels)
         ):
             raise ValueError("diarization_embeddings_missing")
 
@@ -69,8 +70,11 @@ def infer(model, spec, task):
             "regular": intervals(regular),
             "exclusive": intervals(exclusive),
             "speakers": [
-                {"speaker_id": label, "embedding": embeddings[i].tolist()}
-                for i, label in enumerate(identities)
+                {
+                    "speaker_id": label,
+                    "embedding": embeddings[labels.index(label)].tolist(),
+                }
+                for label in identities
             ],
         }
         if spec.device == "cuda":

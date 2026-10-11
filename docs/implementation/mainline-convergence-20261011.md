@@ -166,10 +166,15 @@ stash 与提交历史保存于 `D:/Projects/Archives/Interview_Copilot-20261011/
   历史评审明确标记退役。此举不代表补齐本地 TTS：能力缺口仍然存在。
 
 审计保留项与边界：迁移脚本、旧数据引用、密码升级、独立评测、提供者适配和编译期 wire
-合同检查有独立职责，不能按 legacy/compatibility 命名删除。`prompts/resume.py` 的旧语义分段
-提示与 broker 的 `DiarizationClient` 目前只有测试引用；当前简历走 Artifact/资料候选抽取，
-WhisperX 直接观察说话人。二者是否包含仍需接回的语义分段/资源隔离能力，尚未证明完全等价，
-本轮保留并明确列为待核对项，不把无调用者当作功能已替代的证据。
+合同检查有独立职责，不能按 legacy/compatibility 命名删除。
+
+2026-10-11 后续核对已关闭两项保留项：旧简历分段的语义能力确实未被资料候选替代，
+已合并到同一次 Artifact 解析调用；只保存原文区间，绑定 parse_version_id，并通过
+read_resume 和所属用户的 sections API 提供。没有恢复 ResumeSection、Milvus 或另一套简历正文。
+broker 的进程隔离能力也确实未被 WhisperX 直接调用替代；当前所有 Pyannote 观察统一走
+DiarizationClient，模型只在 broker 子进程加载。保留原有分窗、严格证据校验及说话人连续性。
+这两项没有留下待核对项。测试全部重建，当前证据与边界见 current-test-baseline.md。
+
 
 对已跟踪源码及 Git 工作树完成核对；扫描忽略目录时，12 个旧测试临时目录返回访问拒绝，
 未修改 ACL 或绕过权限。不能宣称这些不可读目录内部也已逐文件查清；业务数据、模型缓存保留。

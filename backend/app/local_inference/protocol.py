@@ -108,7 +108,7 @@ def request(value: dict) -> dict:
         "timeout",
     }
     if isinstance(value, dict) and value.get("role") == "diarization":
-        expected = (expected - {"texts", "query"}) | {"audio", "text", "language"}
+        expected = (expected - {"texts", "query"}) | {"audio", "max_speakers"}
     if not isinstance(value, dict) or set(value) != expected:
         raise ProtocolError("invalid_request")
     if type(value["version"]) is not int or value["version"] != VERSION:

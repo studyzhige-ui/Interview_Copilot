@@ -1,4 +1,4 @@
-"""Prepare (never download) explicit local RAG and optional Pyannote diarization configuration."""
+"""Prepare (never download) explicit local RAG and Pyannote diarization configuration."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from app.core.config import settings  # noqa: E402
 from app.core.model_assets import inspect_model, local_path  # noqa: E402
 from app.local_inference.config import BrokerConfig, ModelSpec  # noqa: E402
 from app.local_inference.server import private_directory  # noqa: E402
+from app.media.application.whisperx_engine import _should_load_diarization  # noqa: E402
 
 
 def build_config(
@@ -26,7 +27,7 @@ def build_config(
     cache_root: Path,
     capacity_mib: int = 12000,
     diarization_python: str | None = None,
-    diarization_model: str = "pyannote/speaker-diarization-community-1",
+    diarization_model: str | None = None,
 ) -> BrokerConfig:
     if not sys.platform.startswith("linux"):
         raise ValueError("use_linux_or_wsl2")
@@ -79,10 +80,13 @@ def build_config(
                 else "",
             )
         )
-    if diarization_python is not None:
+    if _should_load_diarization():
+        diarization_model = diarization_model or settings.DIARIZATION_MODEL_ID
         from app.local_inference.speaker_audio import DIARIZATION_BINDING_TOKENS
 
-        diarization_executable = Path(diarization_python).expanduser().absolute()
+        diarization_executable = (
+            Path(diarization_python or python).expanduser().absolute()
+        )
         if not diarization_executable.is_file() or not os.access(
             diarization_executable, os.X_OK
         ):
@@ -122,11 +126,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python", required=True)
     parser.add_argument(
-        "--diarization-python", help="Optional isolated pyannote.audio 4 interpreter"
+        "--diarization-python",
+        help="Pyannote interpreter (defaults to --python; follows the active transcription/diarization settings)",
     )
-    parser.add_argument(
-        "--diarization-model", default="pyannote/speaker-diarization-community-1"
-    )
+    parser.add_argument("--diarization-model", default=None)
     parser.add_argument("--device", choices=("cpu", "cuda"), required=True)
     parser.add_argument("--runtime-dir", required=True)
     parser.add_argument("--model-root")
