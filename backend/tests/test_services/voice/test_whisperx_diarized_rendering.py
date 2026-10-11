@@ -1,10 +1,46 @@
 """Word-level speaker rendering for the local WhisperX pipeline."""
 
 import os
+import sys
+import pytest
 from types import SimpleNamespace
 
 from app.media.application import whisperx_engine
 from app.media.application.whisperx_engine import _segments_to_markdown
+
+
+@pytest.mark.parametrize("with_speakers", [False, True])
+def test_local_rendering_has_one_decoder_regardless_of_diarization(
+    monkeypatch, with_speakers
+):
+    calls = []
+    result = {"segments": [{"text": "完整结果", "speaker": "S0"}], "language": "zh"}
+
+    def decode(audio, *, language):
+        calls.append((audio, language))
+        return result
+
+    monkeypatch.setattr(whisperx_engine, "whisper_model", object())
+    monkeypatch.setattr(whisperx_engine, "_ensure_ffmpeg_available", lambda: "ffmpeg")
+    monkeypatch.setattr(whisperx_engine, "_transcribe_with_word_timestamps", decode)
+    monkeypatch.setattr(
+        whisperx_engine,
+        "diarize_model",
+        (lambda *a, **k: "tracks") if with_speakers else None,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "whisperx",
+        SimpleNamespace(
+            load_audio=lambda path: "decoded PCM",
+            assign_word_speakers=lambda tracks, observations: observations,
+        ),
+    )
+    assert (
+        whisperx_engine._run_whisperx_sync("recording.wav", "auto")
+        == "**[S0]**: 完整结果"
+    )
+    assert calls == [("decoded PCM", None)]
 
 
 def test_ffmpeg_resolver_uses_conda_library_bin(monkeypatch, tmp_path):

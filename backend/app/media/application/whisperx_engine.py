@@ -293,8 +293,9 @@ def _transcribe_with_word_timestamps(
     WhisperX's batched pipeline intentionally returns segment timestamps only.
     Segment-majority diarization is not sufficient for interviews because a
     single segment can contain both a question and its answer. When Pyannote is
-    active we therefore use the same already-loaded faster-whisper model with
-    ``word_timestamps=True``; no second ASR model or semantic rewrite is added.
+    active we need word-level observations. All local transcription also uses
+    this timestamp-aware decoder so an early end token cannot silently discard
+    the rest of a VAD batch. No second ASR model or semantic rewrite is added.
     """
 
     segments, info = whisper_model.model.transcribe(
@@ -357,22 +358,14 @@ def _run_whisperx_sync(file_path: str, language: str | None = "zh") -> str:
     effective_lang = (
         None if (language or "").strip().lower() in {"", "auto"} else language
     )
+    result = _transcribe_with_word_timestamps(audio, language=effective_lang)
     if diarize_model is not None:
-        result = _transcribe_with_word_timestamps(
-            audio,
-            language=effective_lang,
-        )
         diarize_segments = diarize_model(
             audio,
             min_speakers=settings.DIARIZATION_MIN_SPEAKERS,
             max_speakers=settings.DIARIZATION_MAX_SPEAKERS,
         )
         result = whisperx.assign_word_speakers(diarize_segments, result)
-    else:
-        kwargs: dict = {"batch_size": 16}
-        if effective_lang:
-            kwargs["language"] = effective_lang
-        result = whisper_model.transcribe(audio, **kwargs)
     return _segments_to_markdown(result.get("segments", []))
 
 
@@ -392,6 +385,7 @@ def _run_diarization_observations(audio: Any) -> dict[str, Any]:
     if diarize_model is None:
         raise RuntimeError("interview_evidence_requires_diarization")
     import torch
+    from pyannote.core import Segment
     from app.local_inference.speaker_audio import validate_diarization_result
 
     # Recording bounds cannot force two people into a window containing one.
@@ -401,13 +395,19 @@ def _run_diarization_observations(audio: Any) -> dict[str, Any]:
             min_speakers=1,
             max_speakers=settings.DIARIZATION_MAX_SPEAKERS,
         )
-    regular = output.speaker_diarization
-    identities = regular.labels()
+    labels = output.speaker_diarization.labels()
     embeddings = output.speaker_embeddings
-    if identities and (
-        embeddings is None or embeddings.ndim != 2 or len(embeddings) != len(identities)
+    if labels and (
+        embeddings is None or embeddings.ndim != 2 or len(embeddings) != len(labels)
     ):
         raise ValueError("diarization_embeddings_missing")
+    # Pyannote's padded analysis frames can extend beyond a fractional input
+    # duration. Its annotation crop defines observations on the real PCM extent;
+    # the strict wire validator below still receives only physical audio times.
+    extent = Segment(0, len(audio) / 16_000)
+    regular = output.speaker_diarization.crop(extent)
+    exclusive = output.exclusive_speaker_diarization.crop(extent)
+    identities = regular.labels()
     return validate_diarization_result(
         {"audio": {"samples": len(audio)}},
         {
@@ -415,13 +415,54 @@ def _run_diarization_observations(audio: Any) -> dict[str, Any]:
                 _annotation_intervals(regular),
                 key=lambda r: (r["start"], r["end"], r["speaker_id"]),
             ),
-            "exclusive": _annotation_intervals(output.exclusive_speaker_diarization),
+            "exclusive": _annotation_intervals(exclusive),
             "speakers": [
-                {"speaker_id": label, "embedding": embeddings[i].tolist()}
-                for i, label in enumerate(identities)
+                {
+                    "speaker_id": label,
+                    "embedding": embeddings[labels.index(label)].tolist(),
+                }
+                for label in identities
             ],
         },
     )
+
+
+def _speech_core_end(pcm: bytes, start: int, limit: int) -> int:
+    """Use WhisperX VAD's silence/min-cut boundaries, never a fixed mid-word cut."""
+    import numpy as np
+    from app.local_inference.audio import SAMPLE_RATE
+
+    audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+    vad = whisper_model.vad_model
+    scores = vad({"waveform": vad.preprocess_audio(audio), "sample_rate": SAMPLE_RATE})
+    chunks = vad.merge_chunks(
+        scores,
+        (limit - start) / SAMPLE_RATE,
+        onset=whisper_model._vad_params["vad_onset"],
+        offset=whisper_model._vad_params["vad_offset"],
+    )
+    spans = [span for chunk in chunks for span in chunk["segments"]]
+    # A core limit already in silence needs no adjustment. Otherwise retain
+    # the unfinished utterance for the next core, including all its PCM.
+    if not any(a * SAMPLE_RATE < limit < b * SAMPLE_RATE for a, b in spans):
+        return limit
+    candidates = [
+        int(b * SAMPLE_RATE) for _, b in spans if start < b * SAMPLE_RATE <= limit
+    ]
+    if not candidates:
+        # Leading silence is also a boundary: carry the whole first utterance
+        # rather than slicing it just before its end or repeatedly halving silence.
+        starts = [
+            int(a * SAMPLE_RATE) for a, _ in spans if start < a * SAMPLE_RATE <= limit
+        ]
+        if not starts:
+            raise ValueError("speech_core_boundary_missing")
+        return min(starts)
+    end = max(candidates)
+    following = next(
+        (int(a * SAMPLE_RATE) for a, _ in spans if a * SAMPLE_RATE >= end), end
+    )
+    return min(limit, (end + following) // 2)
 
 
 async def _collect_windowed_evidence(
@@ -447,7 +488,6 @@ async def _collect_windowed_evidence(
     from app.media.application.evidence_windows import evidence_windows
     from app.media.application.evidence_stitching import (
         restore_word_layout,
-        stitch_boundary,
     )
     from app.media.application.speaker_identity import SpeakerIdentity
     from app.media.application.pcm_stream import PCMStream
@@ -457,10 +497,9 @@ async def _collect_windowed_evidence(
     alignment_id = None
     speakers = SpeakerIdentity(max_speakers=settings.DIARIZATION_MAX_SPEAKERS)
     minimum_speakers = settings.DIARIZATION_MIN_SPEAKERS
-    output, pending = [], []
+    output = []
     tracks = {"regular": [], "exclusive": []}
     languages = set()
-    previous_end = None
     text_bytes = total_samples = 0
     last_word_start = 0.0
     max_ms = settings.USAGE_AUDIO_MAX_MS
@@ -493,7 +532,9 @@ async def _collect_windowed_evidence(
         file_path, max_bytes=settings.USAGE_AUDIO_MAX_BYTES, max_ms=max_ms
     ) as source:
         async for window in evidence_windows(
-            source, max_samples=max_ms * SAMPLE_RATE // 1000
+            source,
+            max_samples=max_ms * SAMPLE_RATE // 1000,
+            choose_end=_speech_core_end,
         ):
             await asyncio.sleep(0)
             check_models()
@@ -503,7 +544,12 @@ async def _collect_windowed_evidence(
                 window.core_start / SAMPLE_RATE,
                 window.core_end / SAMPLE_RATE,
             )
-            result = asr.transcribe(audio, batch_size=16, language=language)
+            core_audio = audio[
+                window.core_start - window.start : window.core_end - window.start
+            ]
+            # The timestamp-aware decoder advances through every utterance.
+            # Each sample is transcribed once; context is only for diarization.
+            result = _transcribe_with_word_timestamps(core_audio, language=language)
             diarization = _run_diarization_observations(audio)
             mapping = speakers.assign(diarization["speakers"])
             for name, rows in tracks.items():
@@ -523,7 +569,7 @@ async def _collect_windowed_evidence(
                             }
                         )
             segments = result.get("segments") or []
-            text = " ".join(str(segment["text"]).strip() for segment in segments)
+            text = "".join(str(segment["text"]) for segment in segments)
             if text.strip():
                 detected = str(result.get("language") or language or "").strip()
                 if not detected or not mapping:
@@ -539,7 +585,7 @@ async def _collect_windowed_evidence(
                     segments,
                     align_model,
                     metadata,
-                    audio,
+                    core_audio,
                     _local_device(),
                     return_char_alignments=False,
                 )
@@ -561,7 +607,7 @@ async def _collect_windowed_evidence(
                                 or not math.isfinite(v)
                                 for v in (start, end)
                             )
-                            or not 0 <= start < end <= len(audio) / SAMPLE_RATE
+                            or not 0 <= start < end <= len(core_audio) / SAMPLE_RATE
                             or start < last
                         ):
                             raise ValueError("invalid_evidence_word_time")
@@ -585,7 +631,7 @@ async def _collect_windowed_evidence(
                             "score": score,
                         }
                     )
-                words = restore_word_layout(text, words, offset)
+                words = restore_word_layout(text, words, core_start)
             else:
                 if any(
                     max(core_start, offset + row["start"])
@@ -594,29 +640,11 @@ async def _collect_windowed_evidence(
                 ):
                     raise ValueError("longform_speech_without_text")
                 words = []
-            if previous_end is not None:
-                finalized, pending = stitch_boundary(
-                    pending,
-                    words,
-                    boundary=core_start,
-                    overlap_start=offset,
-                    overlap_end=previous_end / SAMPLE_RATE,
-                )
-                append_words(finalized)
-            else:
-                pending = words
-            if (
-                len(output) + len(pending) > MAX_EVIDENCE_WORDS
-                or text_bytes + sum(len(w["text"].encode("utf-8")) for w in pending)
-                > MAX_EVIDENCE_TEXT_BYTES
-            ):
-                raise ValueError("longform_evidence_capacity")
-            previous_end = window.end
+            append_words(words)
             total_samples = window.core_end
             check_models()
         if not source.complete:
             raise ValueError("audio_decode_incomplete")
-    append_words(pending)
     if not output:
         raise ValueError("recording_has_no_transcribed_speech")
     if len({row["speaker_id"] for row in tracks["regular"]}) < minimum_speakers:

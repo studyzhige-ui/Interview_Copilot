@@ -1,17 +1,125 @@
 """Recording mechanics shared by the active WhisperX evidence collector."""
 
 from array import array
+from functools import partial
+from types import SimpleNamespace
 import math
 import sys
 import pytest
 from app.local_inference.audio import SAMPLE_RATE, MAX_PCM_BYTES
 from app.media.application.evidence_stitching import (
-    _lexical,
     restore_word_layout,
-    stitch_boundary,
 )
-from app.media.application.evidence_windows import evidence_windows
+from app.media.application.evidence_windows import evidence_windows as stream_windows
 from app.media.application.speaker_identity import SpeakerIdentity
+
+evidence_windows = partial(stream_windows, choose_end=lambda pcm, start, limit: limit)
+
+
+@pytest.mark.asyncio
+async def test_adaptive_cores_preserve_every_sample_once_including_fractional_tail():
+    source = b"".join([block async for block in blocks_for(91)]) + b"\x01\x02" * 17
+
+    async def blocks():
+        for start in range(0, len(source), MAX_PCM_BYTES):
+            yield source[start : start + MAX_PCM_BYTES]
+
+    windows = [
+        w
+        async for w in stream_windows(
+            blocks(),
+            max_samples=len(source) // 2,
+            choose_end=lambda pcm, start, limit: min(
+                limit, start + 13 * SAMPLE_RATE + 17
+            ),
+        )
+    ]
+    cores = []
+    cursor = 0
+    for window in windows:
+        assert window.core_start == cursor
+        assert len(window.pcm) <= MAX_PCM_BYTES
+        cores.append(
+            window.pcm[
+                2 * (window.core_start - window.start) : 2
+                * (window.core_end - window.start)
+            ]
+        )
+        cursor = window.core_end
+    assert b"".join(cores) == source
+    assert cursor == len(source) // 2
+    assert len(windows[-1].pcm) == MAX_PCM_BYTES
+    assert windows[-1].core_end - windows[-1].core_start <= 26 * SAMPLE_RATE
+
+
+@pytest.mark.asyncio
+async def test_short_tail_has_full_speaker_context_but_only_its_own_asr_core():
+    windows = [
+        w async for w in evidence_windows(blocks_for(80), max_samples=80 * SAMPLE_RATE)
+    ]
+    tail = windows[-1]
+    assert (tail.start, tail.core_start, tail.core_end) == (
+        50 * SAMPLE_RATE,
+        78 * SAMPLE_RATE,
+        80 * SAMPLE_RATE,
+    )
+    assert len(tail.pcm) == MAX_PCM_BYTES
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "choose", [lambda s, e: s, lambda s, e: e + 1, lambda s, e: True]
+)
+async def test_bad_adaptive_boundary_cannot_skip_or_repeat_samples(choose):
+    with pytest.raises(ValueError, match="core_boundary"):
+        [
+            w
+            async for w in stream_windows(
+                blocks_for(60),
+                max_samples=60 * SAMPLE_RATE,
+                choose_end=lambda pcm, start, limit: choose(start, limit),
+            )
+        ]
+
+
+@pytest.mark.parametrize(
+    "spans,expected",
+    [
+        ([(0.03, 7.8), (8.5, 16.6), (17.3, 19.6), (20.3, 29.96)], 19.95),
+        ([(0.03, 15), (15, 29.96)], 15),
+        ([(5, 29.96)], 5),
+        ([(0.03, 25), (29, 29.96)], 28),
+        ([], 28),
+    ],
+)
+def test_vad_boundary_keeps_utterances_whole_and_supports_min_cut(
+    monkeypatch, spans, expected
+):
+    from app.media.application import whisperx_engine as engine
+
+    class Vad:
+        def preprocess_audio(self, audio):
+            return audio
+
+        def __call__(self, payload):
+            assert len(payload["waveform"]) == 30 * SAMPLE_RATE
+            return object()
+
+        def merge_chunks(self, scores, duration, **kwargs):
+            return [{"segments": spans}] if spans else []
+
+    monkeypatch.setattr(
+        engine,
+        "whisper_model",
+        SimpleNamespace(
+            vad_model=Vad(),
+            _vad_params={"vad_onset": 0.5, "vad_offset": 0.363},
+        ),
+    )
+    boundary = engine._speech_core_end(
+        b"\0\0" * 30 * SAMPLE_RATE, 2 * SAMPLE_RATE, 28 * SAMPLE_RATE
+    )
+    assert abs(boundary / SAMPLE_RATE - expected) <= 1 / SAMPLE_RATE
 
 
 async def blocks_for(seconds):
@@ -110,52 +218,6 @@ def test_original_spacing_punctuation_and_fullwidth_text_are_preserved():
         restore_word_layout("ﬃ", [word("f", 0, 1), word("fi", 1, 2)], 0)
 
 
-def test_overlap_anchor_does_not_delete_real_repeated_words():
-    left = [word("go ", 25, 25.2), word("go!", 26, 26.2)]
-    right = [
-        word("go ", 25.02, 25.22),
-        word("go! ", 26.02, 26.22),
-        word("now", 27, 27.2),
-    ]
-    done, pending = stitch_boundary(
-        left, right, boundary=26, overlap_start=24, overlap_end=28
-    )
-    assert [_lexical(item["text"]) for item in done + pending] == ["go", "go", "now"]
-
-
-def test_silence_seam_and_ambiguous_boundary_are_distinct():
-    left, right = [word("before", 20, 21)], [word("after", 30, 31)]
-    assert stitch_boundary(
-        left, right, boundary=26, overlap_start=24, overlap_end=28
-    ) == (left, right)
-    with pytest.raises(ValueError, match="boundary_ambiguous"):
-        stitch_boundary(
-            [word("old", 25, 26)],
-            [word("new", 25, 26)],
-            boundary=26,
-            overlap_start=24,
-            overlap_end=28,
-        )
-    with pytest.raises(ValueError, match="boundary_capacity"):
-        stitch_boundary(
-            [word("a", 25, 26)] * 129, [], boundary=26, overlap_start=24, overlap_end=28
-        )
-
-
-@pytest.mark.parametrize(
-    "left,right",
-    [
-        ([word("before", 20, 21)], [word("after", 26.4, 27)]),
-        ([word("before", 25, 25.8)], [word("after", 30, 31)]),
-        ([word("before", 25, 25.8)], [word("after", 26.4, 27)]),
-    ],
-)
-def test_silence_at_core_boundary_preserves_context_words_on_either_side(left, right):
-    assert stitch_boundary(
-        left, right, boundary=26, overlap_start=24, overlap_end=28
-    ) == (left, right)
-
-
 def test_speaker_labels_can_swap_but_recording_identity_cannot():
     matcher = SpeakerIdentity()
     first = matcher.assign([voice("local_0", [1, 0]), voice("local_1", [0, 1])])
@@ -189,17 +251,6 @@ def test_speaker_anchor_does_not_drift_and_capacity_is_enforced():
         matcher.assign([voice("c", [-1, 0])])
 
 
-def test_boundary_keeps_separator_from_the_continuing_asr_observation():
-    left = restore_word_layout("Hello", [word("Hello", 25, 25.5)], 0)
-    right = restore_word_layout(
-        "Hello world!", [word("Hello", 1, 1.5), word("world", 3, 3.5)], 24
-    )
-    done, pending = stitch_boundary(
-        left, right, boundary=26, overlap_start=24, overlap_end=28
-    )
-    assert "".join(row["text"] for row in done + pending) == "Hello world!"
-
-
 @pytest.mark.asyncio
 async def test_reblocking_does_not_require_decoder_block_boundaries_to_align():
     async def source():
@@ -226,14 +277,3 @@ def test_speaker_policy_and_vectors_fail_without_numeric_coercion():
     for vector in ([True], ["1"], [float("inf")], [float("nan")], [10**500], [0], []):
         with pytest.raises(ValueError, match="speaker_embedding"):
             SpeakerIdentity().assign([voice("x", vector)])
-
-
-def test_anchor_does_not_hide_a_word_missing_from_the_other_observation():
-    with pytest.raises(ValueError, match="unmatched_discard"):
-        stitch_boundary(
-            [word("anchor ", 25, 25.2), word("missing", 27, 27.2)],
-            [word("anchor ", 25, 25.2), word("later", 30, 30.2)],
-            boundary=26,
-            overlap_start=24,
-            overlap_end=28,
-        )

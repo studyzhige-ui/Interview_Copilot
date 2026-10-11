@@ -33,6 +33,15 @@ class Annotation:
     def labels(self):
         return sorted({row[2] for row in self.rows})
 
+    def crop(self, extent):
+        return Annotation(
+            [
+                (max(start, extent.start), min(end, extent.end), label)
+                for start, end, label in self.rows
+                if max(start, extent.start) < min(end, extent.end)
+            ]
+        )
+
     def itertracks(self, yield_label):
         assert yield_label
         for start, end, label in self.rows:
@@ -98,15 +107,33 @@ def recording(monkeypatch, tmp_path):
             }
             for r in rows
         ]
-        if state.fault == "seam" and start:
-            for word in words[:2]:
-                word["start"] += 3
-                word["end"] += 3
+        if state.fault == "out_of_core" and start and words:
+            words[0]["end"] = len(audio) / 16000 + 0.1
         if state.fault == "time" and start and words:
             words[0]["start"] = -1
         if state.fault == "unaligned" and not start:
             words[0]["start"] = words[0]["end"] = None
         return {"word_segments": words}
+
+    def native_transcribe(audio, **kwargs):
+        result = transcribe(audio, **kwargs)
+        start, rows = rows_for(audio)
+        return (
+            iter(
+                [
+                    SimpleNamespace(
+                        text=(" " if index else "") + row[0],
+                        start=row[1] - start,
+                        end=row[2] - start,
+                        words=[],
+                    )
+                    for index, row in enumerate(rows)
+                ]
+                if result["segments"]
+                else []
+            ),
+            SimpleNamespace(language="en"),
+        )
 
     def diarize(data, **kwargs):
         assert kwargs == {"min_speakers": 1, "max_speakers": 2}
@@ -117,6 +144,9 @@ def recording(monkeypatch, tmp_path):
             else {"A": "local_1", "B": "local_0"}
         )
         tracks = Annotation([(r[1] - start, r[2] - start, labels[r[3]]) for r in rows])
+        if state.fault == "padded_frame" and tracks.rows:
+            a, _, label = tracks.rows[-1]
+            tracks.rows[-1] = (a, len(data["waveform"][0]) / 16000 + 0.125, label)
         inverse = {v: k for k, v in labels.items()}
         vectors = np.array(
             [
@@ -150,7 +180,17 @@ def recording(monkeypatch, tmp_path):
             return await super().__anext__()
 
     monkeypatch.setattr(pcm_stream, "PCMStream", ObservedPCM)
-    monkeypatch.setattr(engine, "whisper_model", SimpleNamespace(transcribe=transcribe))
+    monkeypatch.setattr(
+        engine,
+        "whisper_model",
+        SimpleNamespace(
+            model=SimpleNamespace(transcribe=native_transcribe),
+            transcribe=lambda *a, **k: pytest.fail(
+                "must not use one-shot batched decoding"
+            ),
+        ),
+    )
+    monkeypatch.setattr(engine, "_speech_core_end", lambda pcm, start, limit: limit)
     monkeypatch.setattr(engine, "diarize_model", SimpleNamespace(model=diarize))
     monkeypatch.setattr(engine, "_whisper_model_id", "whisperx-test")
     monkeypatch.setattr(engine, "_diarization_model_id", "community-test")
@@ -161,6 +201,13 @@ def recording(monkeypatch, tmp_path):
     monkeypatch.setattr(engine.settings, "DIARIZATION_MIN_SPEAKERS", 2)
     monkeypatch.setattr(engine.settings, "DIARIZATION_MAX_SPEAKERS", 2)
     monkeypatch.setitem(sys.modules, "whisperx", SimpleNamespace(align=align))
+    monkeypatch.setitem(
+        sys.modules,
+        "pyannote.core",
+        SimpleNamespace(
+            Segment=lambda start, end: SimpleNamespace(start=start, end=end)
+        ),
+    )
     monkeypatch.setitem(
         sys.modules,
         "torch",
@@ -185,7 +232,7 @@ def test_production_collector_preserves_words_duration_speakers_and_source(recor
     parts = collect(recording)
     assert parts.complete
     assert parts.transcript.duration_seconds == recording.duration
-    assert recording.calls == [0, 24, 50, 76]
+    assert recording.calls == [0, 26, 52, 78]
     assert [w["text"].strip() for w in parts.transcript.words] == [
         r[0] for r in recording.rows
     ]
@@ -213,7 +260,7 @@ def test_production_collector_preserves_words_duration_speakers_and_source(recor
         ("decoder", "late_decoder_failure"),
         ("missing_text", "speech_without_text"),
         ("time", "word_time"),
-        ("seam", "boundary_ambiguous"),
+        ("out_of_core", "word_time"),
     ],
 )
 def test_failed_later_window_never_returns_partial_evidence_or_retries(
@@ -222,7 +269,7 @@ def test_failed_later_window_never_returns_partial_evidence_or_retries(
     recording.fault = fault
     with pytest.raises((ValueError, RuntimeError), match=error):
         collect(recording)
-    assert recording.calls in ([0], [0, 24])
+    assert recording.calls in ([0], [0, 26])
     assert_closed(recording)
 
 
@@ -292,7 +339,7 @@ async def test_cancellation_between_windows_stops_models_and_reaps_decoder(recor
     assert_closed(recording)
 
 
-def test_missing_alignment_stays_unknown_when_seam_has_a_real_anchor(recording):
+def test_missing_alignment_stays_unknown_without_guessing_boundary_times(recording):
     recording.fault = "unaligned"
     result = collect(recording)
     assert result.transcript.words[0]["text"] == "Hello, "
@@ -324,6 +371,20 @@ def test_overlapping_speech_survives_core_clipping(recording):
     assert_closed(recording)
 
 
+def test_padded_diarization_frames_are_cropped_to_actual_audio(recording):
+    recording.fault = "padded_frame"
+    parts = collect(recording)
+    assert parts.speakers.regular[-1]["end"] == recording.duration
+    assert all(row["end"] <= recording.duration for row in parts.speakers.regular)
+    evidence = compose_transcript_evidence(
+        EvidenceSource(recording.path, "asset", "v1", "a" * 64, 100),
+        parts,
+        max_duration_ms=81_000,
+    )
+    assert len(evidence.words) == len(recording.rows)
+    assert_closed(recording)
+
+
 def test_partial_model_work_keeps_unknown_usage_not_refunded(recording, monkeypatch):
     from app.media.application import audio_transcription_service as service
     from app.media.application.evidence_pipeline import resolve_evidence_collector
@@ -347,6 +408,6 @@ def test_partial_model_work_keeps_unknown_usage_not_refunded(recording, monkeypa
             config=SimpleNamespace(model="whisperx-test"),
             collector=resolve_evidence_collector("local_whisperx"),
         )
-    assert recording.calls == [0, 24]
+    assert recording.calls == [0, 26]
     assert outcomes == ["unknown"]
     assert_closed(recording)

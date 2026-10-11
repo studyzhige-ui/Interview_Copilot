@@ -195,6 +195,9 @@ def test_whisperx_adapter_reports_loaded_models_not_current_setting_labels(monke
         ),
     )
     monkeypatch.setattr(engine, "_whisper_model_id", "loaded-asr")
+    monkeypatch.setattr(
+        engine, "_transcribe_with_word_timestamps", engine.whisper_model.transcribe
+    )
     monkeypatch.setattr(engine, "_diarization_model_id", "loaded-diarizer")
     monkeypatch.setattr(engine, "_ensure_ffmpeg_available", lambda: "ffmpeg")
     monkeypatch.setattr(engine, "_local_device", lambda: "cpu")
