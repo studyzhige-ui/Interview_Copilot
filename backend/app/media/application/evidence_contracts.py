@@ -9,6 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+MAX_EVIDENCE_WORDS = 200_000
+MAX_EVIDENCE_TEXT_BYTES = 1_000_000
+MAX_DIARIZATION_INTERVALS = 200_000
+
 
 @dataclass(frozen=True)
 class AlignedTranscript:

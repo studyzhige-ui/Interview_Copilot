@@ -202,7 +202,35 @@ def test_whisperx_adapter_reports_loaded_models_not_current_setting_labels(monke
         engine, "_get_alignment_model", lambda _: (object(), {}, "loaded-aligner")
     )
     tracks = [{"start": 0.0, "end": 1.0, "speaker_id": "S0"}]
-    monkeypatch.setattr(engine, "_run_diarization_tracks", lambda _: (tracks, tracks))
+    monkeypatch.setattr(engine.settings, "DIARIZATION_MIN_SPEAKERS", 1)
+    monkeypatch.setattr(
+        engine,
+        "_run_diarization_observations",
+        lambda _: {
+            "regular": tracks,
+            "exclusive": tracks,
+            "speakers": [{"speaker_id": "S0", "embedding": [1.0, 0.0]}],
+        },
+    )
+    from app.media.application import pcm_stream
+
+    class Source:
+        complete = False
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def __aiter__(self):
+            yield b"\0\0" * 16_000
+            self.complete = True
+
+    monkeypatch.setattr(pcm_stream, "PCMStream", Source)
     monkeypatch.setitem(
         sys.modules,
         "whisperx",
@@ -225,3 +253,27 @@ def test_whisperx_adapter_reports_loaded_models_not_current_setting_labels(monke
         engine.collect_interview_evidence_sync(
             "never-read.audio", model="different-asr"
         )
+
+
+def test_missing_alignment_tokenizer_fails_before_model_load_or_download(monkeypatch):
+    import sys
+    import pytest
+    from app.media.application import whisperx_engine as engine
+
+    def missing(_path):
+        raise LookupError("missing tokenizer")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError(
+            "inference must not download resources or load the model first"
+        )
+
+    monkeypatch.setattr(engine, "alignment_models", {})
+    monkeypatch.setitem(sys.modules, "nltk.data", SimpleNamespace(find=missing))
+    monkeypatch.setitem(sys.modules, "nltk", SimpleNamespace(download=forbidden))
+    monkeypatch.setattr(engine, "resolve_local_snapshot", forbidden)
+    monkeypatch.setitem(
+        sys.modules, "whisperx.alignment", SimpleNamespace(PUNKT_LANGUAGES={})
+    )
+    with pytest.raises(RuntimeError, match="alignment_tokenizer_missing"):
+        engine._get_alignment_model("zh")

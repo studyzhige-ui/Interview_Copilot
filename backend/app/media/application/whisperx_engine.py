@@ -208,6 +208,16 @@ def _get_alignment_model(language: str) -> tuple[Any, dict[str, Any], str]:
     cached = alignment_models.get(normalized)
     if cached is not None:
         return cached
+    from nltk.data import find
+    from whisperx.alignment import PUNKT_LANGUAGES
+
+    try:
+        find(f"tokenizers/punkt_tab/{PUNKT_LANGUAGES.get(normalized, 'english')}/")
+    except LookupError as exc:
+        raise RuntimeError(
+            "alignment_tokenizer_missing: run `python -m nltk.downloader punkt_tab` "
+            "before starting the worker; the application will not download it during inference"
+        ) from exc
     configured_id = settings.TRANSCRIPTION_ALIGNMENT_MODEL.strip()
     local_path = resolve_local_snapshot(configured_id)
     if local_path is None:
@@ -377,91 +387,274 @@ def _annotation_intervals(annotation: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _run_diarization_tracks(
-    audio: Any,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Return regular and Community-1 exclusive diarization tracks."""
-
+def _run_diarization_observations(audio: Any) -> dict[str, Any]:
+    """Validated per-window Community-1 tracks and acoustic identities."""
     if diarize_model is None:
-        raise RuntimeError(
-            "interview_evidence_requires_diarization: set DIARIZATION_MODE=auto "
-            "and install the configured Community-1 model"
-        )
+        raise RuntimeError("interview_evidence_requires_diarization")
     import torch
+    from app.local_inference.speaker_audio import validate_diarization_result
 
-    audio_data = {
-        "waveform": torch.from_numpy(audio[None, :]),
-        "sample_rate": 16_000,
-    }
-    bounds: dict[str, int] = {
-        "min_speakers": settings.DIARIZATION_MIN_SPEAKERS,
-        "max_speakers": settings.DIARIZATION_MAX_SPEAKERS,
-    }
-    if settings.DIARIZATION_MIN_SPEAKERS == settings.DIARIZATION_MAX_SPEAKERS:
-        bounds = {"num_speakers": settings.DIARIZATION_MIN_SPEAKERS}
-    output = diarize_model.model(audio_data, **bounds)
-    regular = getattr(output, "speaker_diarization", None)
-    exclusive = getattr(output, "exclusive_speaker_diarization", None)
-    if regular is None or exclusive is None:
-        raise RuntimeError(
-            "configured diarization model does not expose regular and exclusive tracks"
+    # Recording bounds cannot force two people into a window containing one.
+    with torch.inference_mode():
+        output = diarize_model.model(
+            {"waveform": torch.from_numpy(audio[None, :]), "sample_rate": 16_000},
+            min_speakers=1,
+            max_speakers=settings.DIARIZATION_MAX_SPEAKERS,
         )
-    return _annotation_intervals(regular), _annotation_intervals(exclusive)
+    regular = output.speaker_diarization
+    identities = regular.labels()
+    embeddings = output.speaker_embeddings
+    if identities and (
+        embeddings is None or embeddings.ndim != 2 or len(embeddings) != len(identities)
+    ):
+        raise ValueError("diarization_embeddings_missing")
+    return validate_diarization_result(
+        {"audio": {"samples": len(audio)}},
+        {
+            "regular": sorted(
+                _annotation_intervals(regular),
+                key=lambda r: (r["start"], r["end"], r["speaker_id"]),
+            ),
+            "exclusive": _annotation_intervals(output.exclusive_speaker_diarization),
+            "speakers": [
+                {"speaker_id": label, "embedding": embeddings[i].tolist()}
+                for i, label in enumerate(identities)
+            ],
+        },
+    )
 
 
-def collect_interview_evidence_sync(
-    file_path: str,
-    *,
-    model: str,
-    language: str | None = "zh",
+async def _collect_windowed_evidence(
+    file_path: str, *, model: str, language: str | None
 ):
-    """Legacy WhisperX adapter: collect observations, not canonical evidence.
-
-    The application captures the source and composes the evidence. This
-    adapter still decodes the recording as a whole. It is finite upload
-    recognition, not native incremental model streaming.
-    """
+    """One finite decoder, overlapping model windows, one recording evidence result."""
+    import asyncio
+    import math
+    from numbers import Real
+    import numpy as np
+    import whisperx
+    from app.local_inference.audio import SAMPLE_RATE
     from app.media.application.evidence_contracts import (
         AlignedTranscript,
         EvidenceParts,
         SpeakerEvidence,
     )
+    from app.media.application.evidence_contracts import (
+        MAX_EVIDENCE_WORDS,
+        MAX_EVIDENCE_TEXT_BYTES,
+        MAX_DIARIZATION_INTERVALS,
+    )
+    from app.media.application.evidence_windows import evidence_windows
+    from app.media.application.evidence_stitching import (
+        restore_word_layout,
+        stitch_boundary,
+    )
+    from app.media.application.speaker_identity import SpeakerIdentity
+    from app.media.application.pcm_stream import PCMStream
+
+    asr, diarizer = whisper_model, diarize_model
+    identities = (_whisper_model_id, _diarization_model_id)
+    alignment_id = None
+    speakers = SpeakerIdentity(max_speakers=settings.DIARIZATION_MAX_SPEAKERS)
+    minimum_speakers = settings.DIARIZATION_MIN_SPEAKERS
+    output, pending = [], []
+    tracks = {"regular": [], "exclusive": []}
+    languages = set()
+    previous_end = None
+    text_bytes = total_samples = 0
+    last_word_start = 0.0
+    max_ms = settings.USAGE_AUDIO_MAX_MS
+
+    def check_models():
+        if (
+            asr is not whisper_model
+            or diarizer is not diarize_model
+            or identities != (_whisper_model_id, _diarization_model_id)
+            or identities[0] != model
+        ):
+            raise ValueError("evidence_model_identity_changed")
+
+    def append_words(words):
+        nonlocal text_bytes, last_word_start
+        text_bytes += sum(len(w["text"].encode("utf-8")) for w in words)
+        if (
+            len(output) + len(words) > MAX_EVIDENCE_WORDS
+            or text_bytes > MAX_EVIDENCE_TEXT_BYTES
+        ):
+            raise ValueError("longform_evidence_capacity")
+        for word in words:
+            if word["start"] is not None:
+                if word["start"] < last_word_start:
+                    raise ValueError("longform_word_order_reversed")
+                last_word_start = word["start"]
+        output.extend(words)
+
+    async with PCMStream(
+        file_path, max_bytes=settings.USAGE_AUDIO_MAX_BYTES, max_ms=max_ms
+    ) as source:
+        async for window in evidence_windows(
+            source, max_samples=max_ms * SAMPLE_RATE // 1000
+        ):
+            await asyncio.sleep(0)
+            check_models()
+            audio = np.frombuffer(window.pcm, dtype="<i2").astype(np.float32) / 32768.0
+            offset = window.start / SAMPLE_RATE
+            core_start, core_end = (
+                window.core_start / SAMPLE_RATE,
+                window.core_end / SAMPLE_RATE,
+            )
+            result = asr.transcribe(audio, batch_size=16, language=language)
+            diarization = _run_diarization_observations(audio)
+            mapping = speakers.assign(diarization["speakers"])
+            for name, rows in tracks.items():
+                for row in diarization[name]:
+                    start, end = (
+                        max(core_start, offset + row["start"]),
+                        min(core_end, offset + row["end"]),
+                    )
+                    if start < end:
+                        if len(rows) >= MAX_DIARIZATION_INTERVALS:
+                            raise ValueError("longform_track_capacity")
+                        rows.append(
+                            {
+                                "start": start,
+                                "end": end,
+                                "speaker_id": mapping[row["speaker_id"]],
+                            }
+                        )
+            segments = result.get("segments") or []
+            text = " ".join(str(segment["text"]).strip() for segment in segments)
+            if text.strip():
+                detected = str(result.get("language") or language or "").strip()
+                if not detected or not mapping:
+                    raise ValueError("longform_text_without_language_or_speakers")
+                align_model, metadata, current_alignment_id = _get_alignment_model(
+                    detected
+                )
+                if alignment_id is not None and alignment_id != current_alignment_id:
+                    raise ValueError("evidence_alignment_identity_changed")
+                alignment_id = current_alignment_id
+                languages.add(detected)
+                aligned = whisperx.align(
+                    segments,
+                    align_model,
+                    metadata,
+                    audio,
+                    _local_device(),
+                    return_char_alignments=False,
+                )
+                raw = aligned.get("word_segments") or []
+                if (
+                    len(raw) > MAX_EVIDENCE_WORDS
+                    or len(text.encode("utf-8")) > MAX_EVIDENCE_TEXT_BYTES
+                ):
+                    raise ValueError("longform_evidence_capacity")
+                words = []
+                last = 0.0
+                for word in raw:
+                    start, end = word.get("start"), word.get("end")
+                    if start is not None or end is not None:
+                        if (
+                            any(
+                                isinstance(v, bool)
+                                or not isinstance(v, Real)
+                                or not math.isfinite(v)
+                                for v in (start, end)
+                            )
+                            or not 0 <= start < end <= len(audio) / SAMPLE_RATE
+                            or start < last
+                        ):
+                            raise ValueError("invalid_evidence_word_time")
+                        start, end = float(start), float(end)
+                        last = start
+                    score = word.get("score")
+                    if score is not None:
+                        if (
+                            isinstance(score, bool)
+                            or not isinstance(score, Real)
+                            or not math.isfinite(score)
+                            or not 0 <= score <= 1
+                        ):
+                            raise ValueError("invalid_evidence_word_confidence")
+                        score = float(score)
+                    words.append(
+                        {
+                            "text": word["word"],
+                            "start": start,
+                            "end": end,
+                            "score": score,
+                        }
+                    )
+                words = restore_word_layout(text, words, offset)
+            else:
+                if any(
+                    max(core_start, offset + row["start"])
+                    < min(core_end, offset + row["end"])
+                    for row in diarization["regular"]
+                ):
+                    raise ValueError("longform_speech_without_text")
+                words = []
+            if previous_end is not None:
+                finalized, pending = stitch_boundary(
+                    pending,
+                    words,
+                    boundary=core_start,
+                    overlap_start=offset,
+                    overlap_end=previous_end / SAMPLE_RATE,
+                )
+                append_words(finalized)
+            else:
+                pending = words
+            if (
+                len(output) + len(pending) > MAX_EVIDENCE_WORDS
+                or text_bytes + sum(len(w["text"].encode("utf-8")) for w in pending)
+                > MAX_EVIDENCE_TEXT_BYTES
+            ):
+                raise ValueError("longform_evidence_capacity")
+            previous_end = window.end
+            total_samples = window.core_end
+            check_models()
+        if not source.complete:
+            raise ValueError("audio_decode_incomplete")
+    append_words(pending)
+    if not output:
+        raise ValueError("recording_has_no_transcribed_speech")
+    if len({row["speaker_id"] for row in tracks["regular"]}) < minimum_speakers:
+        raise ValueError("recording_speaker_count_below_minimum")
+    check_models()
+    return EvidenceParts(
+        transcript=AlignedTranscript(
+            words=output,
+            duration_seconds=total_samples / SAMPLE_RATE,
+            language=next(iter(languages)) if len(languages) == 1 else None,
+            asr_model=identities[0],
+            alignment_model=alignment_id,
+        ),
+        speakers=SpeakerEvidence(
+            regular=tracks["regular"],
+            exclusive=tracks["exclusive"],
+            model=identities[1],
+        ),
+        complete=True,
+    )
+
+
+def collect_interview_evidence_sync(
+    file_path: str, *, model: str, language: str | None = "zh"
+):
+    """WhisperX evidence entrypoint, run inside the existing source-owning worker."""
+    import asyncio
 
     if not whisper_model or whisper_model == "mock_model":
         raise RuntimeError("local WhisperX is not loaded for interview evidence")
     if _whisper_model_id != model or not _diarization_model_id:
         raise RuntimeError("interview_evidence_model_identity_changed: reload worker")
     _ensure_ffmpeg_available()
-    import whisperx
-
-    audio = whisperx.load_audio(file_path)
-    effective_lang = (
+    effective_language = (
         None if (language or "").strip().lower() in {"", "auto"} else language
     )
-    asr_result = whisper_model.transcribe(audio, batch_size=16, language=effective_lang)
-    detected_language = str(asr_result.get("language") or effective_lang or "zh")
-    align_model, align_metadata, alignment_id = _get_alignment_model(detected_language)
-    aligned = whisperx.align(
-        asr_result.get("segments") or [],
-        align_model,
-        align_metadata,
-        audio,
-        _local_device(),
-        return_char_alignments=False,
-    )
-    regular, exclusive = _run_diarization_tracks(audio)
-    return EvidenceParts(
-        transcript=AlignedTranscript(
-            words=list(aligned.get("word_segments") or []),
-            duration_seconds=float(len(audio)) / 16_000.0,
-            language=detected_language,
-            asr_model=_whisper_model_id,
-            alignment_model=alignment_id,
-        ),
-        speakers=SpeakerEvidence(
-            regular=regular, exclusive=exclusive, model=_diarization_model_id
-        ),
-        complete=True,
+    return asyncio.run(
+        _collect_windowed_evidence(file_path, model=model, language=effective_language)
     )
 
 

@@ -39,6 +39,10 @@ RUN python -m venv /opt/venv && \
         /opt/venv/bin/pip install --no-cache-dir .; \
     fi
 
+# WhisperX alignment otherwise attempts an implicit runtime NLTK download.
+# Keep this small tokenizer resource in the local-model dependency layer.
+RUN /opt/venv/bin/python -c "import importlib.util; importlib.util.find_spec('whisperx') and __import__('nltk').download('punkt_tab', download_dir='/opt/venv/nltk_data', raise_on_error=True)"
+
 # Stage 2: Lean runtime image
 FROM python:3.13.14-slim AS runtime
 

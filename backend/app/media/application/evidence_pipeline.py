@@ -10,18 +10,19 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from app.media.application.evidence_contracts import EvidenceCollector, EvidenceParts
+from app.media.application.evidence_contracts import (
+    EvidenceCollector,
+    EvidenceParts,
+    MAX_EVIDENCE_WORDS,
+    MAX_EVIDENCE_TEXT_BYTES,
+    MAX_DIARIZATION_INTERVALS,
+)
 from app.media.application.evidence_source import EvidenceSource
 from app.media.application.transcript_evidence import (
     DiarizationInterval,
     TranscriptEvidence,
     build_transcript_evidence,
 )
-
-
-MAX_EVIDENCE_WORDS = 200_000
-MAX_EVIDENCE_TEXT_BYTES = 1_000_000
-MAX_DIARIZATION_INTERVALS = 200_000
 
 
 class EvidenceProviderUnsupported(RuntimeError):
