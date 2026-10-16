@@ -2015,164 +2015,6 @@
         "title": "InterviewInvitationFacts",
         "type": "object"
       },
-      "InterviewInvitationHandoffView": {
-        "properties": {
-          "company_name": {
-            "title": "Company Name",
-            "type": "string"
-          },
-          "interview": {
-            "$ref": "#/components/schemas/ObjectReference"
-          },
-          "job_title": {
-            "title": "Job Title",
-            "type": "string"
-          },
-          "location": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Location"
-          },
-          "meeting_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Meeting Url"
-          },
-          "opportunity": {
-            "$ref": "#/components/schemas/ObjectReference"
-          },
-          "original_time_text": {
-            "title": "Original Time Text",
-            "type": "string"
-          },
-          "scheduled_end_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Scheduled End At"
-          },
-          "scheduled_start_at": {
-            "format": "date-time",
-            "title": "Scheduled Start At",
-            "type": "string"
-          },
-          "source": {
-            "$ref": "#/components/schemas/InvitationSourceReference-Output"
-          },
-          "source_timezone": {
-            "title": "Source Timezone",
-            "type": "string"
-          },
-          "stage_label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stage Label"
-          },
-          "verification": {
-            "$ref": "#/components/schemas/VerificationView"
-          }
-        },
-        "required": [
-          "opportunity",
-          "interview",
-          "company_name",
-          "job_title",
-          "scheduled_start_at",
-          "scheduled_end_at",
-          "original_time_text",
-          "source_timezone",
-          "stage_label",
-          "location",
-          "meeting_url",
-          "source",
-          "verification"
-        ],
-        "title": "InterviewInvitationHandoffView",
-        "type": "object"
-      },
-      "InterviewInvitationHandoffViewResponseContract": {
-        "$ref": "#/components/schemas/InterviewInvitationHandoffView"
-      },
-      "InterviewPreparationOpenPayload": {
-        "additionalProperties": false,
-        "properties": {
-          "expected_interview_version": {
-            "minimum": 1,
-            "title": "Expected Interview Version",
-            "type": "integer"
-          },
-          "expected_opportunity_version": {
-            "minimum": 1,
-            "title": "Expected Opportunity Version",
-            "type": "integer"
-          },
-          "interview_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Interview Id",
-            "type": "string"
-          },
-          "kind": {
-            "const": "interview_preparation_open",
-            "default": "interview_preparation_open",
-            "title": "Kind",
-            "type": "string"
-          },
-          "opportunity_id": {
-            "maxLength": 35,
-            "minLength": 1,
-            "title": "Opportunity Id",
-            "type": "string"
-          },
-          "preferred_surface": {
-            "const": "interviews",
-            "default": "interviews",
-            "title": "Preferred Surface",
-            "type": "string"
-          },
-          "source_operation_id": {
-            "maxLength": 36,
-            "minLength": 1,
-            "title": "Source Operation Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "interview_id",
-          "opportunity_id",
-          "expected_interview_version",
-          "expected_opportunity_version",
-          "source_operation_id",
-          "preferred_surface"
-        ],
-        "title": "InterviewPreparationOpenPayload",
-        "type": "object"
-      },
       "InvitationFieldEvidence-Input": {
         "additionalProperties": false,
         "properties": {
@@ -2535,8 +2377,7 @@
             "enum": [
               "mock_interview.prefill",
               "mock_interview.check_readiness",
-              "mock_interview.enter_live",
-              "interview.preparation.open"
+              "mock_interview.enter_live"
             ],
             "title": "Action",
             "type": "string"
@@ -2562,7 +2403,6 @@
           "payload": {
             "discriminator": {
               "mapping": {
-                "interview_preparation_open": "#/components/schemas/InterviewPreparationOpenPayload",
                 "mock_enter_live": "#/components/schemas/MockEnterLivePayload",
                 "mock_prefill": "#/components/schemas/MockPrefillPayload",
                 "mock_readiness": "#/components/schemas/MockReadinessPayload"
@@ -2578,9 +2418,6 @@
               },
               {
                 "$ref": "#/components/schemas/MockEnterLivePayload"
-              },
-              {
-                "$ref": "#/components/schemas/InterviewPreparationOpenPayload"
               }
             ],
             "title": "Payload"
@@ -2804,8 +2641,7 @@
             "enum": [
               "mock_interview.prefill",
               "mock_interview.check_readiness",
-              "mock_interview.enter_live",
-              "interview.preparation.open"
+              "mock_interview.enter_live"
             ],
             "title": "Action",
             "type": "string"
@@ -2826,7 +2662,6 @@
           "payload": {
             "discriminator": {
               "mapping": {
-                "interview_preparation_open": "#/components/schemas/InterviewPreparationOpenPayload",
                 "mock_enter_live": "#/components/schemas/MockEnterLivePayload",
                 "mock_prefill": "#/components/schemas/MockPrefillPayload",
                 "mock_readiness": "#/components/schemas/MockReadinessPayload"
@@ -2842,9 +2677,6 @@
               },
               {
                 "$ref": "#/components/schemas/MockEnterLivePayload"
-              },
-              {
-                "$ref": "#/components/schemas/InterviewPreparationOpenPayload"
               }
             ],
             "title": "Payload"

@@ -144,24 +144,17 @@ def create_chat_attachment_draft(
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     from app.models.knowledge import KnowledgeDocument
-    from app.task_queue.dispatch import dispatch_document_ingestion
 
     projection = db.get(KnowledgeDocument, row.source_document_id)
     if projection is None:
         raise HTTPException(status_code=500, detail="Attachment projection missing")
-    from app.rag.application.document_commands import record_ingestion_dispatch
+    from app.rag.application.document_commands import enqueue_ingestion
 
     try:
-        task = dispatch_document_ingestion(projection.id)
-        projection = record_ingestion_dispatch(
-            db, document_id=projection.id, task_id=task.id
-        )
+        projection = enqueue_ingestion(db, document_id=projection.id)
     except Exception:  # noqa: BLE001
         logger.exception("attachment ingestion dispatch failed: %s", projection.id)
-        projection = record_ingestion_dispatch(
-            db, document_id=projection.id, error="后台处理队列暂时不可用，请稍后重试。"
-        )
-    db.commit()
+        db.rollback()
     db.refresh(projection)
     return _attachment_draft_view(row, projection)
 

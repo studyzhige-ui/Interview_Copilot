@@ -21,58 +21,62 @@
 .workspace-content { outline:none; }
 .skip-to-content { position:fixed; left:220px; top:-100px; background:white; padding:12px 20px; z-index:100; }
 .skip-to-content:focus { top:10px; }
-.today-page { max-width:1400px; margin:auto; padding:54px clamp(24px,4vw,64px) 40px; }
-.today-heading { display:flex; align-items:center; justify-content:space-between; gap:28px; margin-bottom:54px; }
-.today-dateline { color:var(--color-stone-500); font-size:12px; letter-spacing:.8px; margin:0 0 16px; }
-.today-heading h1 { font-size:clamp(26px,2.6vw,38px); font-weight:500; letter-spacing:-1.2px; line-height:1.45; }
-.today-intro { color:var(--color-stone-500); margin-top:12px; font-size:14px; }
-.today-primary-link { display:flex; align-items:center; justify-content:center; gap:18px; flex-shrink:0; padding:12px 18px; background:var(--color-primary-700); color:white; border-radius:6px; font-size:13px; }
+/* Pages share one content width and one information hierarchy. */
+.workspace-page, .today-page { overflow-wrap:anywhere; width:100%; max-width:1200px; margin:0 auto; padding:32px clamp(20px,3vw,40px); }
+.today-heading { display:flex; align-items:center; justify-content:space-between; gap:24px; margin-bottom:28px; }
+.today-dateline { color:var(--color-stone-500); font-size:12px; margin-bottom:8px; }
+.today-heading h1 { font-size:30px; font-weight:650; letter-spacing:-.7px; }
+.today-intro { color:var(--color-stone-500); margin-top:8px; font-size:14px; line-height:1.7; }
+.today-primary-link { display:inline-flex; align-items:center; gap:14px; flex-shrink:0; padding:11px 16px; background:var(--color-primary-700); color:white; border-radius:7px; font-size:13px; }
 .today-primary-link:hover { background:var(--color-primary-900); }
-.today-layout { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(240px,1fr); gap:48px; }
-.today-section-heading { display:flex; align-items:center; justify-content:space-between; padding-bottom:20px; border-bottom:1px solid var(--color-stone-300); color:var(--color-stone-500); }
-.today-section-heading h2 { font-size:19px; font-weight:600; }
-.today-section-heading > span { font-size:12px; }
-.today-filters { display:flex; gap:24px; border-bottom:1px solid var(--border); }
-.today-filters button { display:flex; align-items:center; gap:7px; padding:15px 0 13px; border-bottom:2px solid transparent; color:var(--color-stone-500); font-size:13px; white-space:nowrap; }
-.today-filters button[aria-pressed=true] { border-bottom-color:var(--color-primary-700); color:var(--color-primary-700); font-weight:600; }
-.today-filters span { font-size:11px; font-weight:400; font-variant-numeric:tabular-nums; }
-.today-loading { padding:40px 0; color:var(--color-stone-500); font-size:14px; }
-.today-empty { padding:42px 0; min-height:237px; }
-.today-empty-rule { display:block; width:32px; height:2px; background:var(--color-stone-300); margin-bottom:23px; }
-.today-empty h3 { font-size:17px; font-weight:500; margin-bottom:10px; }
-.today-empty p { max-width:350px; font-size:13px; line-height:1.8; color:var(--color-stone-500); }
-.today-empty a { display:inline-flex; align-items:center; gap:12px; font-size:13px; color:var(--color-primary-700); margin-top:22px; }
-.today-empty-small { padding-top:28px; }
-.today-error { padding:32px 0; min-height:237px; }
-.today-error strong { display:block; font-size:15px; font-weight:500; }
-.today-error p { font-size:13px; color:var(--color-stone-500); margin:9px 0 20px; line-height:1.8; max-width:340px; }
-.today-error button { display:flex; align-items:center; gap:8px; font-size:13px; border:1px solid var(--border); border-radius:5px; padding:8px 12px; }
-.today-error button:disabled { opacity:.5; }
-.today-section-footer { display:flex; align-items:center; justify-content:space-between; padding:16px 0; border-top:1px solid var(--border); color:var(--color-stone-600); font-size:12px; }
-.today-actions, .today-job-list { list-style:none; padding:0; }
-.today-actions li { display:flex; gap:18px; padding:23px 0; border-bottom:1px solid var(--border); }
+.today-layout { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(260px,1fr); align-items:start; gap:24px; }
+.today-panel { background:white; border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+.today-section-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:20px 22px; border-bottom:1px solid var(--border); }
+.today-section-heading h2 { font-size:16px; font-weight:600; }
+.today-section-heading a, .today-section-footer { display:flex; align-items:center; gap:6px; color:var(--color-stone-500); font-size:12px; }
+.today-filters { display:flex; gap:24px; padding:0 22px; border-bottom:1px solid var(--border); }
+.today-filters button { display:flex; align-items:center; gap:7px; padding:14px 0; border-bottom:2px solid transparent; color:var(--color-stone-500); font-size:13px; white-space:nowrap; }
+.today-filters button[aria-pressed=true] { border-color:var(--color-primary-700); color:var(--color-primary-700); font-weight:600; }
+.today-filters span { font-size:11px; font-variant-numeric:tabular-nums; }
+.today-loading, .today-quiet { padding:24px 22px; color:var(--color-stone-500); font-size:13px; }
+.today-empty { display:flex; flex-direction:column; align-items:flex-start; padding:32px 24px; min-height:260px; justify-content:center; }
+.today-empty-mark { display:grid; place-items:center; width:36px; height:36px; border-radius:50%; background:var(--color-primary-50); color:var(--color-primary-600); margin-bottom:16px; }
+.today-empty h3 { font-size:16px; font-weight:500; }
+.today-empty p { font-size:13px; line-height:1.8; color:var(--color-stone-500); margin-top:8px; }
+.today-empty a, .today-empty button { display:inline-flex; align-items:center; gap:8px; font-size:13px; color:var(--color-primary-700); margin-top:20px; }
+.today-actions, .today-work { list-style:none; padding:0; }
+.today-actions li { display:flex; gap:18px; padding:20px 22px; border-bottom:1px solid var(--border); }
 .today-actions li:last-child { border-bottom:0; }
-.today-action-time { display:flex; flex-direction:column; gap:7px; width:84px; flex-shrink:0; color:var(--color-stone-500); font-size:12px; font-variant-numeric:tabular-nums; }
+.today-action-time { display:flex; flex-direction:column; gap:7px; width:86px; flex-shrink:0; color:var(--color-stone-500); font-size:12px; font-variant-numeric:tabular-nums; }
 .today-overdue { color:var(--color-danger-700); font-size:11px; }
 .today-action-body { flex:1; min-width:0; }
-.today-action-body h3 { font-size:15px; line-height:1.6; font-weight:500; overflow-wrap:anywhere; }
-.today-action-body p { color:var(--color-stone-500); font-size:12px; margin-top:5px; }
-.today-action-body a { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--color-primary-600); margin-top:9px; }
-.today-row-link { display:flex; align-items:center; gap:7px; font-size:12px; color:var(--color-stone-600); flex-shrink:0; }
-.today-job-list li { padding:23px 0; border-bottom:1px solid var(--border); }
-.today-job-list li:last-child { border:0; }
-.today-job-list li > div { display:flex; justify-content:space-between; gap:10px; align-items:baseline; }
-.today-company { font-size:12px; color:var(--color-stone-600); }
-.today-job-list small { font-size:11px; color:var(--color-primary-600); }
-.today-job-list a { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:8px; font-size:15px; font-weight:500; }
-.today-job-list p { font-size:12px; color:var(--color-stone-500); margin-top:7px; }
-.today-next { display:grid; grid-template-columns:1fr 1fr 1fr; gap:32px; margin-top:60px; padding-top:28px; border-top:1px solid var(--color-stone-300); }
-.today-next h2 { font-size:17px; font-weight:500; margin-top:10px; }
-.today-next > a { display:flex; align-items:center; justify-content:space-between; gap:15px; border-left:1px solid var(--border); padding-left:28px; }
-.today-next strong { display:block; font-size:14px; font-weight:500; }
-.today-next small { display:block; color:var(--color-stone-500); font-size:12px; line-height:1.8; margin-top:9px; }
-.today-page a:hover { text-decoration:underline; text-underline-offset:4px; }
-.today-primary-link:hover { text-decoration:none !important; }
+.today-action-body h3 { font-size:14px; line-height:1.65; font-weight:500; overflow-wrap:anywhere; }
+.today-action-body > span { display:flex; align-items:center; gap:5px; font-size:12px; color:var(--color-primary-600); margin-top:8px; }
+.today-section-footer { justify-content:space-between; padding:15px 22px; border-top:1px solid var(--border); }
+.today-side { display:flex; flex-direction:column; gap:20px; }
+.today-work li + li { border-top:1px solid var(--border); }
+.today-work a { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 22px; }
+.today-work strong { display:block; font-size:13px; font-weight:500; overflow-wrap:anywhere; }
+.today-work small { display:block; font-size:12px; margin-top:6px; color:var(--color-stone-500); }
+.today-shortcuts { border-top:1px solid var(--border); }
+.today-shortcuts > a { display:flex; align-items:center; gap:14px; padding:18px 8px; border-bottom:1px solid var(--border); color:var(--color-primary-700); }
+.today-shortcuts > a > span { flex:1; min-width:0; }
+.today-shortcuts strong { display:block; color:var(--foreground); font-size:14px; font-weight:500; }
+.today-shortcuts small { display:block; font-size:12px; color:var(--color-stone-500); margin-top:5px; }
+.today-confirmations { display:flex; flex-wrap:wrap; align-items:center; gap:14px; padding:14px 18px; margin-bottom:20px; border:1px solid var(--color-warning-200); border-radius:8px; background:var(--color-warning-50); font-size:13px; }
+.today-confirmations > div { display:flex; flex-wrap:wrap; gap:16px; margin-left:auto; }
+.today-confirmations a { display:inline-flex; align-items:center; gap:5px; color:var(--color-primary-700); }
+.today-confirmations button { text-decoration:underline; }
+.profile-tabs { display:flex; gap:24px; overflow:auto; border-bottom:1px solid var(--border); margin-bottom:22px; }
+.profile-tabs button { flex-shrink:0; padding:14px 0; font-size:14px; color:var(--color-stone-500); border-bottom:2px solid transparent; }
+.profile-tabs button[aria-pressed=true] { border-color:var(--color-primary-700); color:var(--color-primary-700); font-weight:600; }
+.profile-tabs span { margin-left:6px; font-size:11px; background:var(--color-warning-100); color:var(--color-warning-800); padding:2px 6px; border-radius:10px; }
+.profile-drafts { display:grid; grid-template-columns:240px minmax(0,1fr); gap:20px; align-items:start; }
+.profile-drafts > nav { display:flex; flex-direction:column; gap:6px; }
+.profile-drafts > nav button { padding:14px; border:1px solid var(--border); border-radius:8px; text-align:left; background:white; }
+.profile-drafts > nav button[aria-pressed=true] { border-color:var(--color-primary-300); background:var(--color-primary-50); }
+.profile-drafts > nav strong { display:block; font-size:13px; }
+.profile-drafts > nav small { display:block; font-size:11px; color:var(--color-stone-500); margin-top:6px; }
 .copilot-page { display:flex; height:100%; background:var(--background); }
 .copilot-session-list { width:248px; flex-shrink:0; display:flex; flex-direction:column; background:#FFF; border-right:1px solid var(--border); }
 .copilot-welcome { flex:1; display:flex; justify-content:center; align-items:center; padding:36px; }
@@ -83,10 +87,6 @@
   .workspace-sidebar { width:170px; padding-left:10px; padding-right:10px; }
   .workspace-topbar { gap:18px; padding:0 20px; }
   .workspace-account-name, .workspace-copilot-shortcut { display:none; }
-  .today-layout { gap:28px; }
-  .today-heading { align-items:flex-start; }
-  .today-next { grid-template-columns:1fr 1fr; }
-  .today-next > div { grid-column:1/-1; }
 }
 @media (max-width:760px) {
   .workspace-sidebar { width:66px; padding:20px 8px; }
@@ -97,36 +97,20 @@
   .workspace-topbar { min-height:58px; gap:12px; padding:0 14px; flex-wrap:wrap; }
   .workspace-tabs { order:3; width:100%; gap:18px; min-height:40px; }
   .workspace-area-name { font-size:13px; }
-  .today-page { padding:28px 20px; }
-  .today-heading { display:block; margin-bottom:32px; }
-  .today-primary-link { display:inline-flex; margin-top:22px; }
-  .today-layout { grid-template-columns:1fr; gap:32px; }
-  .today-next { grid-template-columns:1fr; gap:25px; margin-top:32px; }
-  .today-next > a { padding-left:0; border-left:0; }
-  .today-filters { gap:18px; }
-  .today-filters button { font-size:12px; }
-  .today-actions li { gap:12px; flex-wrap:wrap; }
-  .today-action-time { width:66px; }
-  .today-row-link { margin-left:auto; }
+  .workspace-page, .today-page { padding:24px 18px; }
+  .today-heading { align-items:flex-start; flex-wrap:wrap; }
+  .today-primary-link { padding:9px 12px; }
+  .today-layout { grid-template-columns:1fr; gap:20px; }
+  .profile-drafts { grid-template-columns:1fr; }
+  .profile-drafts > nav { flex-direction:row; overflow:auto; }
+  .profile-drafts > nav button { min-width:190px; }
+  .profile-tabs { gap:20px; }
   .copilot-page { flex-direction:column; }
-  .copilot-session-list { width:100%; max-height:200px; border-bottom:1px solid var(--border); }
+  .copilot-session-list { display:none; width:100%; flex:1; min-height:0; border-bottom:1px solid var(--border); }
+  .copilot-session-list.is-open { display:flex; }
+  .copilot-page:has(.copilot-session-list.is-open) > .copilot-conversation { display:none; }
   .copilot-welcome { padding:24px; }
 }
-.getting-started { margin-bottom:40px; padding-bottom:32px; border-bottom:1px solid var(--border); }
-.getting-started-intro { max-width:720px; }
-.getting-started h2 { font-size:26px; font-weight:650; margin:10px 0; letter-spacing:-.5px; }
-.getting-started-intro > p:last-child { color:var(--text-muted, #667269); line-height:1.8; }
-.workspace-start-options { margin-top:24px; }
-.workspace-start-options > a, .workspace-recent > a { display:flex; align-items:center; gap:20px; padding:20px 12px; border-bottom:1px solid var(--border); transition:background .15s; }
-.workspace-start-options > a:hover, .workspace-recent > a:hover { background:#edf2e9; }
-.workspace-start-options > a > span:nth-child(2), .workspace-recent > a > span { flex:1; }
-.workspace-start-options strong, .workspace-recent strong { display:block; font-size:16px; font-weight:600; }
-.workspace-start-options small, .workspace-recent small { display:block; margin-top:6px; color:#647167; line-height:1.65; }
-.workspace-option-number { color:#7f8d7e; font-size:14px; font-variant-numeric:tabular-nums; }
-.workspace-start-note { font-size:13px; line-height:1.8; color:#647167; margin-top:18px; }
-.workspace-start-note a { text-decoration:underline; text-underline-offset:3px; }
-.workspace-recent { margin-top:24px; }
-.workspace-recent h3 { font-size:14px; font-weight:600; }
 .chat-recovery-notice { padding:12px 18px; background:#fff5df; border-bottom:1px solid #e8d6ac; color:#725822; font-size:13px; line-height:1.7; }
 .chat-recovery-notice button { text-decoration:underline; font-weight:600; margin-top:5px; }
 
@@ -145,8 +129,109 @@
   overflow: hidden;
 }
 .copilot-workspace-drawer .copilot-embedded { flex: 1; min-height: 0; height: auto; }
-.copilot-workspace-drawer .copilot-session-list { width: 190px; min-width: 150px; }
-@media (max-width: 640px) {
-  .copilot-workspace-drawer .copilot-session-list { width: 125px; min-width: 105px; }
-  .copilot-workspace-drawer header > div > p { display: none; }
+/* Online resume: one continuous document, with tools outside the document. */
+.online-resume-layout { display:grid; grid-template-columns:130px minmax(0,1fr) 218px; gap:20px; width:100%; max-width:1300px; margin:0 auto; padding:28px 24px 64px; align-items:start; }
+.online-resume-directory { position:sticky; top:24px; padding:14px 0; font-size:12px; }
+.online-resume-directory h2 { font-size:13px; padding:0 12px 12px; font-weight:600; color:var(--color-stone-700); }
+.online-resume-directory a { display:block; padding:9px 12px; margin:2px 0; border-left:2px solid transparent; color:var(--color-stone-500); border-radius:0 5px 5px 0; }
+.online-resume-directory a:hover { color:var(--color-primary-700); background:var(--color-stone-100); }
+.online-resume-directory a[aria-current] { color:var(--color-primary-700); border-left-color:var(--color-primary-600); background:var(--color-primary-50); font-weight:600; }
+.online-resume-paper { min-width:0; background:#fff; border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+.online-resume-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; padding:18px 28px; border-bottom:1px solid var(--border); }
+.online-resume-toolbar h1 { font-size:14px; font-weight:500; color:var(--color-stone-500); }
+.online-resume-toolbar > div { display:flex; flex-wrap:wrap; align-items:center; gap:17px; }
+.online-resume-toolbar button, .online-resume-toolbar a { display:inline-flex; align-items:center; gap:5px; color:var(--color-primary-700); font-size:12px; }
+.online-resume-section { position:relative; padding:25px 30px; scroll-margin-top:20px; }
+.online-resume-section + .online-resume-section { border-top:1px solid #f3f4f2; }
+.online-resume-section-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:18px; }
+.online-resume-section-heading h2 { border-left:3px solid var(--color-primary-500); padding-left:10px; font-size:16px; font-weight:600; color:var(--color-stone-800); }
+.online-resume-section-heading > div { display:flex; gap:12px; }
+.online-resume-controls button, button.online-resume-controls { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--color-primary-700); }
+.online-resume-controls button:disabled { opacity:.5; }
+.online-resume-person { display:flex; justify-content:space-between; gap:20px; align-items:center; }
+.online-resume-person h2 { font-size:27px; font-weight:600; letter-spacing:-.4px; color:var(--color-stone-900); }
+.online-resume-person p { margin-top:12px; color:var(--color-stone-500); font-size:12px; line-height:1.8; }
+.online-resume-avatar { display:grid; place-items:center; height:62px; width:62px; flex-shrink:0; border-radius:50%; background:var(--color-primary-50); color:var(--color-primary-600); font-size:27px; font-weight:500; }
+.online-resume-contacts { display:flex; flex-wrap:wrap; gap:12px 18px; margin-top:18px; font-size:12px; color:var(--color-stone-600); }
+.online-resume-contacts > div { display:flex; align-items:center; gap:6px; min-width:0; overflow-wrap:anywhere; }
+.online-resume-contact-add { display:flex; flex-wrap:wrap; gap:18px; margin-top:16px; }
+.online-resume-empty { display:flex; align-items:center; justify-content:space-between; width:100%; text-align:left; padding:10px 0; font-size:13px; color:var(--color-stone-400)!important; }
+.online-resume-empty:hover { color:var(--color-primary-700)!important; }
+.online-resume-entry { position:relative; padding:0 0 24px; }
+.online-resume-entry:last-child { padding-bottom:0; }
+.online-resume-entry-heading { display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-bottom:8px; }
+.online-resume-entry-heading h3 { font-size:14px; font-weight:600; color:var(--color-stone-800); overflow-wrap:anywhere; }
+.online-resume-entry-heading > span { font-size:12px; color:var(--color-stone-400); flex-shrink:0; }
+.online-resume-description { white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.9; color:var(--color-stone-600); }
+.online-resume-history-toggle { display:flex; align-items:center; gap:7px; margin-bottom:14px; font-size:12px; color:var(--color-stone-500); }
+.online-resume-direction-meta { font-size:12px; color:var(--color-stone-500); line-height:1.9; margin:5px 0; }
+.online-resume-entry-actions { display:flex; gap:16px; align-items:start; margin-top:12px; color:var(--color-stone-400); font-size:12px; }
+.online-resume-entry-actions summary { cursor:pointer; }
+.online-resume-editor { margin-top:18px; padding:22px; border:1px solid var(--color-primary-200); border-radius:8px; background:var(--color-primary-50); scroll-margin:20px; }
+.online-resume-editor > h3 { font-size:14px; font-weight:600; margin-bottom:20px; }
+.online-resume-aside { position:sticky; top:24px; display:flex; flex-direction:column; gap:16px; }
+.online-resume-aside > section { border:1px solid var(--border); border-radius:8px; padding:18px; background:#fff; }
+.online-resume-aside h2 { font-size:13px; font-weight:600; color:var(--color-stone-800); }
+.online-resume-aside p { margin-top:12px; font-size:12px; color:var(--color-stone-500); line-height:1.8; }
+.online-resume-aside-heading { display:flex; justify-content:space-between; align-items:center; }
+.online-resume-aside ul { margin-top:16px; }
+.online-resume-aside li { display:flex; align-items:flex-start; gap:9px; color:var(--color-primary-600); margin-bottom:12px; }
+.online-resume-aside li > div { min-width:0; }
+.online-resume-aside li a { font-size:12px; color:var(--color-stone-700); overflow-wrap:anywhere; }
+.online-resume-aside small { display:block; font-size:10px; color:var(--color-stone-400); margin-top:5px; }
+.online-resume-aside-link { display:block; margin-top:14px; font-size:12px; color:var(--color-primary-700); }
+.online-resume-aside > .online-resume-copilot { background:var(--color-primary-50); border-color:var(--color-primary-100); }
+.online-resume-copilot > svg { color:var(--color-primary-600); margin-bottom:12px; }
+.online-resume-copilot > a { display:block; font-size:12px; color:var(--color-primary-700); margin-top:14px; }
+.online-resume-refresh { display:flex; align-items:center; gap:6px; align-self:center; color:var(--color-stone-400); font-size:11px; }
+.online-resume-preview-note { font-size:11px; color:var(--color-stone-400); padding:20px 30px; }
+.online-resume-layout.is-preview { display:block; max-width:860px; }
+.is-preview .online-resume-placeholder, .is-preview .online-resume-directory, .is-preview .online-resume-aside, .is-preview .online-resume-controls, .is-preview .online-resume-empty-section { display:none; }
+@media (max-width:1150px) {
+  .online-resume-layout { grid-template-columns:minmax(0,1fr) 210px; gap:16px; }
+  .online-resume-directory { grid-column:1/-1; position:static; display:flex; overflow:auto; padding:0; gap:5px; }
+  .online-resume-directory h2 { display:none; }
+  .online-resume-directory a { white-space:nowrap; border-left:0; border-bottom:2px solid transparent; padding:10px; }
+  .online-resume-directory a[aria-current] { border-bottom-color:var(--color-primary-500); }
+}
+@media (max-width:800px) {
+  .online-resume-layout { grid-template-columns:minmax(0,1fr); padding:16px 14px 40px; }
+  .online-resume-aside { position:static; }
+  .online-resume-toolbar { padding:16px 20px; }
+  .online-resume-toolbar > div { gap:12px; }
+  .online-resume-section { padding:22px 20px; }
+  .online-resume-editor { padding:15px; }
+  .online-resume-entry-heading { flex-wrap:wrap; gap:5px; }
+  .online-resume-person h2 { font-size:23px; }
+  .online-resume-avatar { width:48px; height:48px; }
+}
+@media print {
+  @page { size:A4; margin:16mm; }
+  html, body, #root, .workspace-shell, .workspace-main, .workspace-content { display:block!important; height:auto!important; overflow:visible!important; background:white!important; }
+  .workspace-sidebar, .workspace-topbar, .skip-to-content, .online-resume-directory, .online-resume-aside, .online-resume-toolbar, .online-resume-controls, .online-resume-placeholder, .online-resume-direction-inactive, .online-resume-editor, .online-resume-preview-note, .online-resume-empty-section { display:none!important; }
+  .online-resume-layout { display:block; max-width:none; margin:0; padding:0; }
+  .online-resume-paper { border:0; border-radius:0; overflow:visible; }
+  .online-resume-section { padding:14px 0; }
+  .online-resume-section-heading, .online-resume-entry-heading { break-after:avoid; }
+  .online-resume-entry { break-inside:avoid; }
+}
+.copilot-mobile-nav { display:none; align-items:center; justify-content:space-between; gap:12px; flex-shrink:0; padding:12px 16px; border-bottom:1px solid var(--border); background:white; font-size:12px; color:var(--color-primary-700); }
+@media (max-width:760px) { .copilot-mobile-nav { display:flex; } }
+.copilot-workspace-drawer .copilot-mobile-nav { display:flex; }
+.copilot-workspace-drawer .copilot-page { flex-direction:column; }
+.copilot-workspace-drawer .copilot-session-list { display:none; width:100%; flex:1; min-height:0; max-height:none; }
+.copilot-workspace-drawer .copilot-session-list.is-open { display:flex; }
+.copilot-workspace-drawer .copilot-page:has(.copilot-session-list.is-open) > .copilot-conversation { display:none; }
+.mock-live-header { flex-wrap:wrap; }
+.mock-live-messages, .mock-live-composer { width:100%; max-width:900px; margin:0 auto; }
+@media (max-width:760px) { .mock-live-header { padding:12px; gap:8px; } .mock-live-header > :first-child { width:100%; } }
+
+.chat-message-list { padding-inline:max(16px, calc((100% - 860px) / 2)); }
+.chat-composer { padding-inline:max(12px, calc((100% - 884px) / 2)); }
+
+.chat-panel { container-type:inline-size; }
+.chat-composer { position:relative; }
+@container (max-width:440px) {
+  .chat-menu-anchor { position:static; }
+  .chat-composer-menu { left:12px; right:12px; width:auto; }
 }

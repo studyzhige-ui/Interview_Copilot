@@ -24,22 +24,11 @@ export interface ConfirmInvitationResult {
   opportunity: ObjectReference; interview: ObjectReference;
   verification: OperationVerification; projection_invalidations: string[];
 }
-export interface InvitationHandoff extends InvitationFacts {
-  opportunity: ObjectReference; interview: ObjectReference;
-  verification: OperationVerification;
-  source: { kind: string; identity: string; version?: string | null };
-}
 export interface PendingConfirmation {
   conversation_id: string; turn_status: string; interaction: AgentInteraction;
 }
 export async function confirmInvitation(command: ConfirmInvitationCommand): Promise<ConfirmInvitationResult> {
   return (await apiClient.post('/career/interview-invitations/confirm', command)).data;
-}
-export async function listInvitationHandoffs(): Promise<InvitationHandoff[]> {
-  return (await apiClient.get('/career/interview-invitations/interviews')).data;
-}
-export async function getInvitationHandoff(id: string): Promise<InvitationHandoff> {
-  return (await apiClient.get(`/career/interview-invitations/interviews/${encodeURIComponent(id)}/handoff`)).data;
 }
 export async function listPendingConfirmations(): Promise<PendingConfirmation[]> {
   return (await apiClient.get('/interactions/pending-confirmations')).data;

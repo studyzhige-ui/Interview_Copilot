@@ -186,5 +186,8 @@ memory_recall = selective_canonical_low_authority_items_or_empty
 legacy_memory_runtime_read = forbidden
 ```
 
-Enabling any of these without a versioned evaluation report and all gates is a
-release-blocking defect.
+Enabling the automatic producer by default in a public release without a
+versioned evaluation report and all gates is a release-blocking defect. An
+explicitly enabled local deployment can validate the lifecycle using synthetic
+data and user opt-in; those checks do not establish the representative
+cross-task benefit gate or change the public default.

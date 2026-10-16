@@ -177,6 +177,8 @@ async def recall(
             ]
             line = json.dumps(
                 {
+                    "memory_id": row.id,
+                    "memory_version": row.version,
                     "citation": f"[记忆来源](/settings/personalization#memory-{row.id})",
                     "experience": row.content,
                     "applicability": row.applicability,
@@ -213,6 +215,58 @@ async def recall(
     if not lines:
         return ""
     return _CONTEXT_PREFIX + "\n".join(lines)
+
+
+def revalidate_recall(block: str, *, user_pk: int, conversation_id: str) -> str:
+    """Remove revoked snapshots at a dispatch boundary, without reselecting.
+
+    A revision is a different experience: never silently substitute its content
+    into a selection made for an earlier version. Already sent requests cannot
+    be recalled, but subsequent requests must stop using the old projection.
+    """
+    if not block:
+        return ""
+    heading, marker, body = block.partition(_CONTEXT_PREFIX)
+    if not marker or heading not in {"", "[Memory]\n"}:
+        return ""
+    try:
+        entries = [json.loads(line) for line in body.splitlines() if line.strip()]
+        if any(
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("memory_id"), str)
+            or type(entry.get("memory_version")) is not int
+            for entry in entries
+        ):
+            return ""
+    except (ValueError, TypeError):
+        return ""
+    with SessionLocal() as db:
+        if not _allowed(db, user_pk, conversation_id):
+            return ""
+        unavailable = unavailable_memory_ids(db, user_pk)
+        versions = {
+            row.id: row.version
+            for row in db.query(LongTermAgentMemory)
+            .filter(
+                LongTermAgentMemory.user_id == user_pk,
+                LongTermAgentMemory.status == "active",
+                LongTermAgentMemory.id.in_([e["memory_id"] for e in entries]),
+            )
+            .all()
+        }
+        retained = [
+            entry
+            for entry in entries
+            if entry["memory_id"] not in unavailable
+            and versions.get(entry["memory_id"]) == entry["memory_version"]
+        ]
+    if not retained:
+        return ""
+    return (
+        heading
+        + _CONTEXT_PREFIX
+        + "\n".join(json.dumps(entry, ensure_ascii=False) for entry in retained)
+    )
 
 
 def record_turn_usage(db, turn: ConversationTurn) -> None:
@@ -272,5 +326,27 @@ def set_feedback(db, *, user_id: int, receipt_id: str, feedback: str):
     if feedback not in {"helpful", "unhelpful"}:
         raise memory.AgentMemoryConflictError("Invalid memory feedback")
     row.feedback = feedback
+    if feedback == "helpful":
+        remembered = (
+            db.query(LongTermAgentMemory)
+            .filter(
+                LongTermAgentMemory.id == row.memory_id,
+                LongTermAgentMemory.user_id == user_id,
+                LongTermAgentMemory.version == row.memory_version,
+                LongTermAgentMemory.status == "active",
+            )
+            .with_for_update()
+            .one_or_none()
+        )
+        if remembered is not None and remembered.id not in unavailable_memory_ids(
+            db, user_id
+        ):
+            # Explicit user usefulness is stronger than mere exposure, even
+            # when the model omitted its citation. Anchor to this receipt's
+            # observed use, so repeated PUTs cannot keep a memory alive forever.
+            remembered.last_used_at = max(
+                remembered.last_used_at or row.created_at, row.created_at
+            )
+            # usage_count remains the count of cited receipts, not feedback.
     db.flush()
     return {"id": row.id, "feedback": row.feedback}

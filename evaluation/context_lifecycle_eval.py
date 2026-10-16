@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 
-async def evaluate() -> dict:
+async def evaluate(*, history_pairs: int = 0) -> dict:
     from app.core.llm_client_factory import build_provider_client_for_role
     from app.core.model_provider_adapter import (
         ModelProviderAdapter,
@@ -40,6 +40,24 @@ async def evaluate() -> dict:
             "content": "B薪资仍待确认，下一步核实。文件为resume.pdf。",
         },
     ]
+    # Irrelevant historical detail must not displace constraints at the start.
+    for index in range(history_pairs):
+        history.extend(
+            [
+                item(
+                    {
+                        "role": "user",
+                        "content": f"第{index + 1}次练习：解释索引原理，不改变找工作的约束。",
+                    },
+                    "user",
+                ),
+                {
+                    "role": "assistant",
+                    "content": "数据库索引可以缩小查询范围，需结合查询条件分析执行计划。"
+                    * 20,
+                },
+            ]
+        )
     first, first_report = await compact(history, client=client, profile=profile)
     first.append(
         item(
@@ -85,6 +103,7 @@ async def evaluate() -> dict:
         "checks": checks,
         "model": profile.id,
         "compactions": [first_report, second_report],
+        "history_pairs": history_pairs,
         "answer": answer,
         "scope": "Selected primary model, two original-template compactions, serialized checkpoint continuation; synthetic data only.",
     }

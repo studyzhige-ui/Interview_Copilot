@@ -18,7 +18,7 @@ export function AuthPage() {
           <Logo size={36} />
           <div>
             <div className="text-lg font-semibold text-stone-800">Interview Copilot</div>
-            <div className="text-xs text-stone-500">面试复盘 / 模拟训练 / 能力分析</div>
+            <div className="text-xs text-stone-500">求职档案 · 岗位跟进 · 面试练习</div>
           </div>
         </div>
 

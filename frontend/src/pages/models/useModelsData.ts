@@ -70,6 +70,7 @@ export function useModelsData() {
   const refresh = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ['models', 'catalog'] }),
     queryClient.invalidateQueries({ queryKey: ['models', 'providers'] }),
+    queryClient.invalidateQueries({ queryKey: ['models', 'apiKeys'] }),
   ]);
 
   const onSaveKey = async (provider: string, key: string) => {
@@ -220,6 +221,7 @@ export function useModelsData() {
 
   return {
     loading,
+    error: catalogQuery.error ?? providersQuery.error ?? apiKeysQuery.error,
     profiles,
     providers,
     apiKeys,

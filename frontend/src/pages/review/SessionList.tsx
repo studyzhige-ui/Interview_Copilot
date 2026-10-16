@@ -188,7 +188,7 @@ export function SessionList({
   return (
     <aside
       style={{ '--record-list-width': `${width}px` } as CSSProperties}
-      className={`w-full lg:w-[var(--record-list-width)] shrink-0 bg-white border-r border-stone-200 flex-col ${className}`}
+      className={`w-full xl:w-[var(--record-list-width)] shrink-0 bg-white border-r border-stone-200 flex-col ${className}`}
     >
       <div className="p-4 border-b border-stone-200">
         <div className="flex items-center justify-between mb-2.5">

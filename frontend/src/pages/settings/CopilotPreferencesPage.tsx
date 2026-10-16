@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { getMe, updateMe } from '@/api/auth';
@@ -30,22 +31,31 @@ function isConflict(error: unknown): boolean {
 }
 
 export function CopilotPreferencesPage() {
+  const [params, setParams] = useSearchParams();
+  const view = params.get('view') === 'memory' ? 'memory' : 'preferences';
   const profileQuery = useQuery({
     queryKey: PROFILE_KEY,
     queryFn: getMe,
+    enabled: view === 'preferences',
   });
   const preferenceQuery = useQuery({
     queryKey: PREFERENCE_KEY,
     queryFn: getCopilotPreference,
+    enabled: view === 'preferences',
   });
 
   return (
-    <div className="mx-auto max-w-4xl space-y-5 p-4 md:p-6">
+    <div className="workspace-page space-y-5">
       <header>
-        <h1 className="text-xl font-semibold text-stone-800">个性化设置</h1>
-        <p className="mt-1 text-sm text-stone-500">分别管理新对话的执行默认值，以及跨对话生效的协作规则。</p>
+        <h1 className="text-xl font-semibold text-stone-800">协作设置</h1>
+        <p className="mt-1 text-sm text-stone-500">设置 Copilot 如何与你协作，以及哪些对话可以贡献长期记忆。</p>
       </header>
 
+      <nav aria-label="协作设置分类" className="profile-tabs">
+        <button type="button" aria-pressed={view === 'preferences'} onClick={() => setParams({})}>执行与偏好</button>
+        <button type="button" aria-pressed={view === 'memory'} onClick={() => setParams({ view: 'memory' })}>长期记忆</button>
+      </nav>
+      {view === 'memory' ? <AgentMemorySettingsSection /> : <>
       {profileQuery.isLoading ? (
         <section className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white p-5 text-sm text-stone-500 shadow-xs">
           <Spinner size={15} />正在读取默认执行模式…
@@ -83,7 +93,7 @@ export function CopilotPreferencesPage() {
         </section>
       )}
 
-      <AgentMemorySettingsSection />
+      </> }
     </div>
   );
 }

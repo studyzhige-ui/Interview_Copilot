@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
 from app.db.database import get_db
-from app.models.artifact import Artifact, ArtifactVersion
+from app.models.artifact import Artifact, ArtifactVersion, ArtifactResumeState
 from app.models.interview_record import InterviewRecord
 from app.models.job_opportunity import JobOpportunity
 from app.models.user import User
@@ -401,7 +401,10 @@ def archive_artifact(
 ):
     try:
         owned = _owned_artifact(db, current_user.id, artifact_id)
-        if owned.kind == "resume":
+        if (
+            owned.kind == "resume"
+            and db.query(ArtifactResumeState).filter_by(artifact_id=owned.id).first()
+        ):
             resume_artifact_service.archive_resume_artifact(
                 db,
                 user_pk=current_user.id,
@@ -422,6 +425,25 @@ def archive_artifact(
     except resume_artifact_service.ResumeArtifactError as exc:
         db.rollback()
         _raise_resume_http(exc)
+
+
+@router.post("/{artifact_id}/restore", response_model=ArtifactView)
+def restore_artifact(
+    artifact_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db, scope="function"),
+):
+    try:
+        # Match resume upload/archive lock ordering before locking the artifact.
+        resume_artifact_service._lock_user(db, user_pk=current_user.id)
+        artifact = artifact_service.restore_artifact(
+            db, user_pk=current_user.id, artifact_id=artifact_id
+        )
+        db.commit()
+        return _artifact_view(db, artifact)
+    except artifact_service.ArtifactDomainError as exc:
+        db.rollback()
+        _raise_artifact_http(exc)
 
 
 @router.post("/{artifact_id}/related", response_model=ArtifactRelatedView)

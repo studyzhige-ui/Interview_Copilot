@@ -165,7 +165,52 @@ async def evaluate():
     }
 
 
-async def integration():
+async def answer_projection(query: str, memory_block: str, *, user_pk: int) -> dict:
+    """Production Chat strategy against synthetic state and default primary."""
+    from unittest.mock import patch
+    from app.core.llm_client_factory import build_provider_client_for_role
+    from app.conversation import chat_strategy
+    from app.conversation.context_contracts import AssembledContext
+    from app.conversation.strategy import StrategyContext, StrategyResult
+
+    # No production user's model preference is read for a synthetic account.
+    resolved = await build_provider_client_for_role("primary")
+
+    async def resolve(*args, **kwargs):
+        return resolved
+
+    context = AssembledContext(
+        conversation_id="synthetic-new-conversation",
+        current_input=query,
+        memory_block=memory_block,
+        prompt_token_limit=12000,
+        output_token_reserve=4096,
+        window_messages=[],
+    )
+    ctx = StrategyContext(
+        user_id="synthetic-memory-evaluation",
+        user_pk=user_pk,
+        session_id=context.conversation_id,
+        user_message=query,
+        assembled=context,
+    )
+    result = StrategyResult()
+    with patch.object(chat_strategy, "build_provider_client_for_role", resolve):
+        async for _ in chat_strategy.ChatPipelineStrategy().execute(ctx, result):
+            pass
+    if result.outcome != "completed":
+        raise ValueError(f"evaluation_answer_incomplete:{result.stop_reason}")
+    return {
+        "answer": result.final_answer,
+        "model": resolved[1].id,
+        "usage": [
+            {"input": result.prompt_tokens, "cache_read": result.cache_read_tokens}
+        ],
+        "context": context.context_report,
+    }
+
+
+async def integration(*, answer_checks=False, update_checks=False):
     """Run the real service seams against a disposable file-backed database."""
     from datetime import timedelta
     from unittest.mock import patch
@@ -183,6 +228,7 @@ async def integration():
     from app.memory import recall as memory_recall
     from app.memory import lifecycle as agent_memory_service
     from app.schemas.agent_memory import AgentMemoryStatusCommand
+    from app.schemas.agent_memory import AgentMemoryUpdate
 
     from tempfile import TemporaryDirectory
 
@@ -238,12 +284,158 @@ async def integration():
             ),
         ):
             written = await memory_pipeline.process_turn("synthetic-turn")
+            automatic_update = None
+            if update_checks:
+                correction = "之前电脑上看对照表很清楚，但这次在手机上看宽表反而看不清；你改成短段落，按相同维度逐项比较后，我才理解两个 offer 的取舍。"
+                with factory() as db:
+                    before = {
+                        row.id: row.version
+                        for row in db.query(LongTermAgentMemory).filter_by(
+                            user_id=user_id, status="active"
+                        )
+                    }
+                    db.add_all(
+                        [
+                            ConversationMessage(
+                                conversation_id="synthetic-conversation",
+                                seq=3,
+                                role="User",
+                                content=correction,
+                            ),
+                            ConversationMessage(
+                                conversation_id="synthetic-conversation",
+                                seq=4,
+                                role="Assistant",
+                                content="已记录本次实际体验。",
+                            ),
+                            ConversationTurn(
+                                id="synthetic-update",
+                                conversation_id="synthetic-conversation",
+                                user_id=user_id,
+                                mode="agent",
+                                message=correction,
+                                status="completed",
+                                user_message_seq=3,
+                                assistant_message_seq=4,
+                                completed_at=utc_now() - timedelta(hours=1),
+                            ),
+                        ]
+                    )
+                    db.commit()
+                await memory_pipeline.process_turn("synthetic-update")
+                with factory() as db:
+                    rows = (
+                        db.query(LongTermAgentMemory)
+                        .filter_by(user_id=user_id, status="active")
+                        .all()
+                    )
+                    automatic_update = {
+                        "passed": any(
+                            any(
+                                e.get("turn_id") == "synthetic-update"
+                                for e in row.evidence_json or []
+                            )
+                            for row in rows
+                        )
+                        and any(
+                            row.id not in before or row.version > before[row.id]
+                            for row in rows
+                        ),
+                        "memories": [
+                            {
+                                "id": row.id,
+                                "version": row.version,
+                                "content": row.content,
+                                "applicability": row.applicability,
+                                "valence": row.valence,
+                                "sources": [
+                                    e.get("turn_id") for e in row.evidence_json or []
+                                ],
+                            }
+                            for row in rows
+                        ],
+                    }
             block = await memory_recall.recall(
                 conversation_id="synthetic-conversation",
                 user_pk=user_id,
                 current_query="两份 offer 各有得失，我该怎么选？",
                 turn_id="synthetic-turn",
             )
+            behavior = None
+            if answer_checks and block:
+                query = "比较两份后端 offer：A 月薪 30k、通勤 60 分钟；B 月薪 28k、通勤 20 分钟。成长空间均待核实。帮我看清取舍，保留这四个原始数值。"
+                # A separate conversation has no original preference transcript.
+                with factory() as db:
+                    db.add(
+                        Conversation(id="synthetic-new-conversation", user_id=user_id)
+                    )
+                    db.commit()
+                cross_session = await memory_recall.recall(
+                    conversation_id="synthetic-new-conversation",
+                    user_pk=user_id,
+                    current_query=query,
+                )
+                baseline = await answer_projection(query, "", user_pk=user_id)
+                personalized = await answer_projection(
+                    query, cross_session, user_pk=user_id
+                )
+                with factory() as db:
+                    row = (
+                        db.query(LongTermAgentMemory)
+                        .filter_by(user_id=user_id, status="active")
+                        .first()
+                    )
+                    old_version = row.version
+                    agent_memory_service.update_memory(
+                        db,
+                        user_pk=user_id,
+                        memory_id=row.id,
+                        command=AgentMemoryUpdate(
+                            expected_version=row.version,
+                            content="在手机上比较 offer 时，三段短文比宽表更容易读懂。使用‘先排除’、‘再比较’、‘待核实’三个标题且不用表格，已经帮助用户看清取舍。",
+                            applicability="在手机上比较 offer 时",
+                        ),
+                    )
+                    db.commit()
+                    edited_version = row.version
+                updated_query = query + "我正在手机上阅读。"
+                updated_block = await memory_recall.recall(
+                    conversation_id="synthetic-new-conversation",
+                    user_pk=user_id,
+                    current_query=updated_query,
+                )
+                updated = await answer_projection(
+                    updated_query, updated_block, user_pk=user_id
+                )
+                override = await answer_projection(
+                    updated_query + "本次只用一个表格，不要分标题。",
+                    updated_block,
+                    user_pk=user_id,
+                )
+                checks = {
+                    "cross_session_recall": bool(cross_session),
+                    "version_advanced": edited_version > old_version,
+                    "updated_recall": "先排除" in updated_block,
+                    "updated_answer_applies_memory": all(
+                        word in updated["answer"]
+                        for word in ("先排除", "再比较", "待核实")
+                    )
+                    and "|" not in updated["answer"],
+                    "current_request_overrides_memory": "|" in override["answer"],
+                    "known_facts_preserved": all(
+                        term in updated["answer"].lower()
+                        for term in ("30", "28", "60", "20")
+                    ),
+                }
+                behavior = {
+                    "checks": checks,
+                    "passed": all(checks.values()),
+                    "baseline": baseline,
+                    "with_memory": personalized,
+                    "updated": updated,
+                    "override": override,
+                    "scope": "Production Chat strategy and configured default primary model, including dispatch-time memory validation; synthetic state, no HTTP/worker admission. Not a real user outcome benchmark.",
+                }
             with factory() as db:
                 extraction = db.get(MemoryExtraction, "synthetic-turn")
                 memories = (
@@ -277,13 +469,17 @@ async def integration():
                 and evidence_matched
                 and bool(block)
                 and not after_delete
-                and reprocess == 0,
+                and reprocess == 0
+                and (automatic_update is None or automatic_update["passed"])
+                and (behavior is None or behavior["passed"]),
                 "extraction_status": status,
                 "published": published,
                 "recall_nonempty": bool(block),
                 "deleted_recall_empty": not after_delete,
                 "deleted_source_not_recreated": reprocess == 0,
                 "database": "disposable file-backed SQLite; no user data accessed",
+                "answer_behavior": behavior,
+                "automatic_update": automatic_update,
             }
     finally:
         engine.dispose()
@@ -295,6 +491,22 @@ if __name__ == "__main__":
     parser.add_argument("--live", action="store_true", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--integration-only", action="store_true")
+    parser.add_argument("--context-history-pairs", type=int, default=0)
+    parser.add_argument(
+        "--update-checks",
+        action="store_true",
+        help="Extract and consolidate new contradictory contextual feedback",
+    )
+    parser.add_argument(
+        "--context-only",
+        action="store_true",
+        help="Run the context continuation evaluation with the isolated usage ledger",
+    )
+    parser.add_argument(
+        "--answer-checks",
+        action="store_true",
+        help="Four additional live answer calls comparing baseline, memory, edit and override",
+    )
     args = parser.parse_args()
     # An isolated persistent accounting database avoids reading production user
     # data and keeps actual paid usage/unknown outcomes even when the benchmark
@@ -329,7 +541,21 @@ if __name__ == "__main__":
             patch.object(runtime, "SessionLocal", sessions),
             runtime.scope(1, "memory-eval"),
         ):
-            report = asyncio.run(integration() if args.integration_only else evaluate())
+            if args.context_only:
+                from context_lifecycle_eval import evaluate as evaluate_context
+
+                report = asyncio.run(
+                    evaluate_context(history_pairs=args.context_history_pairs)
+                )
+            else:
+                report = asyncio.run(
+                    integration(
+                        answer_checks=args.answer_checks,
+                        update_checks=args.update_checks,
+                    )
+                    if args.integration_only
+                    else evaluate()
+                )
         report["usage_ledger"] = str(ledger)
     finally:
         accounting.dispose()

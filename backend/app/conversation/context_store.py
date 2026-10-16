@@ -11,6 +11,10 @@ from app.db.types import utc_now
 from app.models.chat import Conversation
 from app.models.context_checkpoint import ContextCheckpoint
 from app.models.conversation_turn import ConversationTurn
+from app.conversation.context_window import persistent_history
+
+
+_FORMAT_VERSION = 2
 
 
 def load(conversation_id: str, *, scope: str = "") -> dict | None:
@@ -18,11 +22,16 @@ def load(conversation_id: str, *, scope: str = "") -> dict | None:
         row = db.get(ContextCheckpoint, (conversation_id, scope))
         if row is None:
             return None
+        state = deepcopy(row.state)
+        compatible = state.get("format_version") == _FORMAT_VERSION
+        # Old summaries may contain revoked memory/guidance. Filtering their
+        # visible slots cannot remove paraphrases; replay the canonical history
+        # instead, preserving the CAS version so stale writers still lose.
         return {
             "version": row.version,
-            "through_seq": row.through_seq,
+            "through_seq": row.through_seq if compatible else 0,
             "window_id": row.window_id,
-            "state": deepcopy(row.state),
+            "state": state if compatible else {"messages": [], "covered_call_ids": []},
         }
 
 
@@ -48,10 +57,13 @@ def save(
         if conversation is None:
             return None
         if turn_id:
-            turn = db.get(ConversationTurn, turn_id)
+            turn = db.get(ConversationTurn, turn_id, with_for_update=True)
             if (
                 turn is None
                 or turn.conversation_id != conversation_id
+                or turn.user_id != conversation.user_id
+                or turn.status != "running"
+                or turn.cancel_requested
                 or turn.dispatch_generation != dispatch_generation
                 or conversation.active_turn_id not in {None, turn_id}
             ):
@@ -73,13 +85,17 @@ def save(
         if previous is None or replace:
             row.previous_window_id = previous
             row.window_id = str(uuid4())
-        row.state = deepcopy(state)
+        row.state = {
+            **deepcopy(state),
+            "messages": deepcopy(persistent_history(state.get("messages", []))),
+            "format_version": _FORMAT_VERSION,
+        }
         row.updated_at = utc_now()
         result = {
             "version": row.version,
             "through_seq": through_seq,
             "window_id": row.window_id,
-            "state": deepcopy(state),
+            "state": deepcopy(row.state),
         }
         db.commit()
         return result

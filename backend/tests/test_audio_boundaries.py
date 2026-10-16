@@ -3,10 +3,17 @@
 import struct
 import pytest
 from app.media.application.evidence_windows import evidence_windows
-from app.media.application.speaker_identity import SpeakerIdentity
+from app.media.application.recording_speakers import RecordingSpeakers
 from app.local_inference.audio import pcm_payload, decode_pcm
 from app.local_inference.client import make_audio_request
 from app.local_inference.errors import ProtocolError
+from app.local_inference.speaker_audio import (
+    validate_clustering_request,
+    validate_clustering_result,
+    encode_embeddings,
+    decode_embeddings,
+    MAX_RECORDING_OBSERVATIONS,
+)
 
 
 @pytest.mark.asyncio
@@ -38,21 +45,22 @@ async def test_each_pcm_sample_belongs_to_exactly_one_core(samples):
     )
 
 
-def test_swapped_local_labels_do_not_swap_recording_speakers():
-    identities = SpeakerIdentity(max_speakers=2)
-    first = identities.assign(
-        [
-            {"speaker_id": "a", "embedding": [1.0, 0.0]},
-            {"speaker_id": "b", "embedding": [0.0, 1.0]},
-        ]
-    )
-    second = identities.assign(
-        [
-            {"speaker_id": "b", "embedding": [1.0, 0.0]},
-            {"speaker_id": "a", "embedding": [0.0, 1.0]},
-        ]
-    )
-    assert first["a"] == second["b"] and first["b"] == second["a"]
+@pytest.mark.asyncio
+async def test_all_window_observations_reach_the_single_global_clusterer():
+    identities = RecordingSpeakers()
+    identities.observe([[1.0, 0.0], [0.0, 1.0]])
+    identities.observe([[1.0, 0.0], [0.0, 1.0]])
+
+    class Cluster:
+        async def cluster(self, embeddings, **kwargs):
+            assert embeddings == [[1.0, 0.0], [0.0, 1.0]] * 2
+            return [[1.0, 0.0], [0.0, 1.0]]
+
+    assert await identities.resolve(Cluster(), min_speakers=1, max_speakers=8) == [
+        [1.0, 0.0],
+        [0.0, 1.0],
+    ]
+    assert not identities.embeddings
 
 
 def test_pcm_payload_cannot_be_substituted_or_exceed_model_window():
@@ -63,6 +71,44 @@ def test_pcm_payload_cannot_be_substituted_or_exceed_model_window():
         decode_pcm({**payload, "sha256": "0" * 64})
     with pytest.raises(ProtocolError):
         pcm_payload(bytes(30 * 16000 * 2 + 2))
+
+
+def test_global_speaker_clustering_bounds_and_output_shape():
+    task = {
+        "embeddings": encode_embeddings([[1.0, 0.0], [0.0, 1.0]]),
+        "min_speakers": 1,
+        "max_speakers": 2,
+    }
+    assert validate_clustering_request(task) is task
+    assert validate_clustering_result(task, [[1.0, 0.0]]) == [[1.0, 0.0]]
+    for vectors in (
+        [[float("nan")]],
+        [[0.0]],
+        [[1.0], [1.0, 2.0]],
+        [[1.0]] * (MAX_RECORDING_OBSERVATIONS + 1),
+    ):
+        with pytest.raises(ProtocolError):
+            encode_embeddings(vectors)
+    for labels in ([[1.0]], [[0.0, 0.0]], [[1.0, 0.0]] * 3):
+        with pytest.raises(ProtocolError):
+            validate_clustering_result(task, labels)
+
+
+def test_recording_observations_preserve_float32_values_within_wire_capacity():
+    from app.local_inference.protocol import frame
+
+    vectors = [[0.25, -0.5] * 128] * MAX_RECORDING_OBSERVATIONS
+    payload = encode_embeddings(vectors)
+    assert decode_embeddings(payload) == vectors
+    frame(payload)
+    for corrupted in (
+        {**payload, "dimension": 0},
+        {**payload, "data": "%%%"},
+        {**payload, "data": "AAAA"},
+        {"dimension": 1, "data": "AADAfw=="},  # float32 NaN
+    ):
+        with pytest.raises(ProtocolError):
+            decode_embeddings(corrupted)
 
 
 @pytest.mark.parametrize("count", [0, 33, True, 1.5])
@@ -81,14 +127,17 @@ async def test_generic_and_remote_asr_share_bounded_broker_speaker_identity(
     calls = []
 
     class Observations:
-        async def diarize(self, pcm, *, max_speakers):
+        async def cluster(self, embeddings, **kwargs):
+            return [[1.0, 0.0]]
+
+        async def diarize(self, pcm, *, max_speakers, centroids=None):
             duration = len(pcm) / 32000
             calls.append(duration)
-            label = f"window_{len(calls)}"
+            label = "speaker_001" if centroids else f"window_{len(calls)}"
             return {
                 "regular": [{"start": 0.0, "end": duration, "speaker_id": label}],
                 "exclusive": [{"start": 0.0, "end": duration, "speaker_id": label}],
-                "speakers": [{"speaker_id": label, "embedding": [1.0, 0.0]}],
+                "embeddings": [] if centroids else [[1.0, 0.0]],
             }
 
     monkeypatch.setattr(engine, "diarize_model", Observations())
@@ -106,8 +155,22 @@ async def test_generic_and_remote_asr_share_bounded_broker_speaker_identity(
         await engine._diarization_frame(np.array([float("nan")]))
     assert len(calls) == previous
     monkeypatch.setattr(engine.settings, "DIARIZATION_MIN_SPEAKERS", 2)
-    with pytest.raises(ValueError, match="recording_speaker_count_below_minimum"):
-        await engine._diarization_frame(np.zeros(16000, dtype=np.float32))
+    # Configured cluster bounds are model inputs, not proof of observed roles.
+    result = await engine._diarization_frame(np.zeros(16000, dtype=np.float32))
+    assert set(result["speaker"]) == {"speaker_001"}
+
+
+@pytest.mark.parametrize("minimum, maximum", [(0, 2), (1, 33), (3, 2)])
+def test_invalid_speaker_bounds_fail_at_configuration(minimum, maximum):
+    from pydantic import ValidationError
+    from app.core.config import Settings
+
+    with pytest.raises(ValidationError, match="DIARIZATION"):
+        Settings(
+            _env_file=None,
+            DIARIZATION_MIN_SPEAKERS=minimum,
+            DIARIZATION_MAX_SPEAKERS=maximum,
+        )
 
 
 def test_configured_hybrid_never_silently_becomes_single_speaker(monkeypatch):

@@ -395,7 +395,7 @@ export function ChatPanel({
     <aside
       style={flexible ? undefined : { '--chat-panel-width': `${width}px` } as CSSProperties}
       className={[
-        'bg-white border-l border-stone-200 flex flex-col',
+        'chat-panel bg-white border-l border-stone-200 flex flex-col',
         flexible ? 'flex-1 min-w-0' : 'w-full lg:w-[var(--chat-panel-width)] shrink-0',
         className,
       ].join(' ')}

@@ -286,7 +286,20 @@ def is_already_downloaded(repo_id: str) -> bool:
 
 def is_docling_downloaded() -> bool:
     # Custom bundles must additionally pass Docling's offline loader check.
-    return inspect_directory("docling", DOCLING_MODELS_DIR).loadable_candidate
+    bundle = inspect_directory("docling", DOCLING_MODELS_DIR).loadable_candidate
+    # An older bundle can pass the generic inspection but lack the pinned SDK's
+    # default Chinese recognizer. Setup must fetch these before offline parsing.
+    ocr_files = (
+        "PP-OCRv6_det_small.onnx",
+        "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
+        "PP-OCRv6_rec_small.onnx",
+    )
+    ocr_ready = not settings.RAG_OCR_ENABLED or all(
+        (DOCLING_MODELS_DIR / "RapidOcr" / name).is_file()
+        and (DOCLING_MODELS_DIR / "RapidOcr" / name).stat().st_size > 0
+        for name in ocr_files
+    )
+    return bundle and ocr_ready
 
 
 def download_docling_models() -> Path:
@@ -296,6 +309,7 @@ def download_docling_models() -> Path:
         download_models(
             output_dir=DOCLING_MODELS_DIR,
             progress=True,
+            rapidocr_models=["onnxruntime:ch"],
         )
     )
 

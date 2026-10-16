@@ -38,6 +38,16 @@ def kind(message: dict) -> str:
     return message.get("_context", {}).get("kind", message.get("role", "unknown"))
 
 
+def persistent_history(messages: list[dict]) -> list[dict]:
+    """Keep dialogue, not revocable owner projections or loop instructions.
+
+    Memory, guidance, retrieved material and runtime state must be read again
+    on every dispatch. They must not survive indirectly inside a summary.
+    Assistant answers remain historical dialogue, not authoritative facts.
+    """
+    return [m for m in messages if kind(m) in {"user", "assistant", "tool", "summary"}]
+
+
 def admit(messages: list[dict], *, tool_limit: int | None = None) -> list[dict]:
     """Bound every tool output on admission; never modify the durable result.
 
@@ -180,7 +190,7 @@ async def compact(
     )
 
     systems = [m for m in messages if m.get("role") == "system"]
-    original = [m for m in messages if m.get("role") != "system"]
+    original = persistent_history(messages)
     output = min(output_tokens, int(profile.max_output_tokens or output_tokens))
     budget = RequestBudget.resolve(profile.context_window, output)
     reserved_messages = reserved_messages or []

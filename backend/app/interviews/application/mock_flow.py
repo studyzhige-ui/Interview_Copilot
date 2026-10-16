@@ -666,6 +666,17 @@ def delete_mock_audio_assets(db: Session, conversation_id: str, user_pk: int) ->
             .all()
         )
         asset_ids: set[str] = set()
+        from app.models.mock_audio_transcription import MockAudioTranscription
+
+        record_ids = db.query(Conversation.subject_id).filter(
+            Conversation.id == conversation_id
+        )
+        asset_ids.update(
+            asset_id
+            for (asset_id,) in db.query(MockAudioTranscription.audio_file_asset_id)
+            .filter(MockAudioTranscription.record_id.in_(record_ids))
+            .all()
+        )
         for (blocks_json,) in rows:
             try:
                 blocks = json.loads(blocks_json) or []

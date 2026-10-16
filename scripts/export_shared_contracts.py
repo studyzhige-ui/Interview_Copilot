@@ -39,7 +39,6 @@ from app.schemas.interview_invitation import (  # noqa: E402
     FactConfirmationRequest,
     FactConfirmationResolution,
     InterviewInvitationCandidateFacts,
-    InterviewInvitationHandoffView,
     VerificationView,
 )
 from app.schemas.invitation_submission import (  # noqa: E402
@@ -86,7 +85,6 @@ OUTPUT_MODELS = (
     ConfirmInterviewInvitationResult,
     FactConfirmationRequest,
     InterviewInvitationCandidateFacts,
-    InterviewInvitationHandoffView,
     InvitationSubmissionReceipt,
     VerificationView,
     AgentInteractionView,

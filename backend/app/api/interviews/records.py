@@ -18,13 +18,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.file_assets import require_uploaded
+from app.api.file_assets import require_readable_upload
 from app.core.error_messages import humanize_error
 from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
 from app.models.interview_qa import InterviewQA
+from app.interviews.domain.specification import PHASE_LABELS
 from app.models.user import User
 from app.schemas.interview import (
     AnalyzeRequest,
@@ -85,7 +86,7 @@ async def analyze_interview_endpoint(
             )
         # Confirm-on-consume (UP-1): verification (exists / size cap / magic)
         # can't be skipped by never calling /confirm.
-        upload = require_uploaded(db, upload, "音频文件")
+        upload = require_readable_upload(db, upload, "音频文件")
 
         try:
             resume_ctx = await analysis_intake.resolve_resume_context(
@@ -222,11 +223,15 @@ def list_interview_records(
     current_user: User = Depends(get_current_user),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
+    job_opportunity_id: str | None = Query(default=None, max_length=35),
+    include_invitations: bool = True,
 ):
     records = interview_record_service.list_by_user(
         current_user.username,
         offset=offset,
         limit=limit,
+        job_opportunity_id=job_opportunity_id,
+        include_invitations=include_invitations,
     )
     return [
         InterviewRecordListItem(
@@ -237,6 +242,13 @@ def list_interview_records(
             job_opportunity_id=r.job_opportunity_id,
             status=r.status,
             created_at=r.created_at.isoformat() if r.created_at else "",
+            scheduled_start_at=r.scheduled_start_at,
+            scheduled_end_at=r.scheduled_end_at,
+            source_timezone=r.source_timezone,
+            stage_label=r.stage_label,
+            scheduled_location=r.scheduled_location,
+            meeting_url=r.meeting_url,
+            contact=r.contact_json,
         )
         for r in records
     ]
@@ -349,7 +361,7 @@ def _serialize_qa(qa: InterviewQA, audio_urls: dict[str, str] | None = None) -> 
         "version": qa.version,
         "order_idx": qa.order_idx,
         "phase": qa.phase,
-        "phase_label": qa.phase_label,
+        "phase_label": qa.phase_label or PHASE_LABELS.get(qa.phase, qa.phase),
         "question": qa.question,
         "answer": qa.answer,
         "question_summary": qa.question_summary,

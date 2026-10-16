@@ -52,11 +52,6 @@ def update_notification_preference(
     user_pk: int,
     command: NotificationPreferenceUpdate,
 ) -> NotificationPreference:
-    try:
-        ZoneInfo(command.timezone)
-    except ZoneInfoNotFoundError as exc:
-        raise ReminderError("timezone must be a valid IANA timezone") from exc
-
     row = (
         db.query(NotificationPreference)
         .filter(NotificationPreference.user_id == user_pk)

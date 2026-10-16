@@ -7,7 +7,7 @@ FROM python:3.13.14-slim AS builder
 
 WORKDIR /build
 
-# System dependencies for building native wheels (psycopg2, bcrypt, etc.)
+# System dependencies for building native wheels (psycopg, bcrypt, etc.)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
@@ -46,7 +46,7 @@ RUN /opt/venv/bin/python -c "import importlib.util; importlib.util.find_spec('wh
 # Stage 2: Lean runtime image
 FROM python:3.13.14-slim AS runtime
 
-# libpq is needed at runtime for psycopg2; FFmpeg decodes bounded source clips;
+# libpq is needed at runtime for PostgreSQL; FFmpeg decodes bounded source clips;
 # curl is the healthcheck client;
 # gosu (~1MB) lets entrypoint drop privileges *after* fixing /app/data
 # ownership — useful when a bind-mounted volume comes in owned by host UID.
@@ -88,6 +88,9 @@ COPY --chown=app:app \
     scripts/consistency_scan.py \
     scripts/init_models.py \
     scripts/reingest_hybrid.py \
+    scripts/prepare_rag_hnsw.py \
+    scripts/prepare_local_inference.py \
+    scripts/run_local_inference.py \
     /app/scripts/
 
 # Entrypoint creates /app/data if missing, chowns it (handles the case

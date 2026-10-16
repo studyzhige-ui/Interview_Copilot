@@ -43,8 +43,8 @@ export function PreparationPanel({ resumeId, jdText, jobOpportunityId, disabled,
     const link = document.createElement('a'); link.href = url; link.download = `interview-preparation-${brief.snapshot_id.slice(0, 12)}.md`;
     link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 0);
   };
-  return <section aria-label="岗位证据与专项准备" className="w-full mt-6 rounded-xl border border-stone-200 p-4 space-y-3">
-    <h3 className="font-semibold">岗位证据与专项准备</h3>
+  return <details aria-label="岗位证据与专项准备" className="w-full mt-6 rounded-xl border border-stone-200 p-4 space-y-3">
+    <summary className="cursor-pointer text-sm font-medium">核对岗位证据，选择专项练习</summary>
     <p className="text-sm text-stone-600">核对简历与岗位原文，再选择具体目标练习。不调用模型，不自动启动面试。</p>
     <Btn kind="secondary" disabled={disabled || busy} onClick={() => void load()}>{busy ? '正在核对资料…' : '生成原文准备预览'}</Btn>
     {error && <p role="alert">{error}</p>}
@@ -71,5 +71,5 @@ export function PreparationPanel({ resumeId, jdText, jobOpportunityId, disabled,
         <p className="text-sm text-stone-500">未选入 {brief.omitted_resume_excerpt_count} 段；这是原文摘录，不是完整简历。未生成新的经历或数字。</p>
       </details>
     </>}
-  </section>;
+  </details>;
 }

@@ -10,64 +10,64 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     # Web
-    "fastapi==0.141.1",
-    "uvicorn==0.52.1",
-    "gunicorn==26.0.0",
+    "fastapi==0.143.1",
+    "uvicorn==0.54.0",
+    "gunicorn==26.2.0",
     "python-multipart==0.0.32",
     # Persistence and background work
-    "sqlalchemy==2.0.51",
-    "psycopg2-binary==2.9.12",
-    "alembic==1.19.1",
+    "sqlalchemy==2.1.4",
+    "psycopg[binary]==3.3.6",
+    "alembic==1.20.0",
     "redis==8.1.0",
     "celery==5.6.3",
-    "boto3==1.43.67",
+    "boto3==1.43.114",
     # PostgreSQL vector projection; local ML libraries stay in their own environment.
-    "pgvector==0.5.0",
+    "pgvector==0.5.1",
     # Optional Chinese lexical profile runs in API/worker, outside the ML child.
     "jieba==0.42.1",
     # Configuration and security
-    "python-dotenv==1.2.2",
-    "pydantic[email]==2.13.4",
-    "pydantic-settings==2.15.0",
-    "PyJWT==2.13.0",
-    "cryptography==50.0.0",
+    "python-dotenv==1.2.4",
+    "pydantic[email]==2.14.1",
+    "pydantic-settings==2.16.0",
+    "PyJWT==2.15.1",
+    "cryptography==50.0.2",
     # Runtime plugin and Gmail credential-store locking
-    "filelock==3.32.2",
-    "pwdlib[argon2,bcrypt]==0.3.0",
+    "filelock==4.2.0",
+    "pwdlib[argon2,bcrypt]==0.3.1",
     "nest_asyncio==1.6.0",
     "slowapi==0.1.10",
     # LLM and remote RAG providers
-    "openai==2.53.0",
-    "anthropic==0.102.0",
-    "tiktoken==0.13.0",
-    "langsmith==0.10.17",
-    "llama-index-core==0.14.23",
-    "llama-index-llms-openai==0.7.10",
-    "llama-index-llms-openai-like==0.7.2",
+    "openai==2.54.0",
+    "anthropic==1.14.0",
+    "tiktoken==0.14.0",
+    "langsmith==0.14.8",
+    "llama-index-core==0.14.25",
+    "llama-index-llms-openai==0.8.3",
+    "llama-index-llms-openai-like==0.8.1",
     "llama-index-embeddings-openai==0.6.0",
-    "llama-index-embeddings-openai-like==0.3.1",
+    "llama-index-embeddings-openai-like==0.4.0",
     # Documents
-    "llama-index-readers-file==0.6.0",
-    "pypdf==6.15.0",
+    "llama-index-readers-file==0.7.0",
+    "pypdf==6.20.1",
     "pymupdf==1.28.2",
     "python-docx==1.2.0",
     "python-pptx==1.0.2",
     "openpyxl==3.1.5",
     "beautifulsoup4==4.15.0",
-    "charset-normalizer==3.4.9",
+    "charset-normalizer==3.5.2",
     "tree-sitter==0.26.0",
     # Installed native grammars: no lazy network download during code ingestion.
     "tree-sitter-python==0.25.0",
     "tree-sitter-java==0.23.5",
     "tree-sitter-cpp==0.23.4",
-    "tree-sitter-c==0.24.1",
+    "tree-sitter-c==0.24.2",
     # Agent capabilities
     "httpx==0.28.1",
     "markdownify==1.2.3",
-    "mcp==2.0.0",
+    "mcp==2.3.0",
     "PyYAML==6.0.3",
     "jsonschema==4.26.0",
-    "edge-tts==7.2.8",
+    "edge-tts==7.3.1",
 ]
 
 [project.optional-dependencies]
@@ -78,12 +78,13 @@ local = [
     "transformers==4.57.6",
     "huggingface-hub==0.36.2",
     "sentence-transformers==5.7.0",
-    "docling[rapidocr]==2.118.1",
+    "docling[rapidocr]==2.139.0",
+    "rapidocr==3.10.0",
     "faster-whisper==1.2.1",
     "whisperx==3.8.6",
-    # WhisperX -> pyannote pulls TorchCodec without constraining it to the
-    # pinned PyTorch ABI.  TorchCodec 0.7 is the compatible release line for
-    # torch 2.8; newer releases fail to load their Windows extension DLLs.
+    "nltk==3.10.3",
+    # WhisperX requires torch~=2.8.0 and torchcodec<0.8. Keep the matching
+    # TorchCodec ABI rather than independently upgrading native extensions.
     "torchcodec==0.7.0",
 ]
 cuda = [
@@ -99,10 +100,12 @@ dev = [
     "pytest-asyncio==1.4.0",
     # Keep the lint contract explicit below so Ruff upgrades do not silently
     # enable unrelated rule families.
-    "ruff==0.16.2",
+    "ruff==0.17.0",
 ]
 evaluation = [
-    # Optional offline RAG and interview quality evaluation
+    # Optional offline evaluation only: use a separate environment, never the
+    # API/worker image. Ragas and its compatible LangChain line still have
+    # published advisories; see the dependency upgrade acceptance report.
     "ragas==0.4.3",
     # Ragas 0.4.3 imports the pre-1.0 LangChain community module layout.
     # Pin the newest coherent 0.3 line instead of the incompatible 1.x/0.4 pair.
@@ -115,7 +118,7 @@ package-dir = {"" = "backend"}
 
 [tool.setuptools.package-data]
 "app.providers.catalog" = ["seed_catalog.json"]
-"app.conversation" = ["context_templates/*.md", "context_templates/LICENSE.*", "context_templates/NOTICE.*"]
+"app.conversation" = ["context_templates/*.md", "context_templates/LICENSE", "context_templates/NOTICE"]
 
 [tool.setuptools.packages.find]
 where = ["backend"]

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Upload, Search, Pencil, Trash2, FileText, RefreshCw,
-  ChevronLeft, ChevronRight, ArrowDown, ArrowUp, Folder,
+  ChevronLeft, ChevronRight, ArrowDown, ArrowUp,
 } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -21,13 +21,7 @@ import {
   uploadKnowledgeFile,
 } from '@/api/knowledge';
 import type { KnowledgeDoc } from '@/types/api';
-import { ResumeSection } from './ResumeSection';
 
-type TopTab = 'knowledge' | 'resumes';
-
-// Personal resumes are a separate profile entity, not RAG material. Keeping
-// knowledge categories distinct prevents an uploaded resume from appearing to
-// affect mock-interview context when it actually does not.
 const CATEGORIES = ['面试题库', '技术资料', '项目资料'] as const;
 type Category = typeof CATEGORIES[number];
 
@@ -71,49 +65,10 @@ function humanSize(n: number | null): string {
 }
 
 export function LibraryPage() {
-  const [tab, setTab] = useState<TopTab>('knowledge');
-  return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto">
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        <h2 className="text-xl font-semibold text-stone-800">资料库</h2>
-        <div className="ml-3 inline-flex items-center gap-1 p-0.5 bg-stone-100 rounded-lg">
-          <TopTabBtn active={tab === 'knowledge'} icon={<Folder size={13} />} onClick={() => setTab('knowledge')}>
-            知识库
-          </TopTabBtn>
-          <TopTabBtn active={tab === 'resumes'} icon={<FileText size={13} />} onClick={() => setTab('resumes')}>
-            简历
-          </TopTabBtn>
-        </div>
-      </div>
-      {tab === 'knowledge' && <FilesSection />}
-      {tab === 'resumes' && <ResumeSection />}
-    </div>
-  );
-}
-
-function TopTabBtn({
-  active, icon, children, onClick,
-}: {
-  active: boolean;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        'inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-sm',
-        active
-          ? 'bg-white text-primary-700 shadow-xs font-medium'
-          : 'text-stone-600 hover:text-stone-800',
-      ].join(' ')}
-    >
-      {icon}
-      {children}
-    </button>
-  );
+  return <div className="workspace-page">
+    <header className="mb-6"><h1 className="text-2xl font-semibold text-stone-800">资料库</h1><p className="mt-2 text-sm text-stone-500">保存面试题、技术与项目资料，供查阅和检索使用。</p></header>
+    <FilesSection />
+  </div>;
 }
 
 function FilesSection() {

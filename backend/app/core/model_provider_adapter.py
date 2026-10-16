@@ -151,6 +151,14 @@ def _openai_payload(profile: ModelProfile, request: ProviderRequest) -> dict[str
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    if profile.provider == "deepseek":
+        effort = settings.DEEPSEEK_REASONING_EFFORT
+        payload["extra_body"] = {
+            "thinking": {"type": "disabled" if effort == "none" else "enabled"}
+        }
+        if effort != "none":
+            payload["reasoning_effort"] = effort
+            payload.pop("temperature", None)
     if request.system:
         payload["messages"] = [
             {"role": "system", "content": request.system},
@@ -376,9 +384,9 @@ def build_anthropic_payload(request: ProviderRequest) -> dict[str, Any]:
             "ttl": settings.ANTHROPIC_PROMPT_CACHE_TTL,
         }
         # Anthropic evaluates the physical prefix as tools -> system ->
-        # messages, but its cache is shared at workspace scope and exposes no
-        # per-product-user namespace.  Only the non-private deterministic
-        # tools/system prefix is therefore cacheable in a shared deployment.
+        # messages. Cache only the deterministic tools/system prefix. Tool
+        # schemas can include account-specific MCP descriptions; provider cache
+        # scope is not an application authorization or privacy boundary.
         # User History, retrieved data, guidance and the current input remain
         # semantically complete messages without a cache marker.
         if tools:
@@ -417,6 +425,7 @@ def normalize_openai_chunk(chunk: Any) -> ProviderStreamEvent:
             output_known=_value(usage, "completion_tokens") is not None,
             cache_read_tokens=counter(
                 _value(details, "cached_tokens", 0)
+                or _value(usage, "prompt_cache_hit_tokens", 0)
                 or _value(usage, "cache_read_input_tokens", 0)
                 or _value(usage, "cache_read_tokens", 0)
                 or 0
@@ -557,13 +566,20 @@ class ModelProviderAdapter:
 
     @property
     def prompt_cache_supported(self) -> bool:
-        return str(getattr(self.profile, "provider", "") or "") == "anthropic"
+        return str(getattr(self.profile, "provider", "") or "") in {
+            "anthropic",
+            "openai",
+            "deepseek",
+        }
 
     @property
     def prompt_cache_enabled(self) -> bool:
-        return self.prompt_cache_supported and bool(
-            settings.ANTHROPIC_PROMPT_CACHE_ENABLED
-        )
+        provider = str(getattr(self.profile, "provider", "") or "")
+        if provider == "anthropic":
+            return bool(settings.ANTHROPIC_PROMPT_CACHE_ENABLED)
+        # Automatic provider caching needs no request flag. This reports the
+        # configured mechanism, never guarantees a hit on a particular request.
+        return provider in {"openai", "deepseek"}
 
     @property
     def vision_wire_supported(self) -> bool:

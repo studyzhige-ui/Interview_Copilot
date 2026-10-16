@@ -614,24 +614,6 @@ class RejectInterviewInvitationCandidateResult(BaseModel):
     verification: VerificationView
 
 
-class InterviewInvitationHandoffView(BaseModel):
-    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
-
-    opportunity: ObjectReference
-    interview: ObjectReference
-    company_name: str
-    job_title: str
-    scheduled_start_at: datetime
-    scheduled_end_at: datetime | None
-    original_time_text: str
-    source_timezone: str
-    stage_label: str | None
-    location: str | None
-    meeting_url: str | None
-    source: InvitationSourceReference
-    verification: VerificationView
-
-
 __all__ = [
     "CandidateConfirmationBasis",
     "ConfirmInterviewInvitation",
@@ -648,7 +630,6 @@ __all__ = [
     "InterviewInvitationCandidateFacts",
     "InterviewInvitationCandidateView",
     "InterviewInvitationFacts",
-    "InterviewInvitationHandoffView",
     "InvitationFieldEvidence",
     "InvitationObservationView",
     "InvitationSourceReference",

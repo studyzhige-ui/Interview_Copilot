@@ -21,17 +21,12 @@ ClientActionOutcome = Literal[
     "failed",
     "expired",
 ]
-MockClientActionName = Literal[
-    "mock_interview.prefill",
-    "mock_interview.check_readiness",
-    "mock_interview.enter_live",
-]
 ClientActionName = Literal[
     "mock_interview.prefill",
     "mock_interview.check_readiness",
     "mock_interview.enter_live",
-    "interview.preparation.open",
 ]
+MockClientActionName = ClientActionName
 
 
 class MockPrefillPayload(BaseModel):
@@ -94,31 +89,11 @@ class MockEnterLivePayload(BaseModel):
     runtime_status: Literal["mock_in_progress"] = "mock_in_progress"
 
 
-class InterviewPreparationOpenPayload(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid", json_schema_serialization_defaults_required=True
-    )
-
-    kind: Literal["interview_preparation_open"] = "interview_preparation_open"
-    interview_id: str = Field(min_length=1, max_length=128)
-    opportunity_id: str = Field(min_length=1, max_length=35)
-    expected_interview_version: int = Field(ge=1)
-    expected_opportunity_version: int = Field(ge=1)
-    source_operation_id: str = Field(min_length=1, max_length=36)
-    preferred_surface: Literal["interviews"] = "interviews"
-
-
-MockClientActionPayload = Annotated[
+ClientActionPayload = Annotated[
     MockPrefillPayload | MockReadinessPayload | MockEnterLivePayload,
     Field(discriminator="kind"),
 ]
-ClientActionPayload = Annotated[
-    MockPrefillPayload
-    | MockReadinessPayload
-    | MockEnterLivePayload
-    | InterviewPreparationOpenPayload,
-    Field(discriminator="kind"),
-]
+MockClientActionPayload = ClientActionPayload
 
 
 class MockClientActionRequest(BaseModel):
@@ -143,7 +118,6 @@ class MockClientActionRequest(BaseModel):
             "mock_interview.prefill": "mock_prefill",
             "mock_interview.check_readiness": "mock_readiness",
             "mock_interview.enter_live": "mock_enter_live",
-            "interview.preparation.open": "interview_preparation_open",
         }[self.action]
         if self.payload.kind != expected:
             raise ValueError(f"{self.action} requires payload kind {expected}")
@@ -219,7 +193,6 @@ __all__ = [
     "ClientActionOutcome",
     "ClientActionName",
     "ClientActionPayload",
-    "InterviewPreparationOpenPayload",
     "MockClientActionName",
     "MockClientActionPayload",
     "MockClientActionRequest",

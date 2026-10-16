@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "backend" if (ROOT / "backend").is_dir() else ROOT))
 
 from app.core.config import settings  # noqa: E402
 from app.core.model_assets import inspect_model, local_path  # noqa: E402

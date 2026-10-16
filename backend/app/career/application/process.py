@@ -495,6 +495,15 @@ def correct_process_event(
         raise ProcessEventConflictError("hiring_step requires step_summary")
 
     correction_context: dict[str, object] | None = None
+    if (
+        operation == "assert"
+        and kind == target.kind
+        and (target.analysis_context_json or {}).get("command")
+    ):
+        correction_context = dict(target.analysis_context_json)
+        # Correct the original assertion in place during replay. A later
+        # description correction must not move an old pipeline stage to today.
+        correction_context["pipeline_position"] = target.sequence
     if operation == "assert" and kind == "application_submitted":
         # A replacement of an historical application carries its historical
         # snapshot.  If the corrected source was not previously an application,
@@ -506,6 +515,8 @@ def correct_process_event(
             if target.kind == "application_submitted"
             else {}
         )
+        if (target.analysis_context_json or {}).get("command"):
+            correction_context["pipeline_position"] = target.sequence
         if command.application_channel is not None:
             correction_context["channel"] = _text(
                 command.application_channel,
@@ -1132,17 +1143,55 @@ def _insert_event(
     return event_row
 
 
-def _rebuild_projection(db: Session, opportunity: JobOpportunity) -> None:
-    events = _events(db, opportunity.id)
+def project_events(events):
+    """Replay the effective facts without changing owners or action lifecycles."""
     active_ids = _active_event_ids(events)
     active_events = [event_row for event_row in events if event_row.id in active_ids]
+    active_events.sort(
+        key=lambda event_row: (event_row.analysis_context_json or {}).get(
+            "pipeline_position", event_row.sequence
+        )
+    )
     if not active_events:
         raise ProcessEventConflictError("an opportunity must retain an admission fact")
 
     phase = "pending_application"
     phase_event: ProcessEvent | None = None
     terminal_event: ProcessEvent | None = None
+    pipeline_stage = "saved"
     for event_row in active_events:
+        # Explicit user moves/reopens reset the current projection. Earlier
+        # facts remain available to historical funnel analysis.
+        transition = (event_row.analysis_context_json or {}).get("pipeline_stage")
+        if transition in {
+            "saved",
+            "applied",
+            "screening",
+            "interview",
+            "in_process",
+            "offer",
+        }:
+            phase = {
+                "saved": "pending_application",
+                "applied": "applied",
+                "offer": "offer",
+            }.get(transition, "in_process")
+            phase_event = event_row
+            terminal_event = None
+            pipeline_stage = transition
+            continue
+        if event_row.kind in {
+            "interview_scheduled",
+            "interview_completed",
+            "background_check_started",
+        }:
+            pipeline_stage = "interview"
+        elif event_row.kind in {
+            "assessment_invited",
+            "assessment_completed",
+            "recruiter_contact",
+        }:
+            pipeline_stage = "screening"
         event_phase = _EVENT_PHASE.get(event_row.kind)
         if event_phase and (
             _PHASE_RANK[event_phase] > _PHASE_RANK[phase]
@@ -1156,7 +1205,27 @@ def _rebuild_projection(db: Session, opportunity: JobOpportunity) -> None:
         if event_row.kind in _EVENT_OUTCOME:
             terminal_event = event_row
 
+    if terminal_event:
+        pipeline_stage = "closed"
+    elif phase != "in_process":
+        pipeline_stage = {
+            "pending_application": "saved",
+            "applied": "applied",
+            "offer": "offer",
+        }[phase]
+    elif pipeline_stage not in {"interview", "screening", "in_process"}:
+        pipeline_stage = "in_process"
+    return phase, phase_event, terminal_event, pipeline_stage, active_events
+
+
+def _rebuild_projection(db: Session, opportunity: JobOpportunity) -> None:
+    events = _events(db, opportunity.id)
+    phase, phase_event, terminal_event, pipeline_stage, active_events = project_events(
+        events
+    )
+
     opportunity.phase = phase
+    opportunity.pipeline_stage = pipeline_stage
     opportunity.outcome = (
         _EVENT_OUTCOME[terminal_event.kind] if terminal_event is not None else None
     )

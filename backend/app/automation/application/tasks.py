@@ -974,6 +974,11 @@ def settle_automation_turn_and_admit_next(
         task.compensation_blocked_at = now
         task.updated_at = now
     db.add_all([turn, conversation, task])
+    from app.conversation.application.model_dispatch_service import (
+        close_running_model_dispatches,
+    )
+
+    close_running_model_dispatches(db, turn_id=turn.id)
     from app.conversation.application.agent_task_service import (
         freeze_agent_task_for_terminal_turn,
     )

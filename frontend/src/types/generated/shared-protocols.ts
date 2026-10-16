@@ -767,59 +767,6 @@ export interface components {
              */
             stage_label: string | null;
         };
-        /** InterviewInvitationHandoffView */
-        InterviewInvitationHandoffView: {
-            /** Company Name */
-            company_name: string;
-            interview: components["schemas"]["ObjectReference"];
-            /** Job Title */
-            job_title: string;
-            /** Location */
-            location: string | null;
-            /** Meeting Url */
-            meeting_url: string | null;
-            opportunity: components["schemas"]["ObjectReference"];
-            /** Original Time Text */
-            original_time_text: string;
-            /** Scheduled End At */
-            scheduled_end_at: string | null;
-            /**
-             * Scheduled Start At
-             * Format: date-time
-             */
-            scheduled_start_at: string;
-            source: components["schemas"]["InvitationSourceReference-Output"];
-            /** Source Timezone */
-            source_timezone: string;
-            /** Stage Label */
-            stage_label: string | null;
-            verification: components["schemas"]["VerificationView"];
-        };
-        InterviewInvitationHandoffViewResponseContract: components["schemas"]["InterviewInvitationHandoffView"];
-        /** InterviewPreparationOpenPayload */
-        InterviewPreparationOpenPayload: {
-            /** Expected Interview Version */
-            expected_interview_version: number;
-            /** Expected Opportunity Version */
-            expected_opportunity_version: number;
-            /** Interview Id */
-            interview_id: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "interview_preparation_open";
-            /** Opportunity Id */
-            opportunity_id: string;
-            /**
-             * Preferred Surface
-             * @default interviews
-             * @constant
-             */
-            preferred_surface: "interviews";
-            /** Source Operation Id */
-            source_operation_id: string;
-        };
         /** InvitationFieldEvidence */
         "InvitationFieldEvidence-Input": {
             /** Field Name */
@@ -953,7 +900,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "mock_interview.prefill" | "mock_interview.check_readiness" | "mock_interview.enter_live" | "interview.preparation.open";
+            action: "mock_interview.prefill" | "mock_interview.check_readiness" | "mock_interview.enter_live";
             /** Action Id */
             action_id: string;
             /** Bound Client Id */
@@ -961,7 +908,7 @@ export interface components {
             /** Original Client Id */
             original_client_id: string;
             /** Payload */
-            payload: components["schemas"]["MockPrefillPayload"] | components["schemas"]["MockReadinessPayload"] | components["schemas"]["MockEnterLivePayload"] | components["schemas"]["InterviewPreparationOpenPayload"];
+            payload: components["schemas"]["MockPrefillPayload"] | components["schemas"]["MockReadinessPayload"] | components["schemas"]["MockEnterLivePayload"];
             /**
              * Protocol
              * @default mock_handoff.v1
@@ -1053,7 +1000,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "mock_interview.prefill" | "mock_interview.check_readiness" | "mock_interview.enter_live" | "interview.preparation.open";
+            action: "mock_interview.prefill" | "mock_interview.check_readiness" | "mock_interview.enter_live";
             /** Action Id */
             action_id: string;
             /**
@@ -1064,7 +1011,7 @@ export interface components {
             /** Interaction Id */
             interaction_id: string;
             /** Payload */
-            payload: components["schemas"]["MockPrefillPayload"] | components["schemas"]["MockReadinessPayload"] | components["schemas"]["MockEnterLivePayload"] | components["schemas"]["InterviewPreparationOpenPayload"];
+            payload: components["schemas"]["MockPrefillPayload"] | components["schemas"]["MockReadinessPayload"] | components["schemas"]["MockEnterLivePayload"];
             /** Takeover Generation */
             takeover_generation: number;
             /** Tool Call Id */

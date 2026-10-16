@@ -62,7 +62,7 @@ PersistentTaskTriggerSpec = Annotated[
 
 
 class PersistentTaskCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     title: str = Field(min_length=1, max_length=120)
     instruction: str = Field(min_length=1, max_length=5_000)
@@ -92,7 +92,7 @@ class PersistentTaskCreate(BaseModel):
 
 
 class PersistentTaskUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     expected_version: PositiveInt
     title: str | None = Field(default=None, min_length=1, max_length=120)
@@ -143,7 +143,7 @@ class PersistentTaskUpdate(BaseModel):
 
 
 class PersistentTaskStateChange(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     expected_version: PositiveInt
     state: PersistentTaskState
@@ -152,7 +152,7 @@ class PersistentTaskStateChange(BaseModel):
 
 
 class PersistentTaskDelete(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     expected_version: PositiveInt
     user_request_identity: str = Field(min_length=1, max_length=256)
@@ -174,7 +174,7 @@ class PersistentTaskDeletionImpact(BaseModel):
 
 
 class PersistentTaskTriggerInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     kind: AutomationTriggerKind
     occurred_at: AwareDatetime

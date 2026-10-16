@@ -360,6 +360,7 @@ from app.api import (
     auth,
     capabilities,
     career_process,
+    career_workspace,
     career_activity,
     career_insights,
     career_profile,
@@ -391,6 +392,7 @@ from app.api import unified_auth
 app.include_router(unified_auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(capabilities.router, prefix="/api/v1")
 app.include_router(career_process.router, prefix="/api/v1")
+app.include_router(career_workspace.router, prefix="/api/v1")
 app.include_router(workspace.router, prefix="/api/v1")
 from app.api import usage
 

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { invalidateCareerQueries } from '@/lib/productQueries';
 import { updateInterviewRecord } from '@/api/interview';
 import { extractErr } from '@/api/client';
 import { Btn } from '@/components/ui/Btn';
@@ -26,7 +27,7 @@ export function InterviewOpportunityControl({
         job_opportunity_id: value || null,
       });
       setSavedValue(value);
-      await queryClient.invalidateQueries({ queryKey: ['interview', 'records'] });
+      await invalidateCareerQueries(queryClient);
       toast.success(value ? '面试记录已关联岗位' : '已清除面试记录的岗位关联');
     } catch (error) {
       toast.error(extractErr(error, '岗位关联保存失败'));
@@ -37,7 +38,7 @@ export function InterviewOpportunityControl({
 
   return (
     <div className="mt-3 flex flex-wrap items-end gap-2 rounded-lg border border-stone-200 bg-stone-50 p-3">
-      <div className="min-w-[240px] flex-1">
+      <div className="min-w-0 flex-1">
         <div className="mb-1 text-[11px] font-medium text-stone-600">关联本次面试对应的求职机会（可选）</div>
         <JobOpportunitySelect
           value={value}

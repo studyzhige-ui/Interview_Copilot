@@ -1,6 +1,5 @@
 /** All evaluation scores use 0–10. Physical metrics retain their own units. */
 export const SCORE_MAX = 10;
-export const SCORE_SCALE_VERSION = 'score10-v1';
 export function validScore(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= SCORE_MAX
     && Math.abs(value * 10 - Math.round(value * 10)) <= 1e-8;

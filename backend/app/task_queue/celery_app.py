@@ -6,6 +6,7 @@ from celery.schedules import crontab
 from celery.signals import (
     task_prerun,
     worker_process_init,
+    worker_ready,
     worker_process_shutdown,
     worker_shutdown,
 )
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 celery_app = Celery(
     "interview_copilot_worker",
     broker=settings.REDIS_URL,
+    backend=settings.REDIS_URL,
     include=["app.worker.tasks"],
 )
 
@@ -38,6 +40,9 @@ celery_app.conf.update(
     # worker. This is the forward-compatible fix — no Celery major-version bump.
     broker_connection_retry_on_startup=True,
     task_ignore_result=True,
+    result_serializer="json",
+    result_accept_content=["json"],
+    result_expires=60,
     task_publish_retry=False,
     broker_connection_timeout=5,
     task_time_limit=3600,  # Hard kill at 60 min (transcription headroom).
@@ -62,7 +67,9 @@ celery_app.conf.update(
         "tasks.consolidate_user_memories": {"queue": "background"},
         "tasks.discover_agent_memories": {"queue": "default"},
         # ── Heavy: needs Whisper + diarization model ──
-        "tasks.process_interview_analysis": {"queue": "transcription"},
+        "tasks.process_interview_analysis": {"queue": "transcription", "priority": 6},
+        "tasks.process_mock_audio_transcription": {"queue": "transcription"},
+        "tasks.recognize_live_audio": {"queue": "transcription"},
         # ── Durable content pipeline: parsing / embedding / outbox handlers ──
         "tasks.process_document_ingestion": {"queue": "pipeline"},
         "tasks.process_resume_parse": {"queue": "pipeline"},
@@ -93,7 +100,8 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     # Avoid thundering-herd on transient backend outages.
     task_default_retry_delay=10,
-    # Outcomes live in PostgreSQL; no unused Celery result subscriptions.
+    # Durable outcomes live in PostgreSQL. Only transient live PCM windows
+    # opt into short-lived Redis results; their text is never stored in PG.
     # ── Broker transport ───────────────────────────────────────────────
     # visibility_timeout MUST exceed task_time_limit; otherwise Redis re-
     # delivers the message mid-execution and we get double-runs.
@@ -256,6 +264,14 @@ def _ensure_worker_runtime(
             from app.media.application.whisperx_engine import init_whisper_model
 
             init_whisper_model()
+            from app.media.application import whisperx_engine
+
+            if whisperx_engine.whisper_model is not None:
+                import numpy as np
+
+                whisperx_engine.transcribe_with_word_timestamps(
+                    np.zeros(16000, dtype=np.float32), language="zh"
+                )
             _voice_runtime_ready = True
             logger.info(">>> Worker voice runtime ready.")
 
@@ -297,8 +313,24 @@ def ensure_task_runtime(task=None, **kwargs):
     _ensure_worker_runtime(
         embedding=task_name in _EMBEDDING_TASKS,
         reranker=task_name == "tasks.process_conversation_turn",
-        voice=task_name == "tasks.process_interview_analysis",
+        voice=task_name
+        in {
+            "tasks.process_interview_analysis",
+            "tasks.process_mock_audio_transcription",
+            "tasks.recognize_live_audio",
+        },
     )
+
+
+@worker_ready.connect
+def warm_solo_voice_worker(sender=None, **kwargs):
+    # Solo/threads workers have no child-init signal. Prefork children warm
+    # independently; the parent must not retain another copy of the model.
+    if _worker_subscribes_to("transcription") and type(sender.pool).__module__ in {
+        "celery.concurrency.solo",
+        "celery.concurrency.thread",
+    }:
+        _ensure_worker_runtime(voice=True)
 
 
 @worker_shutdown.connect

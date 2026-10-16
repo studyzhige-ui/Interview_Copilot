@@ -43,6 +43,7 @@ def _descriptor(provider, model, payload, destination):
         }
     )
     return dict(
+        local_execution=provider == "local",
         meter="embedding",
         provider=provider,
         model=model,

@@ -47,6 +47,72 @@ under `data/` and are not source code. Python bytecode and system-style
 temporary files are redirected there by the supported launchers; application
 code uses `core/runtime_files.py` for temporary files and bounded JSONL output.
 
+## Frontend page ownership
+
+Pages show an actionable summary or own a particular object, rather than
+repeating full lists and editors across the workspace.
+
+| Page | User-facing responsibility |
+|---|---|
+| Today | Planned actions and confirmed Offer deadlines, upcoming interviews, all pending confirmations and unfinished work |
+| Jobs and progress | Searchable opportunities, per-job facts, JD versions, interview arrangements and submitted materials |
+| Calendar | Interview and action calendar, ICS export and the single action editor at `/career-calendar?view=actions` |
+| Statistics and Offer | Funnel analysis and Offer comparison; notification preferences belong to `/settings/notifications` |
+| Mock interview / review / ability growth | Practice, original recordings and QA review, then aggregate ability analysis with collapsible evidence and correction controls |
+| Personal profile | Continuous online resume with anchored directory, inline section editing, preview and print export; attachments and draft review are supporting tools, not the main document |
+| Application materials | Structured drafts, immutable published versions, two resume templates, Chinese PDF export, file upload/default/replacement, and exact submitted-version history |
+| Knowledge library | Reference documents and retrieval ingestion; does not duplicate resume management |
+| Activity history | Filterable audit history with expandable details, separate from Today |
+| Copilot conversations | Searchable conversation titles and one active dialogue; mobile/drawer record switching preserves the mounted conversation runtime, without a duplicate career dashboard |
+| Conversation search | Content excerpts first, with full-message readback and expandable source identifiers |
+| Persistent tasks | Schedule, task state and dedicated result conversation first; authorization scope and deletion are secondary controls |
+| Settings | Separate preferences/memory, model configuration/usage, plugins/Skills/MCP, and account/storage views; no promotional placeholders for unimplemented adapters |
+
+Online-resume sections use the existing confirmed Profile JSON contract, including personal information, summary, certificates, organization and volunteer experience. Resume dates preserve year, month or day precision from the source; import and direct edits share the same validators. Account avatars and uploaded resume artifacts retain their existing owners.
+
+The former `/interviews` invitation-only preparation page, its preparation-open
+client action/tool and dedicated list/handoff endpoints have been removed.
+Invitation confirmation remains in the current job/chat workflow, and scheduled
+interviews remain owned interview records. Actual mock preparation using resume
+and JD evidence remains part of the mock interview workflow. Setup exposes required
+materials and answer mode before optional tuning. Review defaults to the report;
+its conversation is opened deliberately and stays mounted when switching views.
+Model catalog cache/seed reads reuse the vendor chat filter, so speech, video and
+embedding endpoints cannot re-enter the answer-model picker through cached rows.
+Today reads these
+records without creating duplicate action records.
+
+### Career workspace owners and recovery
+
+`career/application/workspace.py` composes the existing JobOpportunity,
+ProcessEvent, NextAction, InterviewRecord and Artifact owners. Its shared
+`job_query` excludes active merge duplicates and user-hidden jobs for both the
+board and home counts. Home resolves interviews retained on a merged source to
+their canonical opportunity. OpportunityDetails owns notes, contacts and user
+visibility; hiding a job does not assert a hiring outcome.
+
+`documents.py` owns editable drafts and publishes through the existing immutable
+ArtifactVersion owner. Application submission records exact published versions.
+Profile facts and resume documents remain separate because imported statements
+need confirmation before entering the profile. `/resumes` and raw process APIs
+retain required identity/history compatibility; the replaced frontend write
+wrappers have been removed.
+
+Manual invitation forms retain only an owner-scoped opaque submission key in
+local storage. Durable server receipts distinguish pending, committed,
+rejected and cancelled commands. A missing receipt requires cancellation before
+new input, so a delayed original request cannot create a second arrangement.
+Agent writes, direct forms, Gmail review and interview association share career
+query invalidation. Visible schedule/job projections also refresh every 30 seconds
+to observe asynchronous changes and advancing deadlines.
+
+`rag/application/document_commands.enqueue_ingestion` commits a task identity
+before publishing it to Celery. Creation, attachment retry and stale-work recovery
+use this same boundary; source snapshots include that identity. Publish failure
+records an explicit failure without replacing newer work or a finished result.
+The stale pipeline sweeper recovers a process exit between commit and publish;
+parsing dispatch does not claim an atomic transaction with the message broker.
+
 ## Shared wire schemas and compatibility gate
 
 `backend/app/schemas/` owns versioned Operation, Verification, Interaction,
@@ -141,8 +207,9 @@ conversation turns; `pipeline` workers handle document/index work;
 model-backed interview review; `default` workers handle short
 control, cleanup, maintenance, and catalog jobs.
 
-The full Compose profile gives these five workload classes separate worker
-services. The host development launcher keeps `turns` separate but combines
+The full Compose profile uses four worker services for these five queues:
+`turns`, `transcription`, and `pipeline` are isolated; `worker-jobs` consumes
+`background` and `default`. The host development launcher keeps `turns` separate but combines
 `default`, `background`, `pipeline`, and `transcription` in one local solo
 worker to reduce the number of developer processes; queue routing remains the
 same.
@@ -151,11 +218,22 @@ same.
 |---|---|---|---|
 | Chat and Agent turns | `turns` | Dedicated worker; cancellation and usage telemetry | conversation, turn, checkpoint, and tool-call rows |
 | Parsing, embedding, and vector synchronization | `pipeline` | Serialized where local model/GPU pressure requires it | PostgreSQL document/resume facts plus outbox jobs |
-| Speech recognition and diarization | `transcription` | Isolated from all text workloads | interview record, transcript, and QA rows |
+| Speech recognition and diarization | `transcription` | One resident WhisperX model, serialized across mock clips, live windows and uploaded recordings | interview record, recording draft, transcript, and QA rows |
 | Model-backed interview review | `background` | Bounded independently from ingestion | interview state and typed outbox jobs |
 | Cleanup, catalog, scheduling, and sweepers | `default` | Short control work only | database status and idempotent maintenance rules |
 
-Redis transports work; it is not the business source of truth. Worker tasks may
+Mock recording admission stores the original FileAsset and a `mock_audio_transcriptions`
+row before dispatch. The API never loads WhisperX. Worker startup preloads the model;
+successive answers reuse that instance until the process exits. A 10-second heartbeat
+and 60-second lease let reads terminate an interrupted recording without redispatching
+it. An explicit retry reuses the original asset under a new request identity. Media
+document ingestion also routes to the transcription worker; document-only ingestion
+continues on the pipeline queue. Interactive requests take precedence over queued
+long recordings, but cannot preempt an already-running task.
+
+Redis transports work; it is not the business source of truth. Live PCM windows alone
+use expiring Celery results (60 seconds, deleted after retrieval); they do not create
+interview records or authorize answering. Worker tasks may
 be delivered more than once, so handlers must claim or status-gate work before
 side effects. Cross-system changes use the typed outbox and are claimed by
 `job_type`; a slow LLM review job must never block a retrieval projection update or object
@@ -431,14 +509,11 @@ New code must follow these directions:
 8. The frontend reaches backend behavior only through `frontend/src/api/`.
    Pages should not construct service URLs or duplicate edition policy.
 
-`backend/tests/test_architecture/` enforces these high-level directions and an
-acyclic internal import graph, including package `__init__` and deferred imports.
-The scanner asserts real application files are present; an empty/wrong root cannot
-pass. API, Agent Tools and scheduled task adapters cannot add/delete domain ORM
-rows directly. The legacy `services` tree and runtime imports of operator-only
-`maintenance` migrations are prohibited. It also prevents models from reintroducing naive
-datetime columns. Cross-domain calls should use an existing shared contract or
-a clearly owned service, not a second implementation.
+`backend/tests/test_current_architecture.py` checks source parsing and selected
+ownership boundaries (broker imports, retired modules, and memory defaults).
+It does not prove the full import graph is acyclic or that every cross-domain
+access obeys these rules. Service/API tests cover individual behavior contracts;
+changes still require review against the placement rules below.
 
 ## Placement rules
 
@@ -511,21 +586,16 @@ provider requests cannot be retrospectively revoked by this mechanism.
 
 ## Evidence levels used by CI
 
-The same repository has three distinct kinds of tests, not interchangeable claims:
+The current tests distinguish deterministic contracts, explicit real-service
+acceptance, and model-quality evaluation. `backend/tests` exercises current
+ownership, lifecycle and protocol behavior. PostgreSQL, S3, browser and original
+recording tests require their documented opt-ins; skipped cases are not evidence.
 
-1. Unit/service/component tests exercise contracts with controlled dependencies.
-2. PostgreSQL/Redis/Celery SIGKILL and Chromium campaigns exercise real process,
-   transport, transaction and UI behavior. Only heavyweight/live-model boundaries
-   use labeled fixtures, and every test owns an isolated database/queue.
-3. `evaluation/` live semantic/learning evaluations require explicit model/data
-   configuration. Their results are not inferred from (1) or (2).
-
-`career_agent_os_eval` binds all 15 VS-01 scenarios to fresh backend and frontend
-JUnit. A static manifest or a skipped required case is not acceptance. CI runs
-that full deterministic gate after the real browser campaign. The gate covers
-invitation intake/confirmation/handoff only: it does not certify all future
-career journeys, memory quality, real OAuth accounts or financial accounting.
-
+`evaluation/career_agent_os_eval.py` binds current test files to fresh JUnit
+results. It does not certify the historical VS-01 fifteen-scenario campaign,
+SIGKILL recovery, real OAuth accounts, production load or model quality.
+See `docs/implementation/current-test-baseline.md` and the dated acceptance
+records for the actual executed scope.
 
 ## Official references checked for the 2026-09-19 implementation
 

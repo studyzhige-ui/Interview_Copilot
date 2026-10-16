@@ -6,6 +6,7 @@ Mirrors the request / response shapes used by ``app/api/interviews/records.py``
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -49,6 +50,13 @@ class InterviewRecordListItem(BaseModel):
     job_opportunity_id: Optional[str] = None
     status: str
     created_at: str
+    scheduled_start_at: datetime | None = None
+    scheduled_end_at: datetime | None = None
+    source_timezone: str | None = None
+    stage_label: str | None = None
+    scheduled_location: str | None = None
+    meeting_url: str | None = None
+    contact: dict[str, str] | None = None
 
 
 class InterviewRecordUpdateRequest(BaseModel):

@@ -35,6 +35,7 @@ from app.db.types import utc_now
 from app.models.chat import Conversation, ConversationMessage
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
+from app.models.interview_transcript import InterviewTranscript
 from app.interviews.application.interview_record_service import STATUS_ANALYZING
 from app.interviews.application.interview_record_service import STATUS_COMPLETED
 from app.interviews.application.interview_record_service import STATUS_EXTRACTING
@@ -170,8 +171,9 @@ class InterviewAnalysisOrchestrator:
                     provider="mock_composed",
                 )
 
-            # Persist QA shells (so SSE can show "X of Y analyzed" early on)
-            self._persist_qa_shells(record_id, qa_pairs)
+            # Upload extraction already published its complete checkpoint.
+            if is_mock:
+                self._persist_qa_shells(record_id, qa_pairs)
             # Capture canonical IDs and versions even on the first analysis.
             # A blank legacy row or non-contiguous order must not shift scores.
             qa_pairs = self._load_existing_qa_shells(record_id)
@@ -304,9 +306,9 @@ class InterviewAnalysisOrchestrator:
         transcript_id: str,
         evidence: TranscriptEvidence,
     ) -> list[dict[str, Any]]:
-        """Project ID-only structure and reconstruct QA from evidence."""
-        from app.interviews.application.transcript_structure_service import (
-            project_interview_qa,
+        """Extract semantic QA while retaining original audio references."""
+        from app.interviews.application.recording_qa_service import (
+            extract_recording_qa,
         )
 
         interview_record_service.set_status(record_id, STATUS_EXTRACTING)
@@ -314,28 +316,17 @@ class InterviewAnalysisOrchestrator:
 
         with SessionLocal() as db:
             roles = confirmed_roles(db, transcript_id)
-        projected = await project_interview_qa(
+        extracted = await extract_recording_qa(
             evidence, **({"confirmed_roles": roles} if roles else {})
         )
-        interview_record_service.set_transcript_projection(
+        interview_record_service.publish_recording_qa(
+            record_id,
             transcript_id,
-            structure=projected.structure.model_dump(mode="json"),
-            quality=projected.quality.model_dump(mode="json"),
+            structure=extracted.structure.model_dump(mode="json"),
+            quality=extracted.quality.model_dump(mode="json"),
+            qa_pairs=extracted.qa_pairs,
         )
-        qa_pairs = projected.qa_pairs
-        for pair in qa_pairs:
-            pair["source_transcript_id"] = transcript_id
-        if not qa_pairs:
-            raise RuntimeError(
-                "未能从转写中恢复出可验证的问答轮次，请检查转写质量后重试"
-            )
-        self._persist_qa_shells(record_id, qa_pairs)
-        if projected.quality.status != "complete":
-            raise RuntimeError(
-                "qa_coverage_insufficient: 候选人回答覆盖率或词级证据置信度"
-                "未达到完整报告门槛，请先复核转写结构"
-            )
-        return qa_pairs
+        return extracted.qa_pairs
 
     def _load_existing_qa_shells(
         self,
@@ -351,6 +342,17 @@ class InterviewAnalysisOrchestrator:
         """
         db = SessionLocal()
         try:
+            if require_provenance:
+                transcript = db.get(InterviewTranscript, source_transcript_id)
+                if (
+                    transcript is None
+                    or transcript.record_id != record_id
+                    or not isinstance(transcript.quality_json, dict)
+                    or transcript.quality_json.get("status") != "complete"
+                ):
+                    # Persisted draft QA is not a completed extraction stage.
+                    # Re-extract it; retry must not promote an incomplete checkpoint.
+                    return []
             rows = (
                 db.query(InterviewQA)
                 .filter(InterviewQA.record_id == record_id)
@@ -366,6 +368,7 @@ class InterviewAnalysisOrchestrator:
                     "transcript_evidence_required: 现有 QA 缺少词级来源，"
                     "请删除旧 QA 并从原录音重新转写"
                 )
+            indices = {row.id: i for i, row in enumerate(rows, 1)}
             return [
                 {
                     "index": i,
@@ -375,8 +378,8 @@ class InterviewAnalysisOrchestrator:
                     "source_version": row.version,
                     "question_summary": "",
                     "phase": row.phase or "general",
-                    "is_follow_up": False,
-                    "parent_index": None,
+                    "is_follow_up": row.is_follow_up,
+                    "parent_index": indices.get(row.parent_qa_id),
                 }
                 for i, row in enumerate(rows, start=1)
                 if (row.question or "").strip()

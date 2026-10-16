@@ -10,6 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, PositiveInt, model_validator
 
 DirectionLifecycle = Literal["exploring", "active", "paused", "archived"]
 ConfirmationKind = Literal["user_edit", "conversation_message"]
+ResumeDate = (
+    date | Annotated[str, Field(pattern=r"^[1-9][0-9]{3}(?:-(?:0[1-9]|1[0-2]))?$")]
+)
 
 
 class ConfirmationInput(BaseModel):
@@ -32,13 +35,19 @@ class ConfirmationInput(BaseModel):
 class _DatedFact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    start_date: date | None = None
-    end_date: date | None = None
+    start_date: ResumeDate | None = None
+    end_date: ResumeDate | None = None
+    ongoing: bool = False
 
     @model_validator(mode="after")
     def dates_are_ordered(self):
-        if self.start_date and self.end_date and self.end_date < self.start_date:
-            raise ValueError("end_date cannot precede start_date")
+        if self.ongoing and self.end_date is not None:
+            raise ValueError("ongoing experience cannot have an end_date")
+        if self.start_date and self.end_date:
+            start, end = str(self.start_date), str(self.end_date)
+            precision = min(len(start), len(end))
+            if end[:precision] < start[:precision]:
+                raise ValueError("end_date cannot precede start_date")
         return self
 
 
@@ -71,6 +80,50 @@ class SkillFactInput(BaseModel):
     kind: Literal["skill"]
     name: str = Field(min_length=1, max_length=160)
     category: str | None = Field(default=None, max_length=120)
+    description: str | None = Field(default=None, max_length=4_000)
+
+
+class PersonalInfoFactInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["personal"]
+    name: str = Field(min_length=1, max_length=160)
+    gender: Literal["male", "female", "undisclosed"] = "undisclosed"
+    birth_date: date | None = None
+    career_status: str | None = Field(default=None, max_length=160)
+    availability: str | None = Field(default=None, max_length=160)
+
+
+class SummaryFactInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["summary"]
+    text: str = Field(min_length=1, max_length=8_000)
+
+
+class CertificateFactInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["certificate"]
+    title: str = Field(min_length=1, max_length=240)
+    issuer: str | None = Field(default=None, max_length=240)
+    occurred_on: date | None = None
+    description: str | None = Field(default=None, max_length=2_000)
+
+
+class OrganizationFactInput(_DatedFact):
+    kind: Literal["organization"]
+    organization: str = Field(min_length=1, max_length=240)
+    role: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=4_000)
+
+
+class VolunteerFactInput(_DatedFact):
+    kind: Literal["volunteer"]
+    organization: str = Field(min_length=1, max_length=240)
+    role: str | None = Field(default=None, max_length=200)
+    hours: float | None = Field(default=None, ge=0, le=100_000, allow_inf_nan=False)
+    description: str | None = Field(default=None, max_length=4_000)
 
 
 class AchievementFactInput(BaseModel):
@@ -104,7 +157,12 @@ PersonalFactInput = Annotated[
     | SkillFactInput
     | AchievementFactInput
     | ContactFactInput
-    | LocationFactInput,
+    | LocationFactInput
+    | PersonalInfoFactInput
+    | SummaryFactInput
+    | CertificateFactInput
+    | OrganizationFactInput
+    | VolunteerFactInput,
     Field(discriminator="kind"),
 ]
 

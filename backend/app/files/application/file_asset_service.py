@@ -281,7 +281,7 @@ def confirm_file_asset(
 def ensure_uploaded(db: Session, asset: FileAsset) -> FileAsset:
     """Confirm-on-consume (UP-1): run the confirm verification if the client
     never called /confirm. Consumers call this and then require
-    ``upload_status == "uploaded"`` — verification can no longer be skipped
+    a validated readable state (uploaded or consumed) — verification cannot be skipped
     by consuming a ``pending_upload`` asset directly.
     """
     return _verify_pending_asset(db, asset)

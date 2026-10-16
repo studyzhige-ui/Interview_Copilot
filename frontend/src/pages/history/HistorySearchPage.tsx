@@ -1,8 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  AlertTriangle,
-  Braces,
   Clock3,
   MessageSquareText,
   Search,
@@ -23,20 +21,20 @@ import type {
 
 const KIND_OPTIONS: Array<{ value: HistorySearchKind; label: string }> = [
   { value: 'message', label: '消息' },
-  { value: 'tool_call', label: 'Tool 调用' },
+  { value: 'tool_call', label: '工具执行' },
 ];
 
 const ROLE_OPTIONS: Array<{ value: HistorySearchRole; label: string }> = [
   { value: 'user', label: '用户' },
   { value: 'assistant', label: '助手' },
-  { value: 'tool', label: 'Tool' },
+  { value: 'tool', label: '工具' },
   { value: 'system', label: '系统' },
 ];
 
 const ROLE_LABELS: Record<string, string> = {
   user: '用户',
   assistant: '助手',
-  tool: 'Tool',
+  tool: '工具',
   system: '系统',
 };
 
@@ -74,7 +72,7 @@ function ResultCard({ result }: { result: HistorySearchResult }) {
   const Icon = result.kind === 'message' ? MessageSquareText : Wrench;
   const recordLabel = result.kind === 'message'
     ? `消息 · ${ROLE_LABELS[result.role ?? ''] ?? result.role ?? '角色未知'}`
-    : `Tool · ${result.tool_name ?? '名称未知'}`;
+    : `工具 · ${result.tool_name ?? '名称未知'}`;
 
   return (
     <article className="rounded-xl border border-stone-200 bg-white p-4 shadow-xs">
@@ -84,12 +82,11 @@ function ResultCard({ result }: { result: HistorySearchResult }) {
             <Icon size={16} className="shrink-0 text-primary-700" aria-hidden />
             <h2 className="truncate text-sm font-semibold text-stone-800">{recordLabel}</h2>
             <Pill tone={resultTone(result)}>
-              {result.kind === 'message' ? 'message' : result.tool_status ?? '状态未知'}
+              {result.kind === 'message' ? '消息' : ({ completed: '已完成', success: '已完成', failed: '失败', error: '失败', running: '执行中', pending: '等待执行' }[result.tool_status ?? ''] ?? '执行记录')}
             </Pill>
           </div>
           <p className="mt-1 text-xs text-stone-500">
-            Conversation：{result.conversation_title || '未命名会话'}
-            <span className="ml-2">({result.conversation_type})</span>
+            {result.conversation_title || '未命名对话'}
           </p>
         </div>
         <time
@@ -126,7 +123,7 @@ function ResultCard({ result }: { result: HistorySearchResult }) {
             }
           }}
         >
-          {detail ? '收起完整记录' : '精确回读完整记录'}
+          {detail ? '收起完整记录' : '查看完整记录'}
         </Btn>
         {detailError && <p className="mt-2 text-xs text-danger-600">完整记录读取失败。</p>}
         {detail && (
@@ -146,18 +143,19 @@ function ResultCard({ result }: { result: HistorySearchResult }) {
         )}
       </div>
 
-      <dl className="mt-3 grid gap-x-5 gap-y-2 text-xs text-stone-500 sm:grid-cols-2">
+      <details className="mt-3 text-xs text-stone-500"><summary className="cursor-pointer">记录来源标识</summary>
+      <dl className="mt-3 grid gap-x-5 gap-y-2 sm:grid-cols-2">
         <div className="min-w-0">
-          <dt className="font-medium text-stone-600">Exact identity</dt>
+          <dt className="font-medium text-stone-600">记录标识</dt>
           <dd className="mt-0.5 break-all font-mono" data-testid="history-exact-identity">{result.identity}</dd>
         </div>
         <div className="min-w-0">
-          <dt className="font-medium text-stone-600">Conversation ID</dt>
+          <dt className="font-medium text-stone-600">对话标识</dt>
           <dd className="mt-0.5 break-all font-mono">{result.conversation_id}</dd>
         </div>
         {result.turn_id && (
           <div className="min-w-0">
-            <dt className="font-medium text-stone-600">Turn ID</dt>
+            <dt className="font-medium text-stone-600">执行标识</dt>
             <dd className="mt-0.5 break-all font-mono">{result.turn_id}</dd>
           </div>
         )}
@@ -169,11 +167,12 @@ function ResultCard({ result }: { result: HistorySearchResult }) {
         )}
         {result.kind === 'tool_call' && result.tool_call_id && (
           <div className="min-w-0">
-            <dt className="font-medium text-stone-600">ToolCall ID</dt>
+            <dt className="font-medium text-stone-600">工具执行标识</dt>
             <dd className="mt-0.5 break-all font-mono">{result.tool_call_id}</dd>
           </div>
         )}
       </dl>
+      </details>
     </article>
   );
 }
@@ -217,19 +216,14 @@ export function HistorySearchPage() {
   const results = historyQuery.data?.results ?? [];
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 p-4 md:p-6">
+    <div className="workspace-page space-y-5">
       <header>
         <div className="flex items-center gap-2">
           <Search size={21} className="text-primary-700" aria-hidden />
-          <h1 className="text-xl font-semibold text-stone-800">历史记录</h1>
+          <h1 className="text-xl font-semibold text-stone-800">对话搜索</h1>
         </div>
-        <p className="mt-1 text-sm text-stone-500">精确检索已保存的消息与 Tool 调用，不生成新的业务事实。</p>
+        <p className="mt-1 text-sm text-stone-500">查找过去的对话与执行记录。求职进展和当前资料请前往对应页面查看。</p>
       </header>
-
-      <div className="flex gap-2 rounded-xl border border-warning-200 bg-warning-50 p-3 text-sm text-warning-700" role="note">
-        <AlertTriangle size={17} className="mt-0.5 shrink-0" aria-hidden />
-        <p>历史记录只说明当时发生过什么，不代表当前事实或当前状态；需要判断现状时，请重新读取对应真实资产与记录。</p>
-      </div>
 
       <form className="rounded-xl border border-stone-200 bg-white p-4 shadow-xs" onSubmit={submit}>
         <label className="block text-sm font-medium text-stone-700" htmlFor="history-query">搜索内容</label>
@@ -240,7 +234,7 @@ export function HistorySearchPage() {
               id="history-query"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="输入消息或 Tool 调用中的原文"
+              placeholder="搜索你说过的话、讨论的项目或执行内容"
               className="h-10 w-full rounded-md border border-stone-300 bg-white pl-9 pr-3 text-sm text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
             />
           </div>
@@ -252,7 +246,7 @@ export function HistorySearchPage() {
           <summary className="cursor-pointer text-sm font-medium text-stone-600">范围与类型筛选</summary>
           <div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
             <label className="text-xs font-medium text-stone-600" htmlFor="history-conversation-id">
-              Conversation ID（可选）
+              对话标识（可选）
               <input
                 id="history-conversation-id"
                 value={conversationId}
@@ -309,9 +303,7 @@ export function HistorySearchPage() {
             <p className="text-sm text-stone-600">
               “{historyQuery.data.query}” 找到 {historyQuery.data.count} 条记录
             </p>
-            <div className="inline-flex items-center gap-1 text-xs text-stone-400">
-              <Braces size={13} aria-hidden />精确记录投影
-            </div>
+
           </div>
           {results.length === 0 ? (
             <div className="rounded-xl border border-stone-200 bg-white p-6">

@@ -39,10 +39,15 @@ def classify_api_error(error: Exception) -> ErrorCategory:
     ):
         return ErrorCategory.FATAL
     msg = str(error).lower()
-    err_type = type(error).__name__
+    status = getattr(error, "status_code", None)
+
+    # HTTP status is authoritative; a quoted message containing "429" cannot
+    # turn authentication or validation failure into a retryable request.
+    if status in {401, 402, 403, 404}:
+        return ErrorCategory.FATAL
 
     # Context length exceeded — need compaction
-    if any(
+    if status in {None, 400, 413, 422} and any(
         phrase in msg
         for phrase in (
             "context_length_exceeded",
@@ -57,7 +62,6 @@ def classify_api_error(error: Exception) -> ErrorCategory:
     # returns HTTP 402 here). Must be checked before the rate-limit /
     # default-retryable branches so we fail fast instead of burning the
     # full backoff schedule on a hopeless call.
-    status = getattr(error, "status_code", None)
     if status == 402 or any(
         phrase in msg
         for phrase in (
@@ -71,28 +75,11 @@ def classify_api_error(error: Exception) -> ErrorCategory:
     ):
         return ErrorCategory.FATAL
 
-    # Rate limit / server errors — retryable
-    if any(phrase in msg for phrase in ("429", "rate_limit", "rate limit")):
+    # Only explicit transient responses qualify. Transport uncertainty is not
+    # evidence that the provider did not execute or charge the original call.
+    if status in {429, 500, 502, 503, 504}:
         return ErrorCategory.RETRYABLE
-    if any(
-        phrase in msg for phrase in ("500", "502", "503", "overloaded", "server_error")
-    ):
-        return ErrorCategory.RETRYABLE
-    if "timeout" in msg or "timed out" in msg:
-        return ErrorCategory.RETRYABLE
-    if err_type in ("Timeout", "ConnectTimeout", "ReadTimeout", "ConnectionError"):
-        return ErrorCategory.RETRYABLE
-
-    # Auth / bad request — fatal
-    if any(
-        phrase in msg for phrase in ("401", "403", "invalid_api_key", "authentication")
-    ):
-        return ErrorCategory.FATAL
-    if "400" in msg and "context" not in msg:
-        return ErrorCategory.FATAL
-
-    # Default: treat as retryable (optimistic)
-    return ErrorCategory.RETRYABLE
+    return ErrorCategory.FATAL
 
 
 def jittered_backoff(attempt: int, base: float = 1.0, cap: float = 30.0) -> float:
@@ -144,12 +131,12 @@ async def call_with_retry(
             category = classify_api_error(exc)
 
             if category == ErrorCategory.FATAL:
-                logger.error("Fatal API error (not retryable): %s", exc)
+                logger.error("Fatal API error (not retryable): %s", type(exc).__name__)
                 raise
 
             if category == ErrorCategory.CONTEXT_TOO_LONG:
-                logger.warning("Context too long error: %s", exc)
-                if on_context_too_long is not None:
+                logger.warning("Context too long error: %s", type(exc).__name__)
+                if on_context_too_long is not None and attempt < max_retries:
                     compacted = await on_context_too_long()
                     if compacted:
                         continue  # retry after compaction
@@ -163,11 +150,13 @@ async def call_with_retry(
                     attempt + 1,
                     max_retries,
                     delay,
-                    exc,
+                    type(exc).__name__,
                 )
                 await asyncio.sleep(delay)
             else:
-                logger.error("API error after %d retries: %s", max_retries, exc)
+                logger.error(
+                    "API error after %d retries: %s", max_retries, type(exc).__name__
+                )
                 raise
 
     # Should not reach here, but just in case

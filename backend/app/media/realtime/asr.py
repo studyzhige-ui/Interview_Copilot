@@ -2,27 +2,9 @@
 
 from __future__ import annotations
 
-import tempfile
-import wave
-from pathlib import Path
-
+import uuid
 from app.core.config import settings
-from app.local_inference.audio import MAX_PCM_BYTES, SAMPLE_RATE
-
-
-def _local_pcm(pcm):
-    # The worker owns its temporary input through completion, even if its async
-    # waiter is cancelled. The existing local clip path owns model/accounting.
-    from app.media.application.short_clip_transcription import _local_clip
-
-    with tempfile.TemporaryDirectory(prefix="copilot-live-asr-") as directory:
-        path = Path(directory) / "window.wav"
-        with wave.open(str(path), "wb") as audio:
-            audio.setnchannels(1)
-            audio.setsampwidth(2)
-            audio.setframerate(SAMPLE_RATE)
-            audio.writeframes(pcm)
-        return _local_clip(str(path), "auto")
+from app.local_inference.audio import MAX_PCM_BYTES, pcm_payload
 
 
 class LiveASR:
@@ -41,7 +23,21 @@ class LiveASR:
             raise ValueError("invalid_pcm_size")
         if settings.TRANSCRIPTION_PROVIDER != "local_whisperx":
             raise ValueError("realtime_requires_local_whisperx")
-        return await pool("local").run(_local_pcm, pcm)
+        from app.task_queue.dispatch import dispatch_live_audio
+        from app.usage.runtime import current
+
+        actor = current()
+        result = dispatch_live_audio(
+            pcm_payload(pcm), actor.user_id, f"{actor.operation_id}:{uuid.uuid4().hex}"
+        )
+
+        def receive():
+            try:
+                return result.get(timeout=120, interval=0.1)
+            finally:
+                result.forget()
+
+        return await pool("probe").run(receive)
 
     async def final(self, pcm: bytes) -> str:
         parts = []

@@ -85,7 +85,7 @@ def validate_result(value, *, digest: str, max_pages: int, max_text: int):
     if (
         value["contract"] != CONTRACT
         or value["sha256"] != digest
-        or value["package_version"] != "2.118.1"
+        or value["package_version"] != "2.139.0"
     ):
         raise ValueError("document_result_identity_mismatch")
     if type(value["ocr_used"]) is not bool or type(value["ocr_enabled"]) is not bool:

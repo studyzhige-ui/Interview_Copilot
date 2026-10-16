@@ -276,7 +276,17 @@ def inspect_directory(
                             or ":" in folder
                         ):
                             raise ValueError("unsafe_sentence_transformer_module")
-                        directory = (root / folder).resolve(strict=True)
+                        directory = (root / folder).resolve()
+                        # Normalize.load() constructs a stateless module without
+                        # reading files; its save() intentionally writes nothing.
+                        if (
+                            entry.get("type")
+                            == "sentence_transformers.models.Normalize"
+                            and directory.is_relative_to(root.resolve())
+                            and not (root / folder).exists()
+                            and not (root / folder).is_symlink()
+                        ):
+                            continue
                         if (
                             not directory.is_relative_to(root.resolve())
                             or not directory.is_dir()

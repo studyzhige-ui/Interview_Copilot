@@ -26,12 +26,13 @@ def consume(db: Session, jti: str, exp: int | float) -> bool:
         raise ValueError("Invalid token identifier")
     expiry = datetime.fromtimestamp(exp, timezone.utc).replace(tzinfo=None)
     insert = sqlite_insert if db.get_bind().dialect.name == "sqlite" else pg_insert
-    result = db.execute(
+    claimed = db.execute(
         insert(TokenRevocation)
         .values(jti=jti, expires_at=expiry)
         .on_conflict_do_nothing(index_elements=["jti"])
-    )
-    return result.rowcount == 1
+        .returning(TokenRevocation.jti)
+    ).scalar_one_or_none()
+    return claimed is not None
 
 
 def revoke(db: Session, jti: str, exp: int | float) -> None:

@@ -22,6 +22,7 @@ from app.models.file_asset import FileAsset
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.interview_source import InterviewSourceRef
+from app.models.mock_audio_transcription import MockAudioTranscription
 from app.models.knowledge import KnowledgeDocument
 from app.models.resume import Resume
 from app.schemas.file_assets import (
@@ -270,7 +271,15 @@ def _impact(db: Session, asset: FileAsset) -> FileAssetDeletionImpact:
         )
         .all()
     )
+    recording_drafts = (
+        db.query(MockAudioTranscription).filter_by(audio_file_asset_id=asset.id).all()
+    )
     impacts = [
+        FileAssetReferenceImpact(
+            reference_type="mock_recording_draft",
+            active_count=len(recording_drafts),
+            effect="录音草稿保留，原声显示已删除；未执行的转写会失败。",
+        ),
         _ref_impact(
             "conversation_draft",
             drafts,
@@ -333,6 +342,10 @@ def _impact(db: Session, asset: FileAsset) -> FileAssetDeletionImpact:
                 *(f"legacy_resume:{row.id}" for row in resumes),
                 *(f"interview_record:{row.id}" for row in interview_records),
                 *(f"interview_qa:{row.id}" for row in interview_qas),
+                *(
+                    f"mock_recording_draft:{row.record_id}:{row.request_id}"
+                    for row in recording_drafts
+                ),
             ]
         ),
         "known_external_transmissions": list(known_transmission_ids),

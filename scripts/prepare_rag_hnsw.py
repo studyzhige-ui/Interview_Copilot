@@ -11,7 +11,10 @@ import json
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+_root = Path(__file__).resolve().parents[1]
+sys.path.insert(
+    0, str(_root / "backend" if (_root / "backend/app").is_dir() else _root)
+)
 
 from app.db.database import SessionLocal  # noqa: E402
 from app.models.retrieval_index import RetrievalGeneration  # noqa: E402

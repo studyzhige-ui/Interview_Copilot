@@ -1,22 +1,4 @@
-/**
- * /general-chat — the Career Agent control plane, detached from the
- * review workflow while sharing the conversation kernel.
- *
- * Layout mirrors ReviewPage: a left sidebar listing this user's general
- * chat sessions, and the right pane reuses ``ChatPanel`` to drive the
- * actual messaging. Each session in the left list owns its own
- * conversation dropdown via ChatPanel's internals — so this page only
- * needs to manage session-level CRUD (create / rename / delete) plus
- * "which session is selected".
- *
- * Why a dedicated page (instead of a type='general' inside the
- * review page): general chat doesn't anchor to an interview record, so
- * the review page's interview-record sidebar was an awkward host. Users
- * also want to leave general chat open while the review page deals
- * with uploads + analysis, which means it deserves its own URL the
- * browser back/forward stack can navigate.
- */
-
+// General conversations use the same chat runtime as interview debriefs.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -35,7 +17,6 @@ import {
 import type { ProductObjectReference, ConversationDeletionImpact } from '@/types/api';
 import { useToastOnError } from '@/hooks/useToastOnError';
 import { ChatPanel } from '@/pages/review/chat/ChatPanel';
-import { CopilotStatusSummary } from './CopilotStatusSummary';
 import { clearPersistedSessionState } from '@/pages/review/chat/usePersistedSessionState';
 import type { ChatSessionListItem } from '@/types/api';
 import { collaborationStarters, readStarter } from '@/lib/collaborationStarters';
@@ -71,6 +52,8 @@ export function GeneralChatPage({ embedded = false, objectReference = null, onOb
     next.delete('start');
     return next;
   });
+  const [showSessions, setShowSessions] = useState(false);
+  const [sessionQuery, setSessionQuery] = useState('');
   const [creating, setCreating] = useState(false);
   const creationRequest = useRef<{ intent: string; id: string } | null>(null);
   const creationInFlight = useRef(false);
@@ -240,11 +223,16 @@ export function GeneralChatPage({ embedded = false, objectReference = null, onOb
   }, [renaming, setSessions]);
 
   const activeSession = sessions.find((s) => s.session_id === selectedId);
+  const visibleSessions = sessions.filter((s) => s.title.toLowerCase().includes(sessionQuery.trim().toLowerCase()));
 
   return (
     <div className={embedded ? "copilot-page copilot-embedded" : "copilot-page"}>
-      {/* Left sidebar: session list */}
-      <aside className="copilot-session-list">
+      <div className="copilot-mobile-nav">
+        <button type="button" aria-expanded={showSessions} onClick={() => setShowSessions(!showSessions)}>{showSessions ? '返回当前对话' : '切换协作记录'}</button>
+        <button type="button" disabled={creating} onClick={() => { setShowSessions(false); void onNew(); }}>新建对话</button>
+      </div>
+      <aside aria-label="协作对话" className={`copilot-session-list ${showSessions ? 'is-open' : ''}`}>
+
         <div className="h-14 px-4 flex items-center justify-between border-b border-stone-100">
           <div className="text-sm font-semibold text-stone-800">求职 Copilot</div>
           <button
@@ -257,8 +245,12 @@ export function GeneralChatPage({ embedded = false, objectReference = null, onOb
             <span>新建</span>
           </button>
         </div>
-        <CopilotStatusSummary />
+        <label className="px-3 py-3 border-b border-stone-100">
+          <span className="sr-only">搜索协作对话</span>
+          <input type="search" value={sessionQuery} onChange={(event) => setSessionQuery(event.target.value)} placeholder="搜索对话标题" className="w-full rounded-md border border-stone-200 px-3 py-2 text-xs" />
+        </label>
         <div className="flex-1 overflow-y-auto p-2">
+          {!loading && sessions.length > 0 && !visibleSessions.length && <p className="px-3 py-6 text-xs text-stone-500">没有匹配的对话标题</p>}
           {loading ? (
             <div className="p-6 flex items-center justify-center text-stone-400">
               <Spinner size={16} />
@@ -270,7 +262,7 @@ export function GeneralChatPage({ embedded = false, objectReference = null, onOb
               <div className="text-[11px] mt-1">点上方「新建」开始</div>
             </div>
           ) : (
-            sessions.map((s) => {
+            visibleSessions.map((s) => {
               const act = s.session_id === selectedId;
               const editing = renaming?.id === s.session_id;
               return (
@@ -280,7 +272,6 @@ export function GeneralChatPage({ embedded = false, objectReference = null, onOb
                     'group relative px-3 py-2.5 mb-1 rounded-lg cursor-pointer transition-colors',
                     act ? 'bg-primary-50' : 'hover:bg-stone-50',
                   ].join(' ')}
-                  onClick={() => !editing && setActiveId(s.session_id)}
                 >
                   {editing ? (
                     <input
@@ -299,12 +290,12 @@ export function GeneralChatPage({ embedded = false, objectReference = null, onOb
                     />
                   ) : (
                     <>
-                      <div className={[
-                        'text-sm truncate pr-12',
+                      <button type="button" onClick={() => { setActiveId(s.session_id); setShowSessions(false); }} aria-current={act ? 'true' : undefined} className={[
+                        'block w-full text-left text-sm truncate pr-12',
                         act ? 'text-primary-700 font-semibold' : 'text-stone-700',
                       ].join(' ')}>
                         {s.title}
-                      </div>
+                      </button>
                       {s.turn_count > 0 && (
                         <div className="text-[11px] text-stone-400 mt-0.5">
                           {s.turn_count} 轮 · {new Date(s.updated_at).toLocaleString('zh-CN', {
@@ -313,7 +304,7 @@ export function GeneralChatPage({ embedded = false, objectReference = null, onOb
                           })}
                         </div>
                       )}
-                      <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                      <div className="absolute right-2 top-2 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -345,7 +336,7 @@ export function GeneralChatPage({ embedded = false, objectReference = null, onOb
           is wide-open because there's no resizer on this page — keep
           it simple, the side nav already takes its share. */}
       {error ? <div className="copilot-welcome" role="alert"><div><h2>暂时无法读取协作记录</h2><p>这不代表记录已丢失。恢复连接后可以继续原来的任务。</p><button className="today-primary-link" onClick={() => { void refetch(); }}>重新加载</button></div></div> : loading ? <div className="copilot-welcome" role="status">正在读取协作记录…</div> : selectedId ? (
-        <div className="flex-1 min-w-0 flex">
+        <div className="copilot-conversation flex-1 min-w-0 min-h-0 flex">
           <ChatPanel
             sessionId={selectedId}
             sessionTitle={activeSession?.title ?? '求职 Copilot'}

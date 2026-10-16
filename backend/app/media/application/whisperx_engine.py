@@ -254,7 +254,7 @@ def init_whisper_model():
 # ── Local-only synchronous pipeline (used by registry's local profile) ─
 
 
-def _transcribe_with_word_timestamps(
+def transcribe_with_word_timestamps(
     audio: Any,
     *,
     language: str | None,
@@ -329,7 +329,7 @@ def _run_whisperx_sync(file_path: str, language: str | None = "zh") -> str:
     effective_lang = (
         None if (language or "").strip().lower() in {"", "auto"} else language
     )
-    result = _transcribe_with_word_timestamps(audio, language=effective_lang)
+    result = transcribe_with_word_timestamps(audio, language=effective_lang)
     if diarize_model is not None:
         from app.core.async_runtime import run_async
 
@@ -357,11 +357,11 @@ async def _diarization_frame(audio: Any):
     import numpy as np
     import pandas as pd
     from app.media.application.evidence_windows import evidence_windows
-    from app.media.application.speaker_identity import SpeakerIdentity
+    from app.media.application.recording_speakers import RecordingSpeakers
 
     if not np.isfinite(audio).all() or np.any(audio < -1) or np.any(audio > 1):
         raise ValueError("invalid_diarization_audio")
-    identities = SpeakerIdentity(max_speakers=settings.DIARIZATION_MAX_SPEAKERS)
+    identities = RecordingSpeakers()
 
     async def chunks():
         for i in range(0, len(audio), 16000):
@@ -371,7 +371,6 @@ async def _diarization_frame(audio: Any):
                 .tobytes()
             )
 
-    rows = []
     async for window in evidence_windows(
         chunks(),
         max_samples=settings.USAGE_AUDIO_MAX_MS * 16,
@@ -379,17 +378,50 @@ async def _diarization_frame(audio: Any):
     ):
         samples = np.frombuffer(window.pcm, dtype="<i2").astype(np.float32) / 32768.0
         result = await _run_diarization_observations(samples)
-        mapping = identities.assign(result["speakers"])
-        for row in result["regular"]:
-            start = max(window.core_start / 16000, window.start / 16000 + row["start"])
-            end = min(window.core_end / 16000, window.start / 16000 + row["end"])
-            if end > start:
-                rows.append(
-                    {"start": start, "end": end, "speaker": mapping[row["speaker_id"]]}
-                )
-    if len({row["speaker"] for row in rows}) < settings.DIARIZATION_MIN_SPEAKERS:
-        raise ValueError("recording_speaker_count_below_minimum")
+        identities.observe(result["embeddings"])
+    centroids = await identities.resolve(
+        diarize_model,
+        min_speakers=settings.DIARIZATION_MIN_SPEAKERS,
+        max_speakers=settings.DIARIZATION_MAX_SPEAKERS,
+    )
+    tracks = await _resolved_speaker_tracks(
+        chunks(), centroids, choose_end=lambda pcm, start, end: end
+    )
+    rows = [
+        {"start": row["start"], "end": row["end"], "speaker": row["speaker_id"]}
+        for row in tracks["regular"]
+    ]
     return pd.DataFrame(rows, columns=["start", "end", "speaker"])
+
+
+async def _resolved_speaker_tracks(blocks, centroids, *, choose_end):
+    from app.media.application.evidence_windows import evidence_windows
+    from app.media.application.evidence_contracts import MAX_DIARIZATION_INTERVALS
+
+    tracks = {"regular": [], "exclusive": []}
+    if not centroids:
+        return tracks
+    async for window in evidence_windows(
+        blocks, max_samples=settings.USAGE_AUDIO_MAX_MS * 16, choose_end=choose_end
+    ):
+        observed = await diarize_model.diarize(
+            window.pcm,
+            max_speakers=settings.DIARIZATION_MAX_SPEAKERS,
+            centroids=centroids,
+        )
+        for kind, rows in tracks.items():
+            for row in observed[kind]:
+                start = max(
+                    window.core_start / 16000, window.start / 16000 + row["start"]
+                )
+                end = min(window.core_end / 16000, window.start / 16000 + row["end"])
+                if start < end:
+                    if len(rows) >= MAX_DIARIZATION_INTERVALS:
+                        raise ValueError("longform_track_capacity")
+                    rows.append(
+                        {"start": start, "end": end, "speaker_id": row["speaker_id"]}
+                    )
+    return tracks
 
 
 def _speech_core_end(pcm: bytes, start: int, limit: int) -> int:
@@ -448,22 +480,20 @@ async def _collect_windowed_evidence(
     from app.media.application.evidence_contracts import (
         MAX_EVIDENCE_WORDS,
         MAX_EVIDENCE_TEXT_BYTES,
-        MAX_DIARIZATION_INTERVALS,
     )
     from app.media.application.evidence_windows import evidence_windows
     from app.media.application.evidence_stitching import (
         restore_word_layout,
     )
-    from app.media.application.speaker_identity import SpeakerIdentity
+    from app.media.application.recording_speakers import RecordingSpeakers
     from app.media.application.pcm_stream import PCMStream
 
     asr, diarizer = whisper_model, diarize_model
     identities = (_whisper_model_id, _diarization_model_id)
     alignment_id = None
-    speakers = SpeakerIdentity(max_speakers=settings.DIARIZATION_MAX_SPEAKERS)
+    speakers = RecordingSpeakers()
     minimum_speakers = settings.DIARIZATION_MIN_SPEAKERS
     output = []
-    tracks = {"regular": [], "exclusive": []}
     languages = set()
     text_bytes = total_samples = 0
     last_word_start = 0.0
@@ -514,31 +544,15 @@ async def _collect_windowed_evidence(
             ]
             # The timestamp-aware decoder advances through every utterance.
             # Each sample is transcribed once; context is only for diarization.
-            result = _transcribe_with_word_timestamps(core_audio, language=language)
+            result = transcribe_with_word_timestamps(core_audio, language=language)
             diarization = await _run_diarization_observations(audio)
-            mapping = speakers.assign(diarization["speakers"])
-            for name, rows in tracks.items():
-                for row in diarization[name]:
-                    start, end = (
-                        max(core_start, offset + row["start"]),
-                        min(core_end, offset + row["end"]),
-                    )
-                    if start < end:
-                        if len(rows) >= MAX_DIARIZATION_INTERVALS:
-                            raise ValueError("longform_track_capacity")
-                        rows.append(
-                            {
-                                "start": start,
-                                "end": end,
-                                "speaker_id": mapping[row["speaker_id"]],
-                            }
-                        )
+            speakers.observe(diarization["embeddings"])
             segments = result.get("segments") or []
             text = "".join(str(segment["text"]) for segment in segments)
             if text.strip():
                 detected = str(result.get("language") or language or "").strip()
-                if not detected or not mapping:
-                    raise ValueError("longform_text_without_language_or_speakers")
+                if not detected:
+                    raise ValueError("longform_text_without_language")
                 align_model, metadata, current_alignment_id = _get_alignment_model(
                     detected
                 )
@@ -612,8 +626,19 @@ async def _collect_windowed_evidence(
             raise ValueError("audio_decode_incomplete")
     if not output:
         raise ValueError("recording_has_no_transcribed_speech")
-    if len({row["speaker_id"] for row in tracks["regular"]}) < minimum_speakers:
-        raise ValueError("recording_speaker_count_below_minimum")
+    centroids = await speakers.resolve(
+        diarizer,
+        min_speakers=minimum_speakers,
+        max_speakers=settings.DIARIZATION_MAX_SPEAKERS,
+    )
+    async with PCMStream(
+        file_path, max_bytes=settings.USAGE_AUDIO_MAX_BYTES, max_ms=max_ms
+    ) as source:
+        tracks = await _resolved_speaker_tracks(
+            source, centroids, choose_end=_speech_core_end
+        )
+        if not source.complete:
+            raise ValueError("audio_decode_incomplete")
     check_models()
     return EvidenceParts(
         transcript=AlignedTranscript(
@@ -750,6 +775,7 @@ def _segments_to_markdown(segments: list[dict[str, Any]]) -> str:
 
 
 __all__ = [
+    "transcribe_with_word_timestamps",
     "init_whisper_model",
     "_run_whisperx_sync",
     "align_remote_words_with_local_diarization",

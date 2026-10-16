@@ -290,10 +290,15 @@ class MockParseJdResp(BaseModel):
 
 
 class MockAnswerAudioResp(BaseModel):
-    """``POST /mock-interviews/{record_id}/answer-audio``."""
+    """Durable recording state; admission and reads share one projection."""
 
-    text: str
+    request_id: str
+    question_message_id: int
+    status: Literal["queued", "transcribing", "completed", "failed"]
+    text: str = ""
     audio_file_asset_id: str
+    audio_url: str | None = None
+    error: str | None = None
 
 
 class TTSRequest(BaseModel):

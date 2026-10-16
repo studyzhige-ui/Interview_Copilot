@@ -9,12 +9,13 @@ ordinary assistant answer into an Artifact.
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from typing import TypeAlias
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.db.types import utc_now
+from app.db.types import utc_now, as_utc
 from app.models.artifact import (
     Artifact,
     ArtifactJobRelation,
@@ -177,6 +178,7 @@ def edit_artifact(
     operation_key: str,
     version: ArtifactWriteInput,
     source_owner_checker: OwnerChecker | None = None,
+    draft_revision: int | None = None,
 ) -> ArtifactVersion:
     """Append a new immutable version and thereby make it current."""
 
@@ -192,6 +194,7 @@ def edit_artifact(
         .one_or_none()
     )
     payload = _version_payload(version)
+    payload["draft_revision"] = draft_revision
     if existing is not None:
         if (
             payload["file_asset_id"] is not None
@@ -402,6 +405,15 @@ def archive_artifact(
     return artifact
 
 
+def restore_artifact(db: Session, *, user_pk: int, artifact_id: str) -> Artifact:
+    artifact = _owned_artifact_locked(db, user_pk, artifact_id)
+    if artifact.archived_at is not None:
+        artifact.archived_at = None
+        artifact.updated_at = utc_now()
+        db.flush()
+    return artifact
+
+
 def relate_artifact_to_job(
     db: Session,
     *,
@@ -493,6 +505,7 @@ def record_product_ui_confirmed_submission(
     artifact_version_id: str,
     job_opportunity_id: str,
     job_owner_checker: OwnerChecker,
+    submitted_at: datetime | None = None,
 ) -> ArtifactSubmissionSnapshot:
     """Freeze exact-version use from an authenticated explicit UI command.
 
@@ -513,6 +526,7 @@ def record_product_ui_confirmed_submission(
         receipt_owner_id=None,
         job_owner_checker=job_owner_checker,
         proof_checker=None,
+        submitted_at=submitted_at,
     )
 
 
@@ -586,6 +600,7 @@ def _record_submission(
     receipt_owner_id: str | None,
     job_owner_checker: OwnerChecker,
     proof_checker: SubmissionProofChecker | None,
+    submitted_at: datetime | None = None,
 ) -> ArtifactSubmissionSnapshot:
     normalized_key = _identity(operation_key, "operation_key")
     normalized_artifact_id = _identity(artifact_id, "artifact_id")
@@ -618,7 +633,10 @@ def _record_submission(
             existing.receipt_owner_type,
             existing.receipt_owner_id,
         )
-        if actual == expected:
+        if actual == expected and (
+            submitted_at is None
+            or as_utc(existing.submitted_at) == as_utc(submitted_at)
+        ):
             return existing
         raise ArtifactConflictError(normalized_key)
 
@@ -686,6 +704,7 @@ def _record_submission(
         confirmation_message_id=confirmation_message_id,
         receipt_owner_type=receipt_owner_type,
         receipt_owner_id=receipt_owner_id,
+        submitted_at=submitted_at or utc_now(),
     )
     db.add(row)
     db.flush()
@@ -756,6 +775,7 @@ def _version_payload(version: ArtifactWriteInput) -> dict[str, object]:
     return {
         "title": _title(version.title),
         "content_text": version.content_text,
+        "document_json": version.document_json,
         "content_format": _identity(version.content_format, "content_format", 64),
         "file_asset_id": _optional_identity(version.file_asset_id, "file_asset_id"),
         "file_asset_version": _optional_identity(

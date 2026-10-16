@@ -34,12 +34,12 @@ _password_hash = PasswordHash((Argon2Hasher(), BcryptHasher()))
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Constant-time verify against any pwdlib-supported algorithm.
+    """Verify against the supported password algorithms.
 
     Returns False (instead of raising) when the hash is malformed,
     unrecognised, or the password isn't a string — matches the
-    legacy bcrypt-only helper's contract. The 14 tests in
-    test_security.py pin this.
+    stored-password verification contract. Invalid encodings fail before
+    expensive hashing; callers must not use them as dummy login hashes.
 
     pwdlib raises ``UnknownHashError`` when the hash prefix doesn't
     match any configured hasher (argon2id / bcrypt) — for our API

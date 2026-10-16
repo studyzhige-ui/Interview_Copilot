@@ -39,7 +39,7 @@ from app.db.redis import get_redis_client
 from .base import ModelEntry
 from .curated import apply_overrides
 from .providers import PROVIDERS, get_provider_defaults
-from .vendors import ALL_SPECS, VendorAdapterSpec, fetch_one_vendor
+from .vendors import ALL_SPECS, VendorAdapterSpec, fetch_one_vendor, get_spec
 from .vendors.base import VendorFetchFailed
 
 logger = logging.getLogger(__name__)
@@ -157,6 +157,9 @@ def _deserialize_entries(raw: str) -> list[ModelEntry]:
         if not isinstance(row, dict):
             continue
         try:
+            spec = get_spec(row["provider"])
+            if spec and spec.chat_filter and not spec.chat_filter(row, row["model"]):
+                continue
             out.append(
                 ModelEntry(
                     provider=row["provider"],

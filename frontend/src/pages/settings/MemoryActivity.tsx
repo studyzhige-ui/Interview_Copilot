@@ -9,8 +9,9 @@ import type { AgentMemory } from '@/types/personalization';
 export function MemoryActivity({ memories }: { memories: AgentMemory[] }) {
   const client = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
-  const pipeline = useQuery({ queryKey: ['memory-pipeline'], queryFn: getMemoryPipelineStatus, refetchInterval: 30000 });
-  const receipts = useQuery({ queryKey: ['memory-receipts'], queryFn: getMemoryReceipts });
+  const [open, setOpen] = useState(false);
+  const pipeline = useQuery({ queryKey: ['memory-pipeline'], queryFn: getMemoryPipelineStatus, enabled: open, refetchInterval: open ? 30000 : false });
+  const receipts = useQuery({ queryKey: ['memory-receipts'], queryFn: getMemoryReceipts, enabled: open });
   const feedback = async (id: string, value: 'helpful' | 'unhelpful') => {
     setBusy(id);
     try {
@@ -24,7 +25,7 @@ export function MemoryActivity({ memories }: { memories: AgentMemory[] }) {
   const status = pipeline.data;
   const failed = (status?.extractions.failed ?? 0) > 0 || status?.consolidation?.status === 'failed';
   return (
-    <details className="mt-4 border-t border-stone-100 pt-3 text-xs text-stone-600">
+    <details onToggle={(event) => setOpen(event.currentTarget.open)} className="mt-4 border-t border-stone-100 pt-3 text-xs text-stone-600">
       <summary className="cursor-pointer font-medium">记忆整理与使用记录</summary>
       {pipeline.isError ? <p role="alert" className="mt-2">暂时无法读取整理状态。<button onClick={() => { void pipeline.refetch(); }}>重试</button></p>
         : status ? <p className="mt-2">{!status.producer_available ? '自动整理尚未启用。'

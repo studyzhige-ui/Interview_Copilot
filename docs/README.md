@@ -1,8 +1,14 @@
 # Interview Copilot 文档入口
 
-> 状态：新文档体系草案，等待用户批准  
-> 当前工作阶段：从产品定义开始的自顶向下复核  
-> 当前产品基线：[`Career Agent OS Blueprint`](./architecture/career-agent-os-blueprint.md) 在过渡期继续有效
+> 当前实现入口（2026-10-13）。以下实现文档描述本地代码；产品蓝图和文档治理草案描述设计方向，不能替代运行验证。
+
+- [全项目复核与收尾](implementation/full-project-audit-2026-10-13.md)：逐目录检查范围、根因修复和验证限制。
+- [当前代码架构](architecture/codebase.md)：模块职责、数据流与部署。
+- [录音到问答主线](architecture/interview-audio-to-qa-pipeline.md)：声学证据、语义提取、回听与恢复。
+- [工程收尾与面试追问依据](implementation/engineering-closure-2026-10-13.md)：设计取舍、源码入口、修复和限制。
+- [Web／Docker 验收记录](implementation/web-release-acceptance-2026-10-12.md)：实际执行范围及未验收能力。
+
+以下为文档体系的设计说明，其中审批阶段不代表当前代码仍停留在该阶段。
 
 ## 1. 为什么建立这套体系
 
@@ -47,9 +53,9 @@ L7  Evidence and History
     当前代码取证、评测报告、审计、Historical / Superseded 文档
 ```
 
-## 3. 当前应该从哪里开始
+## 3. 产品设计文档的审阅顺序
 
-当前只审阅第一层工作文档：
+新增产品设计从第一层工作文档开始；现有功能维护与修复以代码和验收记录为依据：
 
 1. [`Product Definition`](./product/product-definition.md)
 2. 文档体系本身如有问题，先修改 [`Document System Charter`](./governance/document-system.md)

@@ -44,6 +44,8 @@ const CapabilitiesPage = lazy(() =>
 const ProfilePage = lazy(() =>
   import('@/pages/me/ProfilePage').then((m) => ({ default: m.ProfilePage })),
 );
+const CareerCalendarPage = lazy(() => import('@/pages/career/CareerCalendarPage').then(m => ({ default: m.CareerCalendarPage })));
+const NotificationSettingsPage = lazy(() => import('@/pages/settings/NotificationSettingsPage').then(m => ({ default: m.NotificationSettingsPage })));
 const CareerProfilePage = lazy(() =>
   import('@/pages/career/CareerProfilePage').then((m) => ({ default: m.CareerProfilePage })),
 );
@@ -69,7 +71,6 @@ const CopilotPreferencesPage = lazy(() =>
   import('@/pages/settings/CopilotPreferencesPage').then((m) => ({ default: m.CopilotPreferencesPage })),
 );
 
-const InterviewHubPage = lazy(() => import('@/pages/interviews/InterviewHubPage').then((m) => ({ default: m.InterviewHubPage })));
 const ActivityCenterPage = lazy(() => import('@/pages/activities/ActivityCenterPage').then((m) => ({ default: m.ActivityCenterPage })));
 
 const TodayPage = lazy(() => import('@/pages/today/TodayPage').then((m) => ({ default: m.TodayPage })));
@@ -114,7 +115,6 @@ export const router = createBrowserRouter([
     children: [
       { path: '/', element: <Navigate to="/today" replace /> },
       { path: '/today', element: <TodayPage /> },
-      { path: '/interviews', element: <InterviewHubPage /> },
       { path: '/activity', element: <ActivityCenterPage /> },
       { path: '/review', element: <ReviewPage /> },
       { path: '/mock', element: <MockPage /> },
@@ -125,6 +125,7 @@ export const router = createBrowserRouter([
       { path: '/analytics', element: <AnalyticsPage /> },
       { path: '/career-profile', element: <CareerProfilePage /> },
       { path: '/career-process', element: <CareerProcessPage /> },
+      { path: '/career-calendar', element: <CareerCalendarPage /> },
       { path: '/career-insights', element: <CareerInsightsPage /> },
       { path: '/career-process/:opportunityId/offer', element: <OfferPage /> },
       { path: '/artifacts/:artifactId?', element: <ArtifactsPage /> },
@@ -134,6 +135,7 @@ export const router = createBrowserRouter([
       { path: '/plugins', element: <CapabilitiesPage /> },
       { path: '/settings/connections', element: <Navigate to="/plugins?plugin=gmail" replace /> },
       { path: '/settings/personalization', element: <CopilotPreferencesPage /> },
+      { path: '/settings/notifications', element: <NotificationSettingsPage /> },
       { path: '/me', element: <ProfilePage /> },
     ],
   },

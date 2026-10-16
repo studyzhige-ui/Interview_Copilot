@@ -1,8 +1,7 @@
 export type MockClientActionName =
   | 'mock_interview.prefill'
   | 'mock_interview.check_readiness'
-  | 'mock_interview.enter_live'
-  | 'interview.preparation.open';
+  | 'mock_interview.enter_live';
 
 export interface MockPrefillPayload {
   kind: 'mock_prefill';
@@ -31,21 +30,10 @@ export interface MockEnterLivePayload {
   runtime_status: 'mock_in_progress';
 }
 
-export interface InterviewPreparationOpenPayload {
-  kind: 'interview_preparation_open';
-  interview_id: string;
-  opportunity_id: string;
-  expected_interview_version: number;
-  expected_opportunity_version: number;
-  source_operation_id: string;
-  preferred_surface: 'interviews';
-}
-
 export type MockClientActionPayload =
   | MockPrefillPayload
   | MockReadinessPayload
-  | MockEnterLivePayload
-  | InterviewPreparationOpenPayload;
+  | MockEnterLivePayload;
 
 export interface MockClientAction {
   interaction_id: string;

@@ -1,6 +1,7 @@
 """Owned knowledge mutations; HTTP and Agent adapters do not write these rows."""
 
 import logging
+import uuid
 from sqlalchemy.orm import Session
 from app.core.command_errors import CommandError
 from app.core.error_messages import humanize_error
@@ -86,25 +87,8 @@ def create_document(
         db.commit()
         db.refresh(document)
 
-        try:
-            task = dispatch(document_id)
-        except Exception as exc:  # noqa: BLE001
-            # The document is already durable and visible. Park it in a
-            # terminal state so a broker outage cannot leave a zombie.
-            logger.error("Celery dispatch failed for document %s: %s", document_id, exc)
-            document.status = "failed"
-            document.error_message = "后台处理队列暂时不可用，请稍后重试。"
-            db.commit()
-            raise CommandError(
-                kind="unavailable",
-                message="后台处理队列暂时不可用，请稍后重试",
-            ) from exc
-
-        document.task_id = task.id
-        db.commit()
-        db.refresh(document)
-
-        return document, task.id
+        document = enqueue_ingestion(db, document_id=document_id, dispatch=dispatch)
+        return document, document.task_id
     except CommandError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -164,13 +148,13 @@ def update_document(
     return document
 
 
-def record_ingestion_dispatch(db, *, document_id, task_id=None, error=None, now=None):
-    """Update a projection only while it is still pending, never undo a worker result.
+def enqueue_ingestion(db, *, document_id, dispatch=None, replace_stale=False):
+    """Commit the fencing identity before publishing to a possibly fast worker.
 
-    This is an internal persistence seam after an owned source was authorized.
-    It does not dispatch, retry or grant access based on an arbitrary document ID.
+    Call only after owned source admission has committed. Replay reuses an active
+    dispatch; explicit retry clears task_id and the stale sweeper may replace it.
     """
-    from app.models.knowledge import KnowledgeDocument
+    from app.db.types import utc_now
 
     row = (
         db.query(KnowledgeDocument)
@@ -181,12 +165,38 @@ def record_ingestion_dispatch(db, *, document_id, task_id=None, error=None, now=
     )
     if row is None:
         raise CommandError("not_found", "Attachment projection missing")
-    if row.deleted_at is None and row.status in {"pending", "processing"}:
-        if error is not None:
-            row.status, row.error_message = "failed", error
-        elif task_id is not None:
-            row.task_id = task_id
-        if now is not None:
-            row.updated_at = now
-    db.flush()
+    if (
+        row.deleted_at is not None
+        or row.status not in {"pending", "processing"}
+        or (row.task_id and not replace_stale)
+    ):
+        db.commit()
+        return row
+    task_id = str(uuid.uuid4())
+    row.task_id, row.updated_at = task_id, utc_now()
+    db.commit()
+    try:
+        (dispatch or dispatch_document_ingestion)(document_id, task_id=task_id)
+    except Exception as exc:
+        # A worker result or a newer dispatch must never be overwritten.
+        db.rollback()
+        row = (
+            db.query(KnowledgeDocument)
+            .filter_by(id=document_id)
+            .with_for_update()
+            .populate_existing()
+            .one()
+        )
+        if (
+            row.task_id == task_id
+            and row.deleted_at is None
+            and row.status in {"pending", "processing"}
+        ):
+            row.status, row.error_message = (
+                "failed",
+                "后台处理队列暂时不可用，请稍后重试。",
+            )
+        db.commit()
+        raise CommandError("unavailable", "后台处理队列暂时不可用，请稍后重试") from exc
+    db.refresh(row)
     return row

@@ -130,6 +130,13 @@ class JobOpportunity(Base):
             name="uq_job_opportunities_external_application",
         ),
         Index(
+            "ix_job_opportunities_user_pipeline_updated",
+            "user_id",
+            "pipeline_stage",
+            "updated_at",
+            "id",
+        ),
+        Index(
             "ix_job_opportunities_user_outcome_updated",
             "user_id",
             "outcome",
@@ -165,6 +172,9 @@ class JobOpportunity(Base):
     # Current projection only. The service rebuilds these fields exclusively
     # from immutable ProcessEvents after every append/correction.
     phase = Column(String(32), nullable=False, default="pending_application")
+    pipeline_stage = Column(
+        String(32), nullable=False, default="saved", server_default="saved"
+    )
     current_step = Column(String(300), nullable=False, default="已加入跟踪")
     outcome = Column(String(32), nullable=True)
     archived_at = Column(DateTime, nullable=True)

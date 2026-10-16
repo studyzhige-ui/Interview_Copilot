@@ -78,6 +78,27 @@
         "src/test/session-and-display.test.ts",
         "src/test/dialog.test.tsx"
       ]
+    },
+    {
+      "id": "career-automation",
+      "claim": "Versioned profile edits, reminders, scheduler replay and active-turn arbitration",
+      "coverage": "covered",
+      "backend_tests": [
+        "backend/tests/test_career_lifecycle.py",
+        "backend/tests/test_automation_lifecycle.py"
+      ],
+      "frontend_tests": []
+    },
+    {
+      "id": "operations",
+      "claim": "Current-owner diagnostics, immutable file backups and anonymous HTTP rejection",
+      "coverage": "covered",
+      "backend_tests": [
+        "backend/tests/test_consistency_scan.py",
+        "backend/tests/test_backup.py",
+        "backend/tests/test_http_auth_boundary.py"
+      ],
+      "frontend_tests": []
     }
   ],
   "test_strategy": "docs/implementation/current-test-baseline.md"

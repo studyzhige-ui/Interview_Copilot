@@ -193,5 +193,8 @@ from .transcript_correction import TranscriptCorrection  # noqa: F401
 from .mock_answer_submission import MockAnswerSubmission  # noqa: F401
 
 from .mock_media import MockMediaLease, MockMediaPlayback  # noqa: F401
+from .mock_audio_transcription import MockAudioTranscription  # noqa: F401
 
 from .external_identity import ExternalIdentity, LocalUnlockCredential  # noqa: F401
+
+from .career_workspace import DocumentDraft, OpportunityDetails  # noqa: F401

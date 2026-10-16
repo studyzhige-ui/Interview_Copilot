@@ -242,7 +242,7 @@ class AgentLoopStrategy:
         )
 
         runtime_prompt = agent_system_prompt_for_runtime(ctx.runtime_profile)
-        agent_system_prompt = f"{runtime_prompt}\n\n{tool_catalog.format_prompt()}"
+        agent_system_prompt = runtime_prompt
         tool_schemas = tool_catalog.get_openai_schemas()
         history_messages: list[dict[str, Any]] = []
         if ctx.assembled is not None:
@@ -269,6 +269,11 @@ class AgentLoopStrategy:
             system_block = agent_system_prompt
             current_task_content = ctx.user_message
         base_current_task_content = current_task_content
+        catalog_guidance = tool_catalog.format_prompt()
+        if catalog_guidance:
+            history_messages.append(
+                runtime_control_message("tool_catalog", catalog_guidance)
+            )
         render_activated_skills = getattr(
             tool_catalog, "render_activated_skills", lambda: ""
         )
@@ -639,17 +644,7 @@ class AgentLoopStrategy:
                 # Runtime changes append after the stable history prefix. They
                 # never rewrite the user's intent or grant summary authority.
                 runtime_state = _current_task_content_with_plan("", task_snapshot)
-                if runtime_state and runtime_state != getattr(
-                    compactor, "runtime_state", None
-                ):
-                    from app.conversation.context_window import item
-
-                    messages.append(
-                        item(
-                            {"role": "user", "content": runtime_state}, "runtime_state"
-                        )
-                    )
-                    compactor.runtime_state = runtime_state
+                compactor.update_runtime_state(messages, runtime_state)
 
             # Proactive compaction: self-measure the prompt, run the cheap
             # pre-pass if it's over the threshold, and stop cleanly if the
@@ -884,6 +879,7 @@ class AgentLoopStrategy:
         async def _make_call() -> Any:
             nonlocal attempt, current_call_id, current_deadline
             attempt += 1
+            await compactor.revalidate_memory(messages, user_pk=user_pk)
             request = build_provider_request(
                 messages=messages,
                 tools=tool_schemas if tool_schemas else None,
@@ -966,8 +962,9 @@ class AgentLoopStrategy:
 
         async def _on_context_too_long() -> bool:
             messages[:], should_retry = await compactor.on_context_too_long(messages)
-            if should_retry:
-                budget.refund_step()
+            # The retry stays inside this model step; it never consumed a new
+            # loop step to refund. Rewinding would reuse a durable call identity
+            # when the next tool-result-driven iteration starts.
             return should_retry
 
         started = time.perf_counter()

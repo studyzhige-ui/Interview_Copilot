@@ -15,15 +15,17 @@ runtime rows in ``mock_runtime_service``.
   live-state    -> authoritative user-facing transcript for resume/recovery
 """
 
-import io
 import logging
 import os
 from uuid import UUID
 
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     File,
+    Form,
+    Query,
     HTTPException,
     Request,
     Response,
@@ -33,7 +35,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.file_assets import require_uploaded
+from app.api.file_assets import require_readable_upload
 from app.core.error_messages import humanize_error
 from app.core.rate_limit import RATE_DEFAULT, RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from app.core.runtime_files import create_runtime_temp_file
@@ -69,7 +71,6 @@ from app.interviews.application.interview_record_service import (
 from app.interviews.application.interview_record_service import STATUS_MOCK_IN_PROGRESS
 from app.files.application.file_asset_service import get_owned_file_asset
 from app.files.application.file_asset_service import mark_file_asset_consumed
-from app.files.application.file_asset_service import store_validated_file_asset
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +249,7 @@ async def submit_mock_answer(
         )
         if clip is None:
             raise HTTPException(status_code=404, detail="语音片段不存在或无权访问")
-        require_uploaded(db, clip, "语音片段")
+        require_readable_upload(db, clip, "语音片段")
 
     try:
         if clip is not None:
@@ -498,103 +499,104 @@ async def parse_jd_for_mock(
             pass
 
 
-# ── Voice-answer draft (one upload → transcript + saved original) ─────────
+# ── Durable recording drafts ─────────────────────────────────────────────
 
 
 @router.post(
     "/mock-interviews/{record_id}/answer-audio",
     response_model=MockAnswerAudioResp,
+    status_code=202,
 )
 @limiter.limit(RATE_EXPENSIVE)
 async def prepare_answer_audio(
     request: Request,
     response: Response,
     record_id: str,
+    request_id: UUID = Form(...),
+    question_message_id: int = Form(..., gt=0),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db, scope="function"),
 ):
-    """Transcribe and keep one recording without a second client upload."""
     from app.files.application.file_validation import read_validated_upload
-    from app.core.execution_errors import ModelOutcomeUnknownError
-    from app.media.application.short_clip_transcription import TranscriptionUnavailable
-    from app.media.application.short_clip_transcription import transcribe_short_clip
+    from app.interviews.application.mock_audio import admit
+    from starlette.concurrency import run_in_threadpool
+
+    _owned_mock_record_or_404(db, record_id, current_user.username)
+    contents = await read_validated_upload(file, purpose="audio_clip")
+    try:
+        return await run_in_threadpool(
+            admit,
+            db,
+            record_id=record_id,
+            username=current_user.username,
+            request_id=str(request_id),
+            question_message_id=question_message_id,
+            contents=contents,
+            filename=file.filename or "answer.webm",
+            content_type=file.content_type or "audio/webm",
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get(
+    "/mock-interviews/{record_id}/answer-audio",
+    response_model=MockAnswerAudioResp | None,
+)
+def read_answer_audio(
+    record_id: str,
+    request_id: UUID | None = None,
+    question_message_id: int | None = Query(None, gt=0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db, scope="function"),
+):
+    from app.models.mock_audio_transcription import MockAudioTranscription
+    from app.interviews.application.mock_audio import snapshot
 
     record = _owned_mock_record_or_404(db, record_id, current_user.username)
-    runtime = mock_runtime_service.get_runtime_for_record(
-        db,
-        interview_record_id=record.id,
-    )
-    if runtime is None:
-        raise HTTPException(status_code=409, detail="该模拟面试不在进行中")
+    query = db.query(MockAudioTranscription).filter_by(record_id=record_id)
+    if request_id is not None:
+        query = query.filter_by(request_id=str(request_id))
+    elif question_message_id is not None:
+        query = query.filter_by(question_message_id=question_message_id)
+    else:
+        raise HTTPException(status_code=422, detail="需要录音请求或问题编号")
+    row = query.order_by(MockAudioTranscription.created_at.desc()).first()
+    return snapshot(db, record, row) if row is not None else None
 
-    if file.size is not None and file.size > 25 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="音频过大（限制 25MB）")
 
-    contents = await read_validated_upload(file, purpose="audio_clip")
+@router.post(
+    "/mock-interviews/{record_id}/answer-audio/{request_id}/retry",
+    response_model=MockAnswerAudioResp,
+    status_code=202,
+)
+@limiter.limit(RATE_EXPENSIVE)
+def retry_answer_audio(
+    request: Request,
+    response: Response,
+    record_id: str,
+    request_id: UUID,
+    new_request_id: UUID = Body(..., embed=True),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db, scope="function"),
+):
+    from app.interviews.application.mock_audio import retry
 
-    suffix = os.path.splitext(file.filename or "")[1] or ".webm"
-    local_path = create_runtime_temp_file(suffix=suffix)
     try:
-        with open(local_path, "wb") as stream:
-            stream.write(contents)
-        try:
-            text = (await transcribe_short_clip(local_path, language="zh")).strip()
-        except ModelOutcomeUnknownError as exc:
-            raise HTTPException(
-                status_code=409,
-                detail="转写执行或结算结果未确认，未自动重试。录音仍在当前页面，可以改用文字回答。",
-            ) from exc
-        except TranscriptionUnavailable as exc:
-            logger.error("Short-clip transcription unavailable: %s", exc)
-            raise HTTPException(
-                status_code=503,
-                detail="转写服务暂不可用，录音仍保留在当前页面，请稍后重试",
-            ) from exc
-        if not text:
-            raise HTTPException(
-                status_code=422,
-                detail="没有识别到有效语音，请重新录制或改用文字回答",
-            )
-
-        try:
-            asset = store_validated_file_asset(
-                db,
-                user_id=current_user.username,
-                filename=file.filename or "answer.webm",
-                purpose="mock_audio_clip",
-                file_obj=io.BytesIO(contents),
-                content_type=file.content_type or "audio/webm",
-                size_bytes=len(contents),
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Short-clip storage failed: %s", exc)
-            raise HTTPException(
-                status_code=503,
-                detail="原声保存失败，录音仍保留在当前页面，请稍后重试",
-            ) from exc
-
-        logger.info(
-            "Prepared mock answer audio: user=%s record=%s text_chars=%d asset=%s",
-            current_user.username,
-            record_id,
-            len(text),
-            asset.id,
+        return retry(
+            db,
+            record_id=record_id,
+            username=current_user.username,
+            request_id=str(request_id),
+            new_request_id=str(new_request_id),
         )
-        return {"text": text, "audio_file_asset_id": asset.id}
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Preparing mock answer audio failed: %s", exc)
-        raise HTTPException(
-            status_code=500,
-            detail=f"转写失败：{humanize_error(exc)}",
-        ) from exc
-    finally:
-        try:
-            os.unlink(local_path)
-        except OSError:
-            pass
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # ── TTS ────────────────────────────────────────────────────────────────────

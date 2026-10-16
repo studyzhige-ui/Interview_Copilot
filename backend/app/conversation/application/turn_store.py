@@ -658,6 +658,19 @@ def _terminalize(
     row.owner_id = None
     row.heartbeat_at = None
     row.completed_at = utc_now()
+    from app.models.context_checkpoint import ContextCheckpoint
+
+    # In-flight projections exist only to resume this turn. The completed
+    # conversation window and canonical transcript have separate lifetimes.
+    db.query(ContextCheckpoint).filter(
+        ContextCheckpoint.conversation_id == row.conversation_id,
+        ContextCheckpoint.scope == row.id,
+    ).delete(synchronize_session=False)
+    from app.conversation.application.model_dispatch_service import (
+        close_running_model_dispatches,
+    )
+
+    close_running_model_dispatches(db, turn_id=row.id)
     from app.conversation.application.agent_task_service import (
         freeze_agent_task_for_terminal_turn,
     )

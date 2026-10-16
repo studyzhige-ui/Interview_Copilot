@@ -78,24 +78,6 @@ export async function listCareerProfileDrafts(): Promise<CareerProfileDraft[]> {
   return (await apiClient.get('/career-profile/drafts')).data;
 }
 
-export async function resolveCareerProfileDraft(input: {
-  draft: CareerProfileDraft;
-  profileVersion: number;
-  decision: 'accept' | 'reject';
-  note?: string;
-}): Promise<CareerProfile | CareerProfileDraft> {
-  return (
-    await apiClient.post(
-      `/career-profile/drafts/${encodeURIComponent(input.draft.id)}/${input.decision}`,
-      {
-        expected_draft_version: input.draft.version,
-        expected_profile_version: input.decision === 'accept' ? input.profileVersion : undefined,
-        resolution_note: input.note || undefined,
-      },
-    )
-  ).data;
-}
-
 export async function resolveCareerProfileCandidates(input: {
   draft: CareerProfileDraft;
   profileVersion: number;

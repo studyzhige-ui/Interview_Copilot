@@ -1,4 +1,6 @@
 import { useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { invalidateCareerQueries } from '@/lib/productQueries';
 import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
 import {
@@ -42,6 +44,7 @@ export function useChatStream({
   onAgentTaskChanged?: (sessionId: string, turnId: string) => void;
   onObjectReferencesConsumed?: () => void;
 }) {
+  const queryClient = useQueryClient();
   const startStream = useCallback((
     payload: string | null,
     existingTurnId?: string,
@@ -137,6 +140,8 @@ export function useChatStream({
       rt.abort = null;
       if (!detached && !waiting) rt.turnId = null;
       bump();
+      // A tool can commit before the final response or a transport failure.
+      void invalidateCareerQueries(queryClient);
     };
 
     streamChatTurn(sid, payload ?? '', {
@@ -324,6 +329,7 @@ export function useChatStream({
     executionMode,
     onQueueChanged,
     onAgentTaskChanged,
+    queryClient,
     onObjectReferencesConsumed,
   ]);
 

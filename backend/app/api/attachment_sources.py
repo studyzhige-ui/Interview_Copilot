@@ -163,16 +163,10 @@ def retry_attachment_source(
         raise _translate_error(exc) from exc
 
     if retry.should_dispatch:
-        from app.task_queue.dispatch import dispatch_document_ingestion
+        from app.rag.application.document_commands import enqueue_ingestion
 
         try:
-            task = dispatch_document_ingestion(retry.state.document_id or "")
-            from app.rag.application.document_commands import record_ingestion_dispatch
-
-            record_ingestion_dispatch(
-                db, document_id=retry.state.document_id, task_id=task.id
-            )
-            db.commit()
+            enqueue_ingestion(db, document_id=retry.state.document_id or "")
         except Exception:  # noqa: BLE001
             db.rollback()
             logger.exception(

@@ -27,6 +27,7 @@ import { MockAnswerAudio } from './MockAnswerAudio';
 
 export type ReviewTab = 'report' | 'qa' | 'transcript' | 'history';
 type Tab = ReviewTab;
+const statusLabels: Record<string, string> = { completed: '复盘完成', review_ready: '复盘完成', processing: '正在处理', pending: '等待处理', failed: '处理失败', review_failed: '复盘失败', reviewing: '正在生成复盘', mock_in_progress: '模拟面试中', mock_completed: '问答已结束' };
 
 interface Props {
   detail: InterviewRecordDetail | null;
@@ -121,18 +122,20 @@ export function QAPanel({
             <DebriefGuidanceControl interviewId={detail.id} />
           </div>
           <div className="text-xs text-stone-500 mt-1">
-            {formatLocal(detail.created_at)} · {detail.status}
+            {formatLocal(detail.created_at)} · {statusLabels[detail.status] ?? '状态待核实'}
             {detail.tag && (
               <span className="ml-2 inline-flex">
                 <Pill tone="sand">{detail.tag}</Pill>
               </span>
             )}
           </div>
+          <details className="mt-3 text-xs text-stone-500"><summary className="cursor-pointer">关联岗位与复盘背景</summary>
           <InterviewOpportunityControl
             key={`${detail.id}:${detail.job_opportunity_id ?? ''}`}
             interviewId={detail.id}
             initialJobOpportunityId={detail.job_opportunity_id}
           />
+          </details>
         </div>
 
         {invalidated && <div role="status" className="mb-4 rounded-lg bg-amber-50 p-3 text-sm">内容已纠正，旧评分和综合报告已失效。重新分析需要你的明确操作。</div>}
@@ -149,17 +152,17 @@ export function QAPanel({
         )}
         {tab === 'qa' && (
           qa.length === 0
-          ? <EmptyState icon={<FileText size={24} />} title="这条记录还没有结构化 QA" description="模型可能还在分析，或这条记录不输出 per_question 字段。" />
+          ? <EmptyState icon={<FileText size={24} />} title="这条记录还没有结构化 QA" description="分析完成后会在这里展示问题、你的回答和改进建议。" />
           : <div className="flex flex-col gap-4">
               {detail.transcript_quality && (
                 <div className="rounded-xl border border-primary-100 bg-primary-50/70 px-4 py-3 text-sm text-stone-700">
-                  <div className="font-medium text-stone-800">词级证据整理</div>
+                  <div className="font-medium text-stone-800">录音问答整理</div>
                   <div className="mt-1 leading-6">
-                    候选人原回答覆盖 {Math.round(detail.transcript_quality.candidate_substantive_word_coverage * 100)}%
-                    {' · '}问题覆盖 {Math.round(detail.transcript_quality.question_word_coverage * 100)}%
-                    {' · '}隐藏 {Math.round(detail.transcript_quality.hidden_word_ratio * 100)}% 的明确停顿、杂音或紧邻重复词。
-                    正文由原始词级证据重建，不是摘要或改写。
+                    根据完整对话整理问答并纠正明显转写错误，保留原始转写和录音供核对。
                   </div>
+                  {detail.transcript_quality.warnings?.map((warning, index) => (
+                    <p key={index} className="mt-1 text-amber-800">{warning}</p>
+                  ))}
                 </div>
               )}
               {qa.map((q) => (
@@ -202,39 +205,10 @@ function ReportTabs({ tab, onChange, hasTranscript }: { tab: Tab; onChange: (t: 
   ];
   if (hasTranscript) tabs.push({ k: 'transcript', l: '原始转录' });
 
-  const activeIdx = tabs.findIndex((t) => t.k === tab);
-  const pct = 100 / tabs.length;
-
   return (
-    <div
-      className="relative inline-flex p-1 mb-5 rounded-full border border-stone-200 shadow-xs"
-      style={{
-        background: 'rgba(255,255,255,0.62)',
-        backdropFilter: 'blur(14px)',
-        WebkitBackdropFilter: 'blur(14px)',
-      }}
-    >
-      <div
-        className="absolute top-1 bottom-1 bg-white rounded-full shadow-xs transition-[left] duration-[280ms]"
-        style={{
-          left: `calc(${activeIdx * pct}% + 4px)`,
-          width: `calc(${pct}% - 4px)`,
-          transitionTimingFunction: 'var(--ease-soft)',
-        }}
-      />
-      {tabs.map((t) => (
-        <button
-          key={t.k}
-          onClick={() => onChange(t.k)}
-          className={[
-            'relative z-10 px-[22px] py-[7px] text-[13px] font-medium',
-            tab === t.k ? 'text-primary-700' : 'text-stone-600',
-          ].join(' ')}
-        >
-          {t.l}
-        </button>
-      ))}
-    </div>
+    <nav aria-label="复盘内容" className="profile-tabs mb-5">
+      {tabs.map((item) => <button type="button" key={item.k} aria-pressed={tab === item.k} onClick={() => onChange(item.k)}>{item.l}</button>)}
+    </nav>
   );
 }
 
@@ -438,7 +412,7 @@ function ReportView({
           )}
         </div>
       )}
-      <div className="grid grid-cols-[200px_1fr] gap-5 bg-white border border-stone-200 rounded-2xl p-6 shadow-xs">
+      <div className="grid grid-cols-1 sm:grid-cols-[150px_minmax(0,1fr)] gap-5 bg-white border border-stone-200 rounded-2xl p-6 shadow-xs">
         <div className="flex flex-col items-center justify-center bg-cream-50 rounded-xl p-5">
           <div className="text-xs text-stone-500 uppercase tracking-wider">本次表现</div>
           <div className={`${overallScore === null ? 'text-2xl' : 'text-[52px]'} font-bold text-primary-600 leading-none mt-2`}>
@@ -455,7 +429,7 @@ function ReportView({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <BulletList tone="success" title="做得不错的地方" items={strengths} />
         <BulletList tone="warn" title="下次可以更好的方向" items={weaknesses} />
       </div>
@@ -485,7 +459,8 @@ function ReportView({
       {radar.length > 0 && (
         <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs">
           <div className="text-xs uppercase tracking-wider text-stone-500 mb-3">能力维度</div>
-          <AbilityRadarChart values={radar} />
+          <dl className="grid gap-3 sm:grid-cols-2">{radar.map(([name, score]) => <div key={name} className="flex items-center justify-between gap-4 rounded-lg bg-stone-50 px-4 py-3"><dt className="text-sm text-stone-600">{name}</dt><dd className="text-sm font-medium text-primary-700">{validScore(score) ? formatScore(score) : '未考察'}</dd></div>)}</dl>
+          <p className="mt-3 text-xs text-stone-500">仅代表本场面试；未考察不等于能力不足。</p>
         </div>
       )}
 
@@ -506,88 +481,6 @@ function ReportView({
   );
 }
 
-function AbilityRadarChart({ values }: { values: Array<[string, number | null]> }) {
-  const dimensions = values.slice(0, 8);
-  const count = dimensions.length;
-  const centerX = 180;
-  const centerY = 145;
-  const radius = 92;
-  const pointAt = (index: number, scale: number) => {
-    const angle = -Math.PI / 2 + (index * Math.PI * 2) / count;
-    return {
-      x: centerX + Math.cos(angle) * radius * scale,
-      y: centerY + Math.sin(angle) * radius * scale,
-    };
-  };
-  const polygon = (scale: number) => dimensions
-    .map((_, index) => {
-      const point = pointAt(index, scale);
-      return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
-    })
-    .join(' ');
-  const dataPolygon = dimensions
-    .map(([, value], index) => {
-      const point = pointAt(index, typeof value === 'number' ? Math.max(0, Math.min(10, value)) / 10 : 0);
-      return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
-    })
-    .join(' ');
-  const hasMeasuredValue = dimensions.some(([, value]) => typeof value === 'number');
-
-  return (
-    <div className="grid items-center gap-5 md:grid-cols-[minmax(300px,1fr)_220px]">
-      <svg
-        role="img"
-        aria-label="能力雷达图"
-        viewBox="0 0 360 300"
-        className="mx-auto w-full max-w-[420px]"
-      >
-        {[0.2, 0.4, 0.6, 0.8, 1].map((scale) => (
-          <polygon
-            key={scale}
-            points={polygon(scale)}
-            fill="none"
-            stroke={scale === 1 ? '#cbd5e1' : '#e7e5e4'}
-            strokeWidth="1"
-          />
-        ))}
-        {dimensions.map(([dimension], index) => {
-          const axis = pointAt(index, 1);
-          const label = pointAt(index, 1.28);
-          const anchor = Math.abs(label.x - centerX) < 8 ? 'middle' : label.x > centerX ? 'start' : 'end';
-          return (
-            <g key={dimension}>
-              <line x1={centerX} y1={centerY} x2={axis.x} y2={axis.y} stroke="#e7e5e4" strokeWidth="1" />
-              <text x={label.x} y={label.y} textAnchor={anchor} dominantBaseline="middle" className="fill-stone-600 text-[11px]">
-                {dimension}
-              </text>
-            </g>
-          );
-        })}
-        {hasMeasuredValue && (
-          <>
-            <polygon points={dataPolygon} fill="rgba(59,130,246,0.18)" stroke="#3b82f6" strokeWidth="2" />
-            {dimensions.map(([dimension, value], index) => {
-              if (typeof value !== 'number') return null;
-              const point = pointAt(index, Math.max(0, Math.min(10, value)) / 10);
-              return <circle key={dimension} cx={point.x} cy={point.y} r="3.5" fill="#2563eb" />;
-            })}
-          </>
-        )}
-      </svg>
-      <div className="space-y-2">
-        {dimensions.map(([dimension, value]) => (
-          <div key={dimension} className="flex items-center justify-between rounded-lg bg-stone-50 px-3 py-2 text-sm">
-            <span className="text-stone-700">{dimension}</span>
-            <span className="font-mono text-stone-500">
-              {typeof value === 'number' ? `${Math.round(value * 10)}分` : '未考察'}
-            </span>
-          </div>
-        ))}
-        <p className="text-[11px] leading-relaxed text-stone-400">仅展示本次问答中有直接证据的维度；“未考察”不等于能力不足。</p>
-      </div>
-    </div>
-  );
-}
 
 function BulletList({
   tone,
@@ -706,8 +599,6 @@ function QAItem({
       <div className="flex flex-wrap items-center gap-2 mb-2">
         <Pill tone="success">A</Pill>
         <span className="text-xs text-stone-500">你的回答 · 可编辑</span>
-        {qa.answer_audio_url && <MockAnswerAudio recordId={recordId} qaId={qa.id}
-          assetId={qa.answer_audio_file_asset_id} url={qa.answer_audio_url} />}
         <button
           onClick={() => setEditing((v) => !v)}
           title="编辑回答"
@@ -716,6 +607,8 @@ function QAItem({
           <Pencil size={12} />
         </button>
       </div>
+      {qa.answer_audio_url && <MockAnswerAudio recordId={recordId} qaId={qa.id}
+        assetId={qa.answer_audio_file_asset_id} url={qa.answer_audio_url} />}
       <div onDoubleClick={() => setEditing(true)}
         className="text-[15px] font-mono text-stone-700 leading-[1.7] bg-stone-50 p-3.5 rounded-lg cursor-text whitespace-pre-wrap">
         {answer || <span className="text-stone-400 font-sans">（未作答）</span>}
@@ -734,16 +627,14 @@ function QAItem({
       {qa.source_provenance?.evidence_schema_version === 2 && (
         <details className="mt-3 text-xs text-stone-500">
           <summary className="cursor-pointer select-none hover:text-stone-700">
-            查看原词整理记录
+            查看录音来源
           </summary>
           <div className="mt-2 rounded-lg bg-stone-50 px-3 py-2 leading-5">
             {qa.source_provenance.manual_override
               ? '当前正文包含用户明确编辑；下列词级引用保留编辑前来源。'
               : `回答引用 ${qa.source_provenance.answer_word_ids.length} 个原始词。`}
             {' '}
-            保留 {qa.source_provenance.crossing_utterance_ids.length} 次交叉插话，
-            隐藏 {qa.source_provenance.hidden_words.length} 个可审计的非语义词；
-            结构置信度 {Math.round(qa.source_provenance.confidence * 100)}%。
+            正文经过整理，原始转写可在录音回听中核对。
           </div>
         </details>
       )}

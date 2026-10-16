@@ -33,7 +33,7 @@ from app.schemas.career_profile import (
 from app.career.application import artifacts as artifact_service
 from app.career.application import profile as career_profile_service
 
-MAX_ACTIVE_RESUMES = 2
+MAX_ACTIVE_RESUMES = 1000
 _FACTS = TypeAdapter(list[PersonalFactInput])
 _DIRECTIONS = TypeAdapter(list[DirectionInput])
 
@@ -157,7 +157,7 @@ def create_resume_artifact(
         existing is None
         and _active_resume_artifact_count(db, user_pk=user_pk) >= MAX_ACTIVE_RESUMES
     ):
-        raise ResumeArtifactLimitError("已有两份简历，请为其中一份添加新版本")
+        raise ResumeArtifactLimitError("简历数量已达上限，请先归档不再使用的简历")
     artifact = artifact_service.save_artifact_explicitly(
         db,
         user_pk=user_pk,
@@ -272,7 +272,7 @@ def register_resume_artifact(
         and artifact.archived_at is None
         and _active_resume_artifact_count(db, user_pk=user_pk) > MAX_ACTIVE_RESUMES
     ):
-        raise ResumeArtifactLimitError("已有两份简历，请为其中一份添加新版本")
+        raise ResumeArtifactLimitError("简历数量已达上限，请先归档不再使用的简历")
 
     state = (
         db.query(ArtifactResumeState)
@@ -571,6 +571,13 @@ def read_resume_sections(record: ResumeArtifactRecord) -> list[dict]:
 
 
 def read_resume_text(record: ResumeArtifactRecord) -> str:
+    if record.current_version.document_json is not None:
+        from app.schemas.career_workspace import ResumeDocument
+
+        if not ResumeDocument.model_validate(
+            record.current_version.document_json
+        ).has_content():
+            raise ResumeArtifactNotReadyError("简历内容为空，请先补充内容")
     text = (record.current_version.content_text or "").strip()
     if text:
         return text
@@ -674,18 +681,14 @@ def _candidate_prompt(text: str) -> str:
 {{"facts": [...], "directions": [...], "sections": [...]}}
 {RESUME_SECTION_INSTRUCTIONS}
 
-facts 允许的结构：
-- education: kind,institution,degree?,field_of_study?,description?,start_date?,end_date?
-- experience: kind,organization,role,description?,start_date?,end_date?
-- project: kind,name,role?,description?,technologies,start_date?,end_date?
-- skill: kind,name,category?
-- achievement: kind,title,description?,occurred_on?
-- contact: kind,channel(email|phone|website|other),value
-- location: kind,value
-directions 仅在简历明确写有求职目标时输出，结构为
-label, criteria(role_keywords,seniority,locations,work_modes,salary_min,salary_max,
-salary_currency,industries,technologies,exclusions), lifecycle(exploring), priority(0)。
-日期使用 YYYY-MM-DD；不确定日期留空，不要猜测。
+facts 和 directions 分别遵循以下 JSON Schema（与保存时的校验契约相同）：
+facts: {json.dumps(_FACTS.json_schema(), ensure_ascii=False)}
+directions: {json.dumps(_DIRECTIONS.json_schema(), ensure_ascii=False)}
+directions 仅在简历明确写有求职目标时输出，lifecycle 使用 exploring，priority 使用 0。
+未陈述的可选字段省略；数组无内容时使用 []，可空标量使用 null，不使用空字符串代替。
+经历的起止日期保留原文精度：YYYY、YYYY-MM 或 YYYY-MM-DD，不要猜测月份或日期。
+仅在原文明确写有“至今 / 仍在进行”时设 ongoing=true；只写一个时间不代表仍在进行。
+出生日期、证书与成果日期仅在原文明示完整日期时使用 YYYY-MM-DD，否则省略。
 
 <resume>
 {numbered}

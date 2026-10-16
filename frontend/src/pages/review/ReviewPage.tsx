@@ -82,7 +82,7 @@ export function ReviewPage() {
   const [reviewTab, setReviewTab] = useState<{ recordId: string | null; tab: ReviewTab }>({ recordId: null, tab: 'report' });
   const [widths, setWidths] = useState(loadWidths);
   const [analyses, setAnalyses] = useState<Record<string, AnalysisEntry>>({});
-  const [mobilePane, setMobilePane] = useState<'records' | 'review' | 'chat'>('review');
+  const [pane, setPane] = useState<'records' | 'review' | 'chat'>('review');
   const [questionSelection, setQuestionSelection] = useState<{
     recordId: string | null;
     indexes: number[];
@@ -90,7 +90,7 @@ export function ReviewPage() {
 
   const { data: records = [], error: recordsError, isFetchedAfterMount } = useQuery({
     queryKey: RECORDS_KEY,
-    queryFn: ({ signal }) => listInterviewRecords(0, 50, { signal }),
+    queryFn: ({ signal }) => listInterviewRecords(0, 50, { signal, includeInvitations: false }),
     // Always refresh on mount: mock-interview completion navigates here
     // with ?id=<fresh record> that a cached list won't contain yet. The
     // cached rows still paint instantly; the selection effect below just
@@ -148,7 +148,7 @@ export function ReviewPage() {
           : [...indexes, index],
       };
     });
-    setMobilePane('chat');
+    setPane('chat');
   }, [activeId]);
 
   const removeQuestion = useCallback((index: number) => {
@@ -195,6 +195,7 @@ export function ReviewPage() {
 
 
   const onNew = () => {
+    setPane('review');
     const d = makeDraft();
     setDrafts((arr) => [d, ...arr]);
     setActiveId(d.id);
@@ -239,7 +240,7 @@ export function ReviewPage() {
     const ac = new AbortController();
     onRecordChangedAcRef.current = ac;
     try {
-      const rows = await listInterviewRecords(0, 50, { signal: ac.signal });
+      const rows = await listInterviewRecords(0, 50, { signal: ac.signal, includeInvitations: false });
       if (ac.signal.aborted || !isMounted.current) return;
       setRecords(rows);
       const currentId = activeIdRef.current;
@@ -343,7 +344,7 @@ export function ReviewPage() {
     // Analysis completion can fire a few seconds after the user has
     // navigated away — guard every setState past an await.
     try {
-      const rows = await listInterviewRecords(0, 50);
+      const rows = await listInterviewRecords(0, 50, { includeInvitations: false });
       if (!isMounted.current) return;
       setRecords(rows);
       const target = entry?.record_id;
@@ -353,7 +354,7 @@ export function ReviewPage() {
         if (forActiveId !== target && entry) {
           await applyDraftMetadata(target, { title: entry.title, tag: entry.tag });
           if (!isMounted.current) return;
-          const refreshed = await listInterviewRecords(0, 50);
+          const refreshed = await listInterviewRecords(0, 50, { includeInvitations: false });
           if (!isMounted.current) return;
           setRecords(refreshed);
         }
@@ -588,7 +589,7 @@ export function ReviewPage() {
   })();
 
   return (
-    <div className="h-full flex flex-col lg:flex-row">
+    <div className="h-full flex flex-col">
       {/* Headless SSE runners — one per in-flight analysis, kept alive
        *  regardless of which session the user is currently looking at. */}
       {Object.entries(analyses).map(([id, a]) => (
@@ -601,18 +602,19 @@ export function ReviewPage() {
         />
       ))}
 
-      <div className="lg:hidden flex shrink-0 border-b border-stone-200 bg-white p-1.5">
+      <nav aria-label="复盘工作区" className="flex shrink-0 gap-2 border-b border-stone-200 bg-white px-4 py-2">
         {([
           ['records', '面试记录'],
           ['review', '复盘内容'],
           ['chat', '复盘对话'],
-        ] as const).map(([pane, label]) => (
+        ] as const).map(([nextPane, label]) => (
           <button
-            key={pane}
+            key={nextPane}
             type="button"
-            onClick={() => setMobilePane(pane)}
-            className={`flex-1 rounded-md px-3 py-2 text-sm ${
-              mobilePane === pane
+            aria-pressed={pane === nextPane}
+            onClick={() => setPane(nextPane)}
+            className={`rounded-md px-3 py-2 text-sm ${
+              pane === nextPane
                 ? 'bg-primary-50 font-medium text-primary-700'
                 : 'text-stone-500'
             }`}
@@ -620,14 +622,15 @@ export function ReviewPage() {
             {label}
           </button>
         ))}
-      </div>
+      </nav>
 
+      <div className="flex flex-1 min-h-0 min-w-0">
       <SessionList
         records={combined}
         activeId={activeId}
         onSelect={(id) => {
           setActiveId(isDraft(id) ? id : null);
-          setMobilePane('review');
+          setPane('review');
           if (isDraft(id)) setSearch({}, { replace: true });
           else setSearch({ id }, { replace: true });
         }}
@@ -637,9 +640,9 @@ export function ReviewPage() {
         onDraftDelete={onDraftDelete}
         analyzingStates={analyzingStates}
         width={widths.left}
-        className={`${mobilePane === 'records' ? 'flex' : 'hidden'} lg:flex min-h-0 flex-1 lg:flex-none`}
+        className={`${pane === 'records' ? 'flex' : 'hidden'} xl:flex min-h-0 flex-1 xl:flex-none`}
       />
-      <div className="hidden lg:contents">
+      <div className="hidden xl:contents">
         <Resizer
           value={widths.left}
           onChange={(v) => setWidths((w) => ({ ...w, left: v }))}
@@ -648,10 +651,10 @@ export function ReviewPage() {
           direction="right"
         />
       </div>
-      <section className={`${mobilePane === 'review' ? 'block' : 'hidden'} lg:block flex-1 min-h-0 min-w-0 overflow-y-auto bg-cream-50`}>
+      <section className={`${pane === 'review' ? 'block' : pane === 'chat' ? 'hidden 2xl:block' : 'hidden xl:block'} flex-1 min-h-0 min-w-0 overflow-y-auto bg-cream-50`}>
         {middle}
       </section>
-      <div className="hidden lg:contents">
+      <div className={pane === 'chat' ? "hidden 2xl:contents" : "hidden"}>
         <Resizer
           value={widths.right}
           onChange={(v) => setWidths((w) => ({ ...w, right: v }))}
@@ -668,8 +671,9 @@ export function ReviewPage() {
         questionIndexes={selectedQuestionIndexes}
         onRemoveQuestion={removeQuestion}
         onClearQuestions={clearQuestions}
-        className={`${mobilePane === 'chat' ? 'flex' : 'hidden'} lg:flex min-h-0 flex-1 lg:flex-none`}
+        className={`${pane === 'chat' ? 'flex' : 'hidden'} min-h-0 !flex-1 2xl:!flex-none`}
       />
+      </div>
     </div>
   );
 }

@@ -236,11 +236,11 @@ export function PersistentTasksPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl p-4 md:p-6">
+    <div className="workspace-page">
       <header className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-stone-800">持续任务</h1>
-          <p className="mt-1 text-sm text-stone-500">只有你明确创建的任务才会在当前运行服务中持续执行；每次执行只使用已列出的工具和动作范围。</p>
+          <p className="mt-1 text-sm text-stone-500">管理定时或外部事件触发的协作任务，在专属对话中查看执行结果。</p>
         </div>
         <div className="flex gap-2">
           <Btn kind="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={() => { void refresh(); }}>刷新</Btn>
@@ -248,8 +248,8 @@ export function PersistentTasksPage() {
         </div>
       </header>
 
-      <div className="grid min-h-[560px] gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-xs">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="hidden lg:block overflow-hidden rounded-xl border border-stone-200 bg-white shadow-xs">
           <div className="border-b border-stone-100 px-4 py-3 text-sm font-semibold text-stone-800">任务 · {tasks.length}</div>
           {tasks.length === 0 ? (
             <EmptyState
@@ -259,7 +259,7 @@ export function PersistentTasksPage() {
               action={<Btn size="sm" onClick={() => setEditor('create')}>创建第一个任务</Btn>}
             />
           ) : (
-            <div className="divide-y divide-stone-100">
+            <div className="max-h-[440px] lg:max-h-[640px] overflow-auto divide-y divide-stone-100">
               {tasks.map((task) => (
                 <button
                   key={task.id}
@@ -278,7 +278,10 @@ export function PersistentTasksPage() {
           )}
         </aside>
 
-        <main className="min-w-0">
+        <label className="lg:hidden text-sm text-stone-600">选择持续任务
+          <select aria-label="选择持续任务" value={selectedId ?? ''} onChange={(event) => navigate(`/persistent-tasks/${encodeURIComponent(event.target.value)}`)} className="mt-2 w-full rounded-lg border border-stone-200 bg-white p-3"><option value="" disabled>请选择任务</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title} · {task.state === 'active' ? '运行中' : '已暂停'}</option>)}</select>
+        </label>
+        <section aria-label="所选任务详情" className="min-w-0">
           {!selected ? (
             <div className="rounded-xl border border-stone-200 bg-white">
               <EmptyState icon={<Zap size={30} />} title="选择一个持续任务查看详情" />
@@ -304,7 +307,7 @@ export function PersistentTasksPage() {
               onDelete={() => prepareDelete(selected)}
             />
           )}
-        </main>
+        </section>
       </div>
 
       {editor && <TaskEditor
@@ -442,7 +445,7 @@ function TaskDetail({
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-lg font-semibold text-stone-800">{task.title}</h2>
               <Pill tone={task.state === 'active' ? 'success' : 'neutral'}>{task.state === 'active' ? '运行中' : '已暂停'}</Pill>
-              <Pill>v{task.version}</Pill>
+
               {loading && <Spinner size={12} />}
             </div>
             <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-stone-700">{task.instruction}</p>
@@ -485,6 +488,8 @@ function TaskDetail({
             </div>
           )}
         </InfoCard>
+      </section>
+      <details className="rounded-xl border border-stone-200 bg-white p-4"><summary className="cursor-pointer text-sm font-medium text-stone-600">授权范围与工作流配置</summary><div className="mt-4 grid gap-4 md:grid-cols-2">
         <InfoCard title="允许的只读工具">
           {task.allowed_tool_names_json.length
             ? <div className="flex flex-wrap gap-1.5">{task.allowed_tool_names_json.map((tool) => <Pill key={tool}>{tool}</Pill>)}</div>
@@ -499,7 +504,7 @@ function TaskDetail({
           <div>读取：{task.read_scope_json.join('、') || '未声明'}</div>
           <div className="mt-1">动作：{task.action_scope_json.join('、') || '无'}</div>
         </InfoCard>
-      </section>
+      </div></details>
 
       <TriggerHistory
         task={task}
@@ -509,15 +514,15 @@ function TaskDetail({
         onRetry={onRetryTriggers}
       />
 
-      <section className="rounded-xl border border-stone-200 bg-stone-50 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <details className="rounded-xl border border-stone-200 bg-stone-50 p-4"><summary className="cursor-pointer text-sm text-stone-500">任务管理</summary>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-medium text-stone-700">删除任务</h3>
             <p className="mt-1 text-xs text-stone-500">删除会先停止调度与新执行，安全取消当前 Turn，并分别说明待发送输入、附件、已保存结果和未结算外部调用。</p>
           </div>
           <Btn kind="danger" size="sm" icon={<Trash2 size={14} />} disabled={busy} onClick={onDelete}>删除任务</Btn>
         </div>
-      </section>
+      </details>
     </div>
   );
 }
@@ -548,7 +553,7 @@ function TriggerHistory({
           <History size={16} className="shrink-0 text-stone-400" />
           <div>
             <h3 className="text-sm font-medium text-stone-800">触发历史</h3>
-            <p className="mt-0.5 text-xs text-stone-500">这里记录任务何时被触发及是否已接纳为 Turn；具体过程和结果在专属对话中。</p>
+            <p className="mt-0.5 text-xs text-stone-500">查看启动时间与执行状态；详细结果请打开专属对话。</p>
           </div>
         </div>
         {loading && <Spinner size={14} />}
@@ -580,7 +585,7 @@ function TriggerHistory({
                     className="shrink-0 text-xs text-primary-600 hover:text-primary-700"
                     to={`/persistent-tasks/${encodeURIComponent(task.id)}/conversation`}
                   >
-                    已接纳为 Turn
+                    查看本次执行
                   </Link>
                 ) : (
                   <span className="shrink-0 text-xs text-warning-700">等待接纳</span>

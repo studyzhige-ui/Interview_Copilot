@@ -219,6 +219,15 @@ class ChatPipelineStrategy:
         # Final answers always use the model selected by the user. Internal
         # router/worker models are never allowed to answer on the user's behalf.
         client, profile = resolved_model
+        if assembled.memory_block:
+            from app.memory.recall import revalidate_recall
+
+            assembled.memory_block = await asyncio.to_thread(
+                revalidate_recall,
+                assembled.memory_block,
+                user_pk=ctx.user_pk,
+                conversation_id=ctx.session_id,
+            )
         projection = compose_provider_context(
             assembled,
             renderer=self.renderer,
@@ -314,10 +323,12 @@ class ChatPipelineStrategy:
         result.prompt_cache_enabled = adapter.prompt_cache_enabled
 
         final_answer = ""
+        stop_reason = None
         citation_guard = (
             CitationStreamGuard(assembled.sources) if assembled.sources else None
         )
         async for chunk in response_generator:
+            stop_reason = chunk.stop_reason or stop_reason
             usage = getattr(chunk, "usage", None)
             if usage is not None:
                 result.prompt_tokens += int(usage.prompt_tokens)
@@ -334,6 +345,15 @@ class ChatPipelineStrategy:
             if tail:
                 final_answer += tail
                 yield HarnessEvent.text_delta(tail, step=0, elapsed_ms=0)
+
+        if stop_reason not in {"stop", "end_turn"} or not final_answer.strip():
+            result.outcome = "blocked"
+            result.stop_reason = (
+                f"model_response_incomplete:{stop_reason or 'missing_stop'}"
+            )
+            notice = "\n\n回答未完整生成，已保留现有内容；请检查模型输出预算后继续。"
+            final_answer += notice
+            yield HarnessEvent.text_delta(notice, step=0, elapsed_ms=0)
 
         # Engine reads result.final_answer for persistence. We DO NOT
         # also emit ``HarnessEvent.text(final_answer)`` — the L1 wire

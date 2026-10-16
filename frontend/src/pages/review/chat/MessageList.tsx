@@ -54,7 +54,7 @@ export function MessageList({
   });
 
   return (
-    <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto p-4 relative">
+    <div ref={listRef} className="chat-message-list flex-1 min-h-0 overflow-y-auto py-4 relative">
       {!activeSessionId && (
         <div className="absolute inset-0 flex items-center justify-center text-stone-400 px-6">
           <div className="text-center">

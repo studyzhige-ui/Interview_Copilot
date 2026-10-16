@@ -48,7 +48,6 @@ from app.schemas.interview_invitation import (
     IntakeInterviewInvitationObservation,
     IntakeInterviewInvitationResult,
     InterviewInvitationCandidateView,
-    InterviewInvitationHandoffView,
     InvitationFieldEvidence,
     InvitationObservationView,
     InvitationSourceReference,
@@ -1460,107 +1459,6 @@ def get_interview_invitation_candidate(
     return InterviewInvitationCandidateView.model_validate(row)
 
 
-def get_interview_invitation_handoff(
-    db: Session,
-    *,
-    user_pk: int,
-    interview_id: str,
-) -> InterviewInvitationHandoffView:
-    interview = (
-        db.query(InterviewRecord)
-        .filter(
-            InterviewRecord.id == interview_id,
-            InterviewRecord.user_id == user_pk,
-            InterviewRecord.source == "invitation",
-        )
-        .one_or_none()
-    )
-    if interview is None or interview.invitation_operation_id is None:
-        raise InvitationObjectNotFoundError("confirmed invitation interview")
-    opportunity = (
-        db.query(JobOpportunity)
-        .filter(
-            JobOpportunity.id == interview.job_opportunity_id,
-            JobOpportunity.user_id == user_pk,
-        )
-        .one_or_none()
-    )
-    verification = (
-        db.query(OperationVerification)
-        .join(
-            ApplicationOperation,
-            ApplicationOperation.id == OperationVerification.operation_id,
-        )
-        .filter(
-            OperationVerification.operation_id == interview.invitation_operation_id,
-            ApplicationOperation.user_id == user_pk,
-        )
-        .one_or_none()
-    )
-    if (
-        opportunity is None
-        or verification is None
-        or verification.conclusion != "verified"
-        or interview.scheduled_start_at is None
-        or interview.original_time_text is None
-        or interview.source_timezone is None
-        or interview.invitation_source_kind is None
-        or interview.invitation_source_identity is None
-    ):
-        raise InvitationVerificationError("invitation handoff is not verified")
-    return InterviewInvitationHandoffView(
-        opportunity=ObjectReference(
-            kind="job_opportunity", id=opportunity.id, version=opportunity.version
-        ),
-        interview=ObjectReference(
-            kind="interview", id=interview.id, version=interview.schedule_version
-        ),
-        company_name=opportunity.company_name,
-        job_title=opportunity.job_title,
-        scheduled_start_at=interview.scheduled_start_at,
-        scheduled_end_at=interview.scheduled_end_at,
-        original_time_text=interview.original_time_text,
-        source_timezone=interview.source_timezone,
-        stage_label=interview.stage_label,
-        location=interview.scheduled_location,
-        meeting_url=interview.meeting_url,
-        source=InvitationSourceReference(
-            kind=interview.invitation_source_kind,
-            identity=interview.invitation_source_identity,
-            version=interview.invitation_source_version,
-        ),
-        verification=VerificationView.model_validate(verification),
-    )
-
-
-def list_interview_invitation_handoffs(
-    db: Session,
-    *,
-    user_pk: int,
-) -> list[InterviewInvitationHandoffView]:
-    """List only verified invitation-owned Interview schedules."""
-
-    interview_ids = (
-        db.query(InterviewRecord.id)
-        .filter(
-            InterviewRecord.user_id == user_pk,
-            InterviewRecord.source == "invitation",
-            InterviewRecord.invitation_operation_id.is_not(None),
-        )
-        .order_by(InterviewRecord.scheduled_start_at.asc())
-        .limit(100)
-        .all()
-    )
-    return [
-        get_interview_invitation_handoff(
-            db,
-            user_pk=user_pk,
-            interview_id=row.id,
-        )
-        for row in interview_ids
-    ]
-
-
 __all__ = [
     "InvitationIdempotencyConflictError",
     "InvitationObjectNotFoundError",
@@ -1572,8 +1470,6 @@ __all__ = [
     "InterviewInvitationOperationError",
     "confirm_interview_invitation",
     "get_interview_invitation_candidate",
-    "get_interview_invitation_handoff",
-    "list_interview_invitation_handoffs",
     "intake_interview_invitation_observation",
     "register_interview_invitation_candidate",
     "reject_interview_invitation_candidate",

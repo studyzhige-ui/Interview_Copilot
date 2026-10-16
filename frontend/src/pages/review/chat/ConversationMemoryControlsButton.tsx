@@ -53,10 +53,10 @@ export function ConversationMemoryControlsButton({ sessionId }: { sessionId: str
         className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-white px-2.5 py-1 text-[11px] font-medium text-stone-600 hover:border-primary-200 hover:text-primary-700 disabled:opacity-50"
       >
         <Brain size={11} />
-        Memory
+        记忆设置
         {controls && (
           <span className="text-stone-400">
-            · 用{controls.effective_recall_enabled ? '开' : '关'}/贡{controls.effective_contribution_enabled ? '开' : '关'}
+            · {controls.effective_recall_enabled ? '使用中' : '未使用'}
           </span>
         )}
       </button>

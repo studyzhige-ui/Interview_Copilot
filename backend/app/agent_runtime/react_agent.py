@@ -80,11 +80,6 @@ class AgentRunState:
         self.tool_signatures[signature] += 1
         return self.tool_signatures[signature]
 
-    def refund_step(self) -> None:
-        """Exclude a compression retry from observed reasoning-step usage."""
-        if self.steps > 0:
-            self.steps -= 1
-
     def observe_tool_result(
         self,
         tool_name: str,

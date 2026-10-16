@@ -23,6 +23,7 @@ from .base import VendorAdapterSpec
 _NON_CHAT_HINTS = (
     # Embeddings
     "/embed",
+    "/bge-",
     "-embed-",
     "embedqa",
     "/nv-embed",

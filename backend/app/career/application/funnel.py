@@ -17,6 +17,7 @@ from statistics import median
 from sqlalchemy.orm import Session
 
 from app.db.types import as_utc, utc_now
+from app.career.application.process import _active_event_ids
 from app.models.artifact import ArtifactSubmissionSnapshot
 from app.models.job_opportunity import JobOpportunity, ProcessEvent
 from app.schemas.career_insights import (
@@ -71,14 +72,31 @@ def analyze_funnel(
         .order_by(JobOpportunity.created_at.asc(), JobOpportunity.id.asc())
         .all()
     )
+    ids = [opportunity.id for opportunity in opportunities]
+    events_by_job = defaultdict(list)
+    for event in (
+        db.query(ProcessEvent)
+        .filter(ProcessEvent.job_opportunity_id.in_(ids))
+        .order_by(ProcessEvent.sequence)
+        .all()
+    ):
+        events_by_job[event.job_opportunity_id].append(event)
+    submitted_by_job = defaultdict(list)
+    for snapshot in (
+        db.query(ArtifactSubmissionSnapshot)
+        .filter(
+            ArtifactSubmissionSnapshot.user_id == user_pk,
+            ArtifactSubmissionSnapshot.job_opportunity_id.in_(ids),
+        )
+        .order_by(ArtifactSubmissionSnapshot.submitted_at)
+        .all()
+    ):
+        submitted_by_job[snapshot.job_opportunity_id].append(
+            snapshot.artifact_version_id
+        )
     samples: list[_Sample] = []
     for opportunity in opportunities:
-        events = (
-            db.query(ProcessEvent)
-            .filter(ProcessEvent.job_opportunity_id == opportunity.id)
-            .order_by(ProcessEvent.sequence.asc())
-            .all()
-        )
+        events = events_by_job[opportunity.id]
         active_ids = _active_event_ids(events)
         active_events = tuple(event for event in events if event.id in active_ids)
         applications = sorted(
@@ -107,16 +125,13 @@ def analyze_funnel(
             if context.get("channel")
             else opportunity.source_provider
         )
-        submissions = (
-            db.query(ArtifactSubmissionSnapshot.artifact_version_id)
-            .filter(
-                ArtifactSubmissionSnapshot.user_id == user_pk,
-                ArtifactSubmissionSnapshot.job_opportunity_id == opportunity.id,
+        # New submissions bind versions to that exact application event.
+        # Legacy records retain their previous, explicitly limited job-level coverage.
+        versions = tuple(
+            dict.fromkeys(
+                context.get("submitted_version_ids", submitted_by_job[opportunity.id])
             )
-            .order_by(ArtifactSubmissionSnapshot.submitted_at.asc())
-            .all()
         )
-        versions = tuple(dict.fromkeys(row[0] for row in submissions))
         if direction_id and direction_id not in {item[0] for item in directions}:
             continue
         if (
@@ -257,19 +272,6 @@ def _group_view(
         stages=metrics,
         outcomes=dict(sorted(outcomes.items())),
     )
-
-
-def _active_event_ids(events: list[ProcessEvent]) -> set[str]:
-    active: set[str] = set()
-    inactive: set[str] = set()
-    for event in reversed(events):
-        if event.id in inactive:
-            continue
-        if event.corrects_event_id:
-            inactive.add(event.corrects_event_id)
-        if event.operation == "assert":
-            active.add(event.id)
-    return active
 
 
 __all__ = ["analyze_funnel"]

@@ -11,7 +11,8 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_original_recording_through_the_real_broker(tmp_path):
+@pytest.mark.parametrize("filename", ["real-synthetic.wav", "two-speaker-separate.wav"])
+async def test_complete_recording_through_the_real_broker(tmp_path, filename):
     fixture = os.environ.get("IC_REAL_RECORDING_DIR")
     if not fixture:
         pytest.skip("explicit original recording and offline model assets required")
@@ -27,6 +28,8 @@ async def test_original_recording_through_the_real_broker(tmp_path):
 
     torch.set_num_threads(4)
     root = Path(fixture)
+    if not (root / filename).is_file():
+        pytest.skip(f"explicit recording fixture required: {filename}")
     spec = ModelSpec(
         "diarization",
         settings.DIARIZATION_MODEL_ID,
@@ -44,7 +47,7 @@ async def test_original_recording_through_the_real_broker(tmp_path):
     try:
         await asyncio.to_thread(engine.init_whisper_model)
         with capture_evidence_source(
-            str(root / "real-synthetic.wav"),
+            str(root / filename),
             file_asset_id="acceptance",
             file_asset_version="original",
             max_bytes=settings.USAGE_AUDIO_MAX_BYTES,
@@ -58,6 +61,36 @@ async def test_original_recording_through_the_real_broker(tmp_path):
             evidence = compose_transcript_evidence(
                 source, parts, max_duration_ms=settings.USAGE_AUDIO_MAX_MS
             )
+        # Persist the actual evidence even when a regression assertion fails.
+        (root / f"{Path(filename).stem}-evidence.json").write_text(
+            evidence.model_dump_json(indent=2), encoding="utf-8"
+        )
+        if filename == "two-speaker-separate.wav":
+            turns = json.loads(
+                (root / "interview-reference.json").read_text(encoding="utf-8")
+            )
+            labels = []
+            for turn in turns:
+                observed = {
+                    word.speaker_id
+                    for word in evidence.words
+                    if word.start is not None
+                    and word.end is not None
+                    and turn["start"] <= (word.start + word.end) / 2 <= turn["end"]
+                    and _lexical(word.text)
+                }
+                assert len(observed) == 1 and None not in observed
+                labels.append(next(iter(observed)))
+            assert len(labels) == 4
+            assert (
+                labels[0] == labels[2]
+                and labels[1] == labels[3]
+                and labels[0] != labels[1]
+            )
+            assert parts.complete and evidence.audio.duration_seconds == pytest.approx(
+                122.56870748, abs=0.001
+            )
+            return
         reference = _lexical((root / "reference.txt").read_text(encoding="utf-8"))
         actual = _lexical("".join(w.text for w in evidence.words))
         assert (
@@ -90,7 +123,8 @@ async def test_original_recording_through_the_real_broker(tmp_path):
                 lower <= letters[at].start < letters[at + len(phrase) - 1].end <= upper
             )
         snapshot = server.broker.snapshot()
-        assert snapshot["completed"] == 6
+        # Six observations, one global clustering, six bounded reconstructions.
+        assert snapshot["completed"] == 13
         assert snapshot["rejected"] == snapshot["unknown"] == snapshot["pending"] == 0
         assert not snapshot["active"] and not snapshot["faulted"]
         report = {
@@ -102,9 +136,6 @@ async def test_original_recording_through_the_real_broker(tmp_path):
         }
         (root / "broker-validation.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        (root / "broker-evidence.json").write_text(
-            evidence.model_dump_json(indent=2), encoding="utf-8"
         )
     finally:
         await server.close()

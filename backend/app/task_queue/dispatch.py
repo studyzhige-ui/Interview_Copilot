@@ -31,8 +31,40 @@ def dispatch_mock_interview_review(
     )
 
 
-def dispatch_document_ingestion(document_id: str) -> AsyncResult:
-    return celery_app.send_task("tasks.process_document_ingestion", args=[document_id])
+def dispatch_mock_audio_transcription(record_id: str, request_id: str) -> AsyncResult:
+    return celery_app.send_task(
+        "tasks.process_mock_audio_transcription", args=[record_id, request_id]
+    )
+
+
+def dispatch_live_audio(payload: dict, user_id: int, operation_id: str) -> AsyncResult:
+    return celery_app.send_task(
+        "tasks.recognize_live_audio", args=[payload, user_id, operation_id], expires=30
+    )
+
+
+def dispatch_document_ingestion(
+    document_id: str, *, task_id: str | None = None
+) -> AsyncResult:
+    from app.db.database import SessionLocal
+    from app.models.knowledge import KnowledgeDocument
+    from app.models.file_asset import FileAsset
+
+    with SessionLocal() as db:
+        purpose = (
+            db.query(FileAsset.purpose)
+            .join(KnowledgeDocument, KnowledgeDocument.file_asset_id == FileAsset.id)
+            .filter(KnowledgeDocument.id == document_id)
+            .scalar()
+        )
+    audio = purpose == "interview_audio"
+    return celery_app.send_task(
+        "tasks.process_document_ingestion",
+        args=[document_id],
+        task_id=task_id,
+        queue="transcription" if audio else "pipeline",
+        priority=6 if audio else 0,
+    )
 
 
 def dispatch_resume_parse(resume_id: str) -> AsyncResult:
@@ -74,6 +106,8 @@ def revoke_task(
 
 
 __all__ = [
+    "dispatch_mock_audio_transcription",
+    "dispatch_live_audio",
     "dispatch_conversation_turn",
     "dispatch_document_ingestion",
     "dispatch_interview_analysis",

@@ -1,25 +1,27 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
+import { RefreshCw } from 'lucide-react';
 import { listCareerActivity } from '@/api/careerActivity';
-export function ActivityCenterPage() {
-  return <div className="mx-auto max-w-5xl space-y-5 p-6"><h1 className="text-2xl font-semibold">活动与执行记录</h1>
-    <p>业务变更、执行状态和页面动作分别记录。页面已打开不代表业务已完成，结果未知不等于失败后可重试。</p>
-    <ActivityFeed />
-  </div>;
-}
+import { Btn } from '@/components/ui/Btn';
 
-export function ActivityFeed({ limit = 100 }: { limit?: number }) {
-  const query = useQuery({ queryKey: ['career-activity'], queryFn: listCareerActivity, retry: false, refetchInterval: 15000 });
-  return <section aria-label="最近活动" className="my-5 space-y-3"><h2 className="text-lg font-semibold">最近活动</h2>
-    <button onClick={() => { void query.refetch(); }} disabled={query.isFetching}>刷新</button>
-    {query.isPending ? <p role="status">正在读取活动…</p> : query.isError ? <p role="alert">暂时无法读取活动，请重试。</p>
-      : !query.data?.length ? <p>暂时没有活动记录。</p> : <ol className="space-y-3">{query.data.slice(0, limit).map((event) => <li key={event.event_id} className="rounded-xl border bg-white p-4">
-        <h2 className="font-semibold">{typeof event.payload.title === 'string' ? event.payload.title : event.event_kind}</h2>
-        <p className="text-sm">{event.event_category === 'domain' ? '业务事实' : event.event_category === 'experience' ? '页面动作' : '执行过程'} · {typeof event.payload.status === 'string' ? event.payload.status : '已记录'}</p>
-        {typeof event.payload.detail === 'string' && <p>{event.payload.detail}</p>}
-        <time dateTime={event.occurred_at}>{new Date(event.occurred_at).toLocaleString('zh-CN')}</time>
-        {event.conversation_id && <Link className="ml-4" to={`/general-chat?session=${encodeURIComponent(event.conversation_id)}`}>查看原协作</Link>}
+const categories = { domain: '求职进展', harness: '协作状态', experience: '页面操作' };
+const statuses: Record<string, string> = { succeeded: '已完成', completed: '已完成', confirmed: '已确认', pending: '等待处理', running: '正在处理', waiting: '等待回复', failed: '未完成', unknown: '结果待核实', cancelled: '已取消', acknowledged: '已打开' };
+
+export function ActivityCenterPage() {
+  const [limit, setLimit] = useState(20);
+  const [category, setCategory] = useState('all');
+  const query = useQuery({ queryKey: ['career-activity'], queryFn: listCareerActivity, retry: false, refetchInterval: 30000 });
+  const events = (query.data ?? []).filter((event) => category === 'all' || event.event_category === category);
+  return <div className="workspace-page">
+    <header className="mb-5 flex items-start justify-between gap-4"><div><h1 className="text-2xl font-semibold">活动记录</h1><p className="mt-2 text-sm text-stone-500">查看进展与处理结果，需要继续时回到原协作。</p></div><Btn kind="ghost" size="sm" icon={<RefreshCw size={14} />} loading={query.isFetching} onClick={() => query.refetch()}>刷新</Btn></header>
+    <div className="profile-tabs" role="group" aria-label="活动分类">{Object.entries({ all: '全部', ...categories }).map(([id, label]) => <button key={id} aria-pressed={category === id} onClick={() => { setCategory(id); setLimit(20); }}>{label}</button>)}</div>
+    {query.isPending ? <p role="status">正在读取活动…</p> : query.isError ? <p role="alert">活动暂时无法加载，请点击刷新重试。</p>
+      : !events.length ? <p className="py-8 text-sm text-stone-500">暂无对应的活动记录。</p> : <ol className="divide-y divide-stone-200 rounded-xl border border-stone-200 bg-white px-5">{events.slice(0, limit).map((event) => <li key={event.event_id} className="py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-medium text-stone-800">{typeof event.payload.title === 'string' ? event.payload.title : '协作进展已更新'}</h2><time className="text-xs text-stone-400" dateTime={event.occurred_at}>{new Date(event.occurred_at).toLocaleString('zh-CN')}</time></div>
+        <div className="mt-2 flex items-center gap-3 text-xs text-stone-500"><span>{categories[event.event_category]} · {typeof event.payload.status === 'string' ? statuses[event.payload.status] ?? '已记录' : '已记录'}</span>{event.conversation_id && <Link className="text-primary-700" to={`/general-chat?session=${encodeURIComponent(event.conversation_id)}`}>回到协作 →</Link>}</div>
+        {typeof event.payload.detail === 'string' && <details className="mt-2 text-xs text-stone-500"><summary className="cursor-pointer">查看详情</summary><p className="mt-2 leading-6">{event.payload.detail}</p></details>}
       </li>)}</ol>}
-    <Link to="/activity">查看全部活动</Link>
-  </section>;
+    {events.length > limit && <div className="mt-4 text-center"><Btn kind="outline" size="sm" onClick={() => setLimit(limit + 20)}>显示更多记录</Btn></div>}
+  </div>;
 }

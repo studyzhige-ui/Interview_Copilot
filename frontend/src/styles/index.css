@@ -1,6 +1,7 @@
 @import 'tailwindcss';
 @import './tokens.css';
 @import './workspace.css';
+@import './career.css';
 @config '../../tailwind.config.js';
 
 @layer base {

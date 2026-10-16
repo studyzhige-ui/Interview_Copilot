@@ -28,7 +28,6 @@ export function SideNav() {
           aria-current={pathname === '/general-chat' ? 'page' : undefined} title="与 Copilot 协作">
           <MessageSquare size={18} /><span>与 Copilot 协作</span>
         </Link>
-        <p>把每一步，向前推进。</p>
       </div>
     </aside>
   );

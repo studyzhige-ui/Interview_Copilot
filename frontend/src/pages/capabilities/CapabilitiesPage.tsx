@@ -5,10 +5,8 @@ import {
   ArrowRight,
   Blocks,
   Cable,
-  CalendarDays,
   FileText,
   Mail,
-  MessageSquare,
   Palette,
   Search,
   ShieldCheck,
@@ -23,11 +21,11 @@ import { PluginConnectionPanel } from './PluginConnectionPanel';
 import type { ConnectablePlugin } from './PluginConnectionPanel';
 
 type Tab = 'marketplace' | 'skills' | 'mcp';
-type PluginCategory = '效率' | '设计' | '沟通' | '知识';
-type PluginStatus = 'connected' | 'available' | 'coming_soon' | 'unavailable';
+type PluginCategory = '设计' | '沟通' | '知识';
+type PluginStatus = 'unknown' | 'connected' | 'available' | 'unavailable';
 
 interface MarketplacePlugin {
-  id: string;
+  id: ConnectablePlugin;
   name: string;
   publisher: string;
   description: string;
@@ -36,7 +34,6 @@ interface MarketplacePlugin {
   iconClass: string;
   capabilities: string[];
   status: PluginStatus;
-  connectable?: boolean;
 }
 
 function projectedPluginStatus(data: {
@@ -44,7 +41,8 @@ function projectedPluginStatus(data: {
   connection_required?: boolean;
   account?: { status?: string } | null;
 } | undefined): PluginStatus {
-  if (data?.account?.status === 'active' && !data.connection_required) return 'connected';
+  if (!data) return 'unknown';
+  if (data.account?.status === 'active' && !data.connection_required) return 'connected';
   return data?.adapter_available === false ? 'unavailable' : 'available';
 }
 
@@ -58,7 +56,6 @@ const CATALOG: Omit<MarketplacePlugin, 'status'>[] = [
     icon: Mail,
     iconClass: 'bg-red-50 text-red-600',
     capabilities: ['只读邮箱', 'OAuth', '增量同步'],
-    connectable: true,
   },
   {
     id: 'canva',
@@ -69,27 +66,6 @@ const CATALOG: Omit<MarketplacePlugin, 'status'>[] = [
     icon: Palette,
     iconClass: 'bg-violet-50 text-violet-600',
     capabilities: ['设计搜索', '元数据只读', 'OAuth'],
-    connectable: true,
-  },
-  {
-    id: 'google-calendar',
-    name: 'Google Calendar',
-    publisher: 'Google',
-    description: '读取面试安排并在明确授权后创建或调整日程。',
-    category: '效率',
-    icon: CalendarDays,
-    iconClass: 'bg-blue-50 text-blue-600',
-    capabilities: ['日程读取', '提醒', '写入需确认'],
-  },
-  {
-    id: 'slack',
-    name: 'Slack',
-    publisher: 'Salesforce',
-    description: '从指定工作区读取求职协作信息；外发始终需要明确批准。',
-    category: '沟通',
-    icon: MessageSquare,
-    iconClass: 'bg-amber-50 text-amber-700',
-    capabilities: ['限定频道', '只读优先', '外发需确认'],
   },
   {
     id: 'notion',
@@ -100,7 +76,6 @@ const CATALOG: Omit<MarketplacePlugin, 'status'>[] = [
     icon: FileText,
     iconClass: 'bg-stone-100 text-stone-700',
     capabilities: ['共享页搜索', '标题只读', 'OAuth'],
-    connectable: true,
   },
 ];
 
@@ -108,8 +83,8 @@ export function CapabilitiesPage() {
   const [tab, setTab] = useState<Tab>('marketplace');
   const edition = useEditionPolicy();
   return (
-    <div className="h-full overflow-auto bg-stone-50">
-      <main className="mx-auto max-w-7xl px-4 py-6 md:px-6 md:py-7">
+    <div className="workspace-page">
+      <div>
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-700">
@@ -117,22 +92,22 @@ export function CapabilitiesPage() {
             </div>
             <h1 className="text-2xl font-semibold text-stone-900">插件市场</h1>
             <p className="mt-1.5 max-w-2xl text-sm text-stone-500">
-              发现并管理 Copilot 可使用的外部服务。每个插件都有独立权限、连接状态和 Tool 边界。
+              管理 Copilot 可使用的外部服务。连接前可以查看可用功能和授权范围。
             </p>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-stone-500">
-            <ShieldCheck size={15} className="text-accent-700" /> Secret 不进入模型上下文
+            <ShieldCheck size={15} className="text-accent-700" /> 连接密钥仅保存在服务端
           </div>
         </div>
-        <div className="mb-6 flex w-fit rounded-lg border border-stone-200 bg-white p-1">
+        <div className="mb-6 flex max-w-full overflow-auto rounded-lg border border-stone-200 bg-white p-1">
           <TabButton active={tab === 'marketplace'} onClick={() => setTab('marketplace')} icon={<Blocks size={15} />}>插件市场</TabButton>
-          <TabButton active={tab === 'skills'} onClick={() => setTab('skills')} icon={<Sparkles size={15} />}>Skills</TabButton>
-          <TabButton active={tab === 'mcp'} onClick={() => setTab('mcp')} icon={<Cable size={15} />}>MCP</TabButton>
+          <TabButton active={tab === 'skills'} onClick={() => setTab('skills')} icon={<Sparkles size={15} />}>工作流 Skills</TabButton>
+          <TabButton active={tab === 'mcp'} onClick={() => setTab('mcp')} icon={<Cable size={15} />}>工具服务 MCP</TabButton>
         </div>
         {tab === 'marketplace' && <PluginMarketplace />}
         {tab === 'skills' && <SkillsPanel />}
         {tab === 'mcp' && <MCPServersPanel allowedTransports={edition.data?.mcp_transports ?? ['streamable_http']} />}
-      </main>
+      </div>
     </div>
   );
 }
@@ -158,7 +133,7 @@ function PluginMarketplace() {
   const gmail = useQuery({ queryKey: ['integrations', 'gmail'], queryFn: getGmailIntegration });
   const canva = useQuery({ queryKey: ['integrations', 'canva'], queryFn: () => getExternalPluginStatus('canva') });
   const notion = useQuery({ queryKey: ['integrations', 'notion'], queryFn: () => getExternalPluginStatus('notion') });
-  const gmailStatus: PluginStatus = gmail.data?.account?.status === 'active' && !gmail.data.connection_required
+  const gmailStatus: PluginStatus = !gmail.data ? 'unknown' : gmail.data.account?.status === 'active' && !gmail.data.connection_required
     ? 'connected'
     : gmail.data?.adapter_available === false
       ? 'unavailable'
@@ -169,9 +144,7 @@ function PluginMarketplace() {
       ? gmailStatus
       : plugin.id === 'canva'
         ? projectedPluginStatus(canva.data)
-        : plugin.id === 'notion'
-          ? projectedPluginStatus(notion.data)
-          : 'coming_soon',
+        : projectedPluginStatus(notion.data),
   })), [canva.data, gmailStatus, notion.data]);
   const visible = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -202,7 +175,7 @@ function PluginMarketplace() {
             />
           </label>
           <div className="flex flex-wrap gap-2">
-            {(['全部', '效率', '设计', '沟通', '知识'] as const).map((item) => (
+            {(['全部', '设计', '沟通', '知识'] as const).map((item) => (
               <button
                 key={item}
                 type="button"
@@ -222,7 +195,7 @@ function PluginMarketplace() {
             key={plugin.id}
             plugin={plugin}
             selected={selected === plugin.id}
-            onManage={() => manage(plugin.id as ConnectablePlugin)}
+            onManage={() => manage(plugin.id)}
           />
         ))}
       </div>
@@ -241,10 +214,10 @@ function PluginCard({ plugin, selected, onManage }: {
 }) {
   const Icon = plugin.icon;
   const status = {
+    unknown: { label: '连接状态未读取', tone: 'neutral' as const },
     connected: { label: '已连接', tone: 'success' as const },
     available: { label: '可连接', tone: 'primary' as const },
     unavailable: { label: '部署未配置', tone: 'neutral' as const },
-    coming_soon: { label: '即将支持', tone: 'sand' as const },
   }[plugin.status];
   return (
     <article className={`group flex h-full flex-col rounded-2xl border bg-white p-5 shadow-xs transition ${selected ? 'border-primary-400 ring-2 ring-primary-100' : 'border-stone-200 hover:-translate-y-0.5 hover:border-primary-200 hover:shadow-sm'}`}>
@@ -262,13 +235,9 @@ function PluginCard({ plugin, selected, onManage }: {
       </div>
       <div className="mt-4 flex items-center justify-between border-t border-stone-100 pt-3 text-xs">
         <span className="text-stone-400">{plugin.category}</span>
-        {plugin.connectable ? (
-          <button type="button" onClick={onManage} aria-label={`管理 ${plugin.name} 插件`} className="inline-flex items-center gap-1 font-medium text-primary-700 hover:text-primary-900">
-            {selected ? '正在管理' : '连接与管理'} <ArrowRight size={13} />
-          </button>
-        ) : (
-          <span className="text-stone-400">等待真实 Adapter</span>
-        )}
+        <button type="button" onClick={onManage} aria-label={`管理 ${plugin.name} 插件`} className="inline-flex items-center gap-1 font-medium text-primary-700 hover:text-primary-900">
+          {selected ? '正在管理' : '连接与管理'} <ArrowRight size={13} />
+        </button>
       </div>
     </article>
   );
@@ -284,7 +253,8 @@ function TabButton({ active, onClick, icon, children }: {
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-md px-4 py-2 text-sm transition ${active ? 'bg-primary-50 font-medium text-primary-700' : 'text-stone-500 hover:text-stone-800'}`}
+      aria-pressed={active}
+      className={`shrink-0 flex items-center gap-1.5 rounded-md px-4 py-2 text-sm transition ${active ? 'bg-primary-50 font-medium text-primary-700' : 'text-stone-500 hover:text-stone-800'}`}
     >
       {icon}{children}
     </button>

@@ -49,6 +49,7 @@ logs/
 *.incomplete
 
 # Tool caches
+output/playwright/
 .ruff_cache/
 .pytest_cache/
 .coverage
@@ -69,3 +70,7 @@ Thumbs.db
 exports/
 
 /scripts/contract_codegen/node_modules
+
+# Local career redesign verification artifacts and temporary credentials
+.playwright-cli/
+output/career-redesign/

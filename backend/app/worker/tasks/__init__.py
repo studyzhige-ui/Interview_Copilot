@@ -20,6 +20,8 @@ from app.worker.tasks.chat import process_conversation_turn
 from app.worker.tasks.ingestion import process_document_ingestion
 from app.worker.tasks.gmail_observations import poll_gmail_observations
 from app.worker.tasks.interview import (
+    process_mock_audio_transcription,
+    recognize_live_audio,
     process_interview_analysis,
     process_mock_interview_review,
 )
@@ -39,6 +41,8 @@ from app.worker.tasks.outbox import (
 from app.worker.tasks.resume import process_resume_parse
 
 __all__ = [
+    "process_mock_audio_transcription",
+    "recognize_live_audio",
     "process_conversation_turn",
     "consolidate_agent_memory",
     "consolidate_user_memories",

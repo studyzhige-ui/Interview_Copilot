@@ -15,6 +15,7 @@ def descriptor(provider, model, query, documents, *, destination="local"):
         + 1024
     )
     return dict(
+        local_execution=provider == "local",
         meter="reranking",
         provider=provider,
         model=model,

@@ -8,6 +8,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 InterviewPurpose = Literal["full", "project_deep_dive", "focused_practice"]
 
 
+PHASE_LABELS = {
+    "self_intro": "自我介绍",
+    "resume_deep_dive": "简历项目深挖",
+    "opening": "开场",
+    "resume": "简历经历",
+    "project": "项目经历",
+    "technical": "技术基础",
+    "behavioral": "行为面试",
+    "career": "职业规划",
+    "reverse_qa": "反问环节",
+    "closing": "结束交流",
+    "general": "综合",
+}
+
+
 class InterviewSpecification(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     version: Literal["interview-spec-v1"] = "interview-spec-v1"

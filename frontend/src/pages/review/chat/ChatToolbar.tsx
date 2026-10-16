@@ -349,7 +349,7 @@ export function ChatToolbar({
   };
 
   return (
-    <div className="p-3 border-t border-stone-200">
+    <div className="chat-composer py-3 border-t border-stone-200">
       {pendingSubmissions.length > 0 && (
         <div
           className="mb-2 rounded-lg border border-warning-200 bg-warning-50 px-2.5 py-2"
@@ -635,8 +635,8 @@ export function ChatToolbar({
             </button>
           </div>
         )}
-        <div className="flex items-end justify-between gap-2 px-2.5 pb-2.5">
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-end justify-between gap-2 px-2.5 pb-2.5">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
             <input
               ref={fileRef}
               type="file"
@@ -665,7 +665,7 @@ export function ChatToolbar({
                 onClick={() => setMode((current) => (current === 'AGENT' ? 'CHAT' : 'AGENT'))}
                 aria-label="切换 Chat Agent 模式"
                 className={[
-                  'inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium tracking-wide transition',
+                  'inline-flex h-8 shrink-0 whitespace-nowrap items-center gap-1 rounded-full px-2.5 text-[11px] font-medium tracking-wide transition',
                   mode === 'AGENT'
                     ? 'bg-primary-50 text-primary-700 hover:bg-primary-100'
                     : 'text-stone-600 hover:bg-stone-100',
@@ -675,12 +675,12 @@ export function ChatToolbar({
                 {mode === 'AGENT' ? 'Agent' : 'Chat'}
               </button>
             ) : (
-              <span className="inline-flex h-8 items-center gap-1 rounded-full bg-primary-50 px-2.5 text-[11px] font-medium text-primary-700">
+              <span className="inline-flex h-8 shrink-0 whitespace-nowrap items-center gap-1 rounded-full bg-primary-50 px-2.5 text-[11px] font-medium text-primary-700">
                 <Bot size={13} /> 求职 Agent
               </span>
             )}
 
-            <div ref={approvalMenuRef} className="relative">
+            <div ref={approvalMenuRef} className="chat-menu-anchor relative">
               <button
                 type="button"
                 onClick={() => setApprovalMenuOpen((open) => !open)}
@@ -688,7 +688,7 @@ export function ChatToolbar({
                 aria-label="选择审批模式"
                 aria-expanded={approvalMenuOpen}
                 className={[
-                  'inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium transition disabled:cursor-wait disabled:opacity-50',
+                  'inline-flex h-8 shrink-0 whitespace-nowrap items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium transition disabled:cursor-wait disabled:opacity-50',
                   executionMode === 'auto'
                     ? 'bg-warning-50 text-warning-800 hover:bg-warning-100'
                     : 'text-stone-600 hover:bg-stone-100',
@@ -699,7 +699,7 @@ export function ChatToolbar({
                 <ChevronDown size={12} />
               </button>
               {approvalMenuOpen && (
-                <div className="absolute bottom-full left-0 z-40 mb-2 w-[310px] overflow-hidden rounded-xl border border-stone-200 bg-white p-1.5 shadow-xl">
+                <div className="chat-composer-menu absolute bottom-full left-0 z-40 mb-2 w-[310px] overflow-hidden rounded-xl border border-stone-200 bg-white p-1.5 shadow-xl">
                   <div className="px-2.5 pb-1.5 pt-1 text-[11px] text-stone-400">工具操作如何获得批准？</div>
                   <ApprovalModeOption
                     title="每次确认"
@@ -722,8 +722,8 @@ export function ChatToolbar({
             </div>
           </div>
 
-          <div className="flex shrink-0 items-center gap-1.5">
-            <div ref={modelMenuRef} className="relative">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <div ref={modelMenuRef} className="chat-menu-anchor relative">
               <button
                 type="button"
                 onClick={() => setModelMenuOpen((open) => !open)}
@@ -736,7 +736,7 @@ export function ChatToolbar({
                 <ChevronDown size={12} className="shrink-0 text-stone-400" />
               </button>
               {modelMenuOpen && (
-                <div className="absolute bottom-full right-0 z-40 mb-2 w-[300px] overflow-hidden rounded-xl border border-stone-200 bg-white shadow-xl">
+                <div className="chat-composer-menu absolute bottom-full right-0 z-40 mb-2 w-[300px] overflow-hidden rounded-xl border border-stone-200 bg-white shadow-xl">
                   <div className="border-b border-stone-100 px-3 py-2.5">
                     <div className="text-xs font-medium text-stone-700">选择回答模型</div>
                     <div className="mt-0.5 text-[11px] text-stone-400">

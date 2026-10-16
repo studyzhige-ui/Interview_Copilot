@@ -5,7 +5,7 @@
  */
 import type { components } from './generated/shared-protocols';
 import type { AgentInteraction, FactConfirmationInteraction, ResolveAgentInteractionResp } from './api';
-import type { ConfirmInvitationCommand, ConfirmInvitationResult, InvitationHandoff,
+import type { ConfirmInvitationCommand, ConfirmInvitationResult,
   InvitationSubmissionReceipt } from '@/api/interviewInvitations';
 import type { CareerActivity } from '@/api/careerActivity';
 import type { MockClientAction, MockClientActionName, MockClientActionResolution,
@@ -17,7 +17,6 @@ type Assert<T extends true> = T;
 export type SharedProtocolCompatibility = [
   Assert<Fits<ConfirmInvitationCommand, Wire['ConfirmInterviewInvitationRequestContract']>>,
   Assert<Fits<Wire['ConfirmInterviewInvitationResultResponseContract'], ConfirmInvitationResult>>,
-  Assert<Fits<Wire['InterviewInvitationHandoffViewResponseContract'], InvitationHandoff>>,
   Assert<Fits<Wire['InvitationSubmissionReceiptResponseContract'], InvitationSubmissionReceipt>>,
   Assert<Fits<Wire['CareerActivityEventResponseContract'], CareerActivity>>,
   Assert<Fits<Wire['FactConfirmationRequestResponseContract'], FactConfirmationInteraction['request']>>,

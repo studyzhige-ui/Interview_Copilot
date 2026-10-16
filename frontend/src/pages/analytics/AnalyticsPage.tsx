@@ -1,316 +1,50 @@
-import { formatScore, scoreFraction, validScore, SCORE_SCALE_VERSION } from '@/lib/scoring';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart3, Lightbulb, AlertCircle, RefreshCw } from 'lucide-react';
+import { getAnalyticsReport } from '@/api/interview';
+import { formatScore, scoreFraction } from '@/lib/scoring';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Spinner } from '@/components/ui/Spinner';
 import { Btn } from '@/components/ui/Btn';
-import { getAnalyticsReport } from '@/api/interview';
+import { AbilityEvidence } from './AbilityEvidence';
 
-interface RadarAxis {
-  k: string;
-  v: number | null;
-  topicCount: number;
-  evidenceCount: number;
-  confidence: 'none' | 'low' | 'medium' | 'high';
-}
-
-interface NormalizedReport {
-  axes: RadarAxis[];
-  overall: number | null;
-  scoreScale: { version: string; meaning: string };
-  strengths: { topic: string; evidence: string }[];
-  weaknesses: { topic: string; flaw: string; plan?: string }[];
-}
-
-function normalize(raw: unknown): NormalizedReport | { empty: true; message: string } {
-  if (!raw || typeof raw !== 'object') return { empty: true, message: '无数据' };
-  const obj = raw as Record<string, unknown>;
-  const unit = obj.score_scale as Record<string, unknown> | undefined;
-  if (obj.status === 'success' && unit?.version !== SCORE_SCALE_VERSION) return { empty: true, message: '历史评分单位未确认，暂不混合显示。请刷新或重新评估。' };
-  if (obj.status === 'empty' || obj.status === 'error' || obj.status === 'fallback') {
-    return { empty: true, message: typeof obj.message === 'string' ? obj.message : '暂无数据' };
-  }
-
-  const axes: RadarAxis[] = Array.isArray(obj.axes)
-    ? (obj.axes as { k?: unknown; v?: unknown }[])
-        .map((a) => ({
-          k: String(a.k ?? ''),
-          v: validScore(a.v) ? a.v : null,
-          topicCount: Number((a as Record<string, unknown>).topic_count ?? 0),
-          evidenceCount: Number((a as Record<string, unknown>).evidence_count ?? 0),
-          confidence: String((a as Record<string, unknown>).confidence ?? 'none') as RadarAxis['confidence'],
-        }))
-        .filter((a) => a.k)
-    : [];
-
-  const overall: number | null = validScore(obj.overall)
-    ? (obj.overall as number)
-    : axes.some((axis) => axis.v !== null)
-    ? Math.round(10 *
-        axes.reduce((sum, axis) => sum + (axis.v ?? 0), 0)
-        / axes.filter((axis) => axis.v !== null).length,
-      ) / 10
-    : null;
-
-  const strengths = Array.isArray(obj.strengths)
-    ? (obj.strengths as Record<string, unknown>[]).map((s) => ({
-        topic: String(s.topic ?? ''),
-        evidence: String(s.evidence ?? ''),
-      }))
-    : [];
-
-  const weaknesses = Array.isArray(obj.weaknesses)
-    ? (obj.weaknesses as Record<string, unknown>[]).map((w) => ({
-        topic: String(w.topic ?? w.k ?? ''),
-        flaw: String(w.flaw ?? w.why ?? ''),
-        plan: typeof w.plan === 'string' ? w.plan : undefined,
-      }))
-    : [];
-
-  const scale = obj.score_scale && typeof obj.score_scale === 'object'
-    ? obj.score_scale as Record<string, unknown>
-    : {};
-
-  return {
-    axes,
-    overall,
-    scoreScale: {
-      version: String(scale.version ?? 'unknown'),
-      meaning: String(scale.meaning ?? '产品成长标尺，不代表招聘结论'),
-    },
-    strengths,
-    weaknesses,
-  };
-}
+const confidenceLabels = { none: '尚无评分依据', low: '证据较少', medium: '证据一般', high: '证据充分' };
 
 export function AnalyticsPage() {
   const query = useQuery({ queryKey: ['analytics-report'], queryFn: getAnalyticsReport });
-  const report = query.isError && !query.data
-    ? { empty: true as const, message: '服务暂时不可用，请稍后重试' }
-    : normalize(query.data);
-  const refresh = () => { void query.refetch(); };
-
-  if (query.isPending) {
-    return (
-      <div className="p-6 flex items-center gap-2 text-stone-500 text-sm">
-        <Spinner size={14} /> 载入中...
-      </div>
-    );
-  }
-
-  if (report && 'empty' in report && report.empty) {
-    return (
-      <div className="p-6">
-        <EmptyState
-          icon={<BarChart3 size={32} />}
-          title="暂无足够的能力数据"
-          description={report.message}
-          action={
-            <Btn icon={<RefreshCw size={14} />} onClick={refresh}>重新尝试</Btn>
-          }
-        />
-      </div>
-    );
-  }
-
-  const r = report as NormalizedReport;
-
-  return (
-    <div className="p-4 md:p-6 max-w-5xl mx-auto">
-      <div className="flex items-center gap-3 mb-5">
-        <h2 className="text-xl font-semibold text-stone-800">能力分析</h2>
-        <button
-          onClick={refresh}
-          className="p-1.5 rounded text-stone-500 hover:bg-stone-100"
-          title="刷新"
-          aria-label="刷新能力分析"
-        >
-          <RefreshCw size={14} />
-        </button>
-      </div>
-
-      <div className="bg-white rounded-xl border border-stone-200 p-5 shadow-xs flex flex-col md:flex-row items-center gap-8">
-        <OverallCircle score={r.overall} />
-        {r.axes.length > 0 && r.axes.every((axis) => axis.v !== null) ? (
-          <Radar axes={r.axes as (RadarAxis & { v: number })[]} />
-        ) : (
-          <AxisCoverage axes={r.axes} />
-        )}
-      </div>
-      <p className="mt-2 text-[11px] text-stone-400 text-right">
-        评分标尺 {r.scoreScale.version} · {r.scoreScale.meaning}
-      </p>
-
-      {r.strengths.length > 0 && (
-        <div className="mt-5">
-          <h3 className="text-sm font-semibold text-stone-800 mb-2 flex items-center gap-2">
-            <Lightbulb size={14} className="text-accent-700" /> 强项
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {r.strengths.map((s, i) => (
-              <div key={i} className="bg-white rounded-lg border border-stone-200 p-4 shadow-xs">
-                <div className="text-sm font-medium text-stone-800">{s.topic}</div>
-                <div className="text-xs text-stone-600 mt-1 leading-relaxed">{s.evidence}</div>
+  const report = query.data;
+  return <div className="workspace-page">
+    <header className="mb-5 flex items-start justify-between gap-3">
+      <div><h1 className="text-2xl font-semibold text-stone-800">能力成长</h1><p className="mt-2 text-sm text-stone-500">按实际面试主题汇总表现，找到下一次练习的重点。</p></div>
+      <Btn kind="ghost" size="sm" icon={<RefreshCw size={14} />} aria-label="刷新能力分析" onClick={() => query.refetch()}>刷新</Btn>
+    </header>
+    {query.isPending ? <p className="flex items-center gap-2 text-sm text-stone-500" role="status"><Spinner size={14} />正在读取能力分析…</p>
+      : query.isError ? <div role="alert"><EmptyState title="能力分析暂时无法加载" action={<Btn onClick={() => query.refetch()}>重试</Btn>} /></div>
+        : report?.status === 'empty' ? <EmptyState icon={<BarChart3 size={32} />} title="暂无能力分析" description={report.message} />
+          : report?.status === 'success' && <>
+            <section className="rounded-xl border border-stone-200 bg-white p-5">
+              <div className="mb-5 flex flex-wrap items-baseline gap-x-4 gap-y-2">
+                <h2 className="font-semibold text-stone-800">近期表现</h2>
+                <span className="text-xl font-semibold text-primary-700">{formatScore(report.overall)}</span>
+                <span className="text-xs text-stone-500">{report.totals.scored_topics} 个已评分主题 · {report.totals.assessment_count} 次表现判断</span>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {r.weaknesses.length > 0 && (
-        <div className="mt-5">
-          <h3 className="text-sm font-semibold text-stone-800 mb-2 flex items-center gap-2">
-            <AlertCircle size={14} className="text-warning-500" /> 薄弱点
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {r.weaknesses.map((w, i) => (
-              <div key={i} className="bg-white rounded-lg border border-stone-200 p-4 shadow-xs">
-                <div className="text-sm font-medium text-stone-800">{w.topic}</div>
-                <div className="text-xs text-stone-600 mt-1 leading-relaxed">{w.flaw}</div>
-                {w.plan && (
-                  <div className="text-xs text-primary-700 mt-2 bg-primary-50 rounded px-2 py-1 leading-relaxed">
-                    建议：{w.plan}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function OverallCircle({ score }: { score: number | null }) {
-  if (score === null) {
-    return (
-      <div className="w-[140px] h-[140px] shrink-0 rounded-full border-[10px] border-stone-100 flex flex-col items-center justify-center">
-        <div className="text-sm font-medium text-stone-500">待评估</div>
-        <div className="text-[11px] text-stone-400 mt-1">暂无数值证据</div>
-      </div>
-    );
-  }
-  const label = formatScore(score);
-  const r = 56;
-  const c = 2 * Math.PI * r;
-  const off = c - scoreFraction(score) * c;
-  return (
-    <div className="relative w-[140px] h-[140px] shrink-0">
-      <svg width={140} height={140}>
-        <circle cx={70} cy={70} r={r} fill="none" stroke="var(--color-stone-100)" strokeWidth={10} />
-        <circle
-          cx={70} cy={70} r={r}
-          fill="none"
-          stroke="var(--color-primary-500)"
-          strokeWidth={10}
-          strokeDasharray={c}
-          strokeDashoffset={off}
-          strokeLinecap="round"
-          transform="rotate(-90 70 70)"
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <div className="text-2xl font-semibold text-stone-800">{label}</div>
-        <div className="text-[11px] text-stone-500">综合分</div>
-      </div>
-    </div>
-  );
-}
-
-function AxisCoverage({ axes }: { axes: RadarAxis[] }) {
-  const confidenceLabel: Record<RadarAxis['confidence'], string> = {
-    none: '待评估',
-    low: '证据较少',
-    medium: '证据一般',
-    high: '证据充分',
-  };
-  return (
-    <div className="w-full grid grid-cols-1 sm:grid-cols-2 gap-3">
-      {axes.map((axis) => (
-        <div key={axis.k} className="rounded-lg border border-stone-200 px-3 py-2.5">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm font-medium text-stone-700">{axis.k}</span>
-            <span className={axis.v === null ? 'text-xs text-stone-400' : 'text-sm font-semibold text-stone-800'}>
-              {formatScore(axis.v)}
-            </span>
-          </div>
-          <div className="mt-2 h-1.5 rounded-full bg-stone-100 overflow-hidden">
-            {axis.v !== null && (
-              <div className="h-full bg-primary-500" style={{ width: `${scoreFraction(axis.v) * 100}%` }} />
-            )}
-          </div>
-          <div className="mt-1.5 text-[11px] text-stone-500">
-            {confidenceLabel[axis.confidence]}
-            {axis.topicCount > 0 && ` · ${axis.topicCount} 个主题 · ${axis.evidenceCount} 条证据`}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Radar({ axes }: { axes: (RadarAxis & { v: number })[] }) {
-  const n = axes.length;
-  const radius = 90;
-  const cx = 120;
-  const cy = 120;
-  const pts = axes.map((a, i) => {
-    const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
-    const v = scoreFraction(a.v);
-    return {
-      x: cx + Math.cos(angle) * radius * v,
-      y: cy + Math.sin(angle) * radius * v,
-      lx: cx + Math.cos(angle) * (radius + 14),
-      ly: cy + Math.sin(angle) * (radius + 14),
-      label: a.k,
-    };
-  });
-  const grid = [0.25, 0.5, 0.75, 1].map((scale) => {
-    const ringPts = axes.map((_, i) => {
-      const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
-      return `${cx + Math.cos(angle) * radius * scale},${cy + Math.sin(angle) * radius * scale}`;
-    });
-    return ringPts.join(' ');
-  });
-
-  return (
-    <svg width={240} height={240} className="flex-1">
-      {grid.map((g, i) => (
-        <polygon key={i} points={g} fill="none" stroke="var(--color-stone-200)" strokeWidth={1} />
-      ))}
-      {axes.map((_, i) => {
-        const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
-        return (
-          <line
-            key={i}
-            x1={cx} y1={cy}
-            x2={cx + Math.cos(angle) * radius}
-            y2={cy + Math.sin(angle) * radius}
-            stroke="var(--color-stone-200)"
-            strokeWidth={1}
-          />
-        );
-      })}
-      <polygon
-        points={pts.map((p) => `${p.x},${p.y}`).join(' ')}
-        fill="var(--color-primary-500)"
-        fillOpacity={0.25}
-        stroke="var(--color-primary-500)"
-        strokeWidth={1.5}
-      />
-      {pts.map((p, i) => (
-        <text
-          key={i}
-          x={p.lx}
-          y={p.ly}
-          fontSize={11}
-          fill="var(--color-stone-600)"
-          textAnchor="middle"
-          dominantBaseline="middle"
-        >
-          {p.label}
-        </text>
-      ))}
-    </svg>
-  );
+              <div className="grid gap-4 sm:grid-cols-2">{report.axes.map((axis) => <div key={axis.k}>
+                <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-medium text-stone-700">{axis.k}</h3><span className="text-sm text-stone-600">{formatScore(axis.v)}</span></div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-stone-100">{axis.v !== null && <div className="h-full bg-primary-500" style={{ width: `${scoreFraction(axis.v) * 100}%` }} />}</div>
+                <p className="mt-1.5 text-xs text-stone-400">{confidenceLabels[axis.confidence]}{axis.assessment_count > 0 && ` · ${axis.assessment_count} 次判断 · ${axis.evidence_count} 条依据`}</p>
+              </div>)}</div>
+              <p className="mt-5 text-xs leading-5 text-stone-400">同一主题先取多次表现的平均值，再汇总各主题；未评分主题不计入。{report.score_scale.meaning}。</p>
+            </section>
+            <div className="mt-5 grid items-start gap-5 md:grid-cols-2">
+              {!!report.strengths.length && <section className="rounded-xl border border-stone-200 bg-white p-5">
+                <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-stone-800"><Lightbulb size={15} />表现较好的主题</h2>
+                <ul className="divide-y divide-stone-100">{report.strengths.map((item) => <li key={item.topic} className="py-3 first:pt-0"><div className="flex justify-between gap-3"><h3 className="text-sm font-medium">{item.topic}</h3><span className="text-sm text-primary-700">{formatScore(item.score)}</span></div><p className="mt-2 text-xs leading-6 text-stone-500">最近依据：{item.evidence}</p></li>)}</ul>
+              </section>}
+              {!!report.weaknesses.length && <section className="rounded-xl border border-stone-200 bg-white p-5">
+                <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-stone-800"><AlertCircle size={15} />下次优先练习</h2>
+                <ul className="divide-y divide-stone-100">{report.weaknesses.map((item) => <li key={item.topic} className="py-3 first:pt-0"><div className="flex justify-between gap-3"><h3 className="text-sm font-medium">{item.topic}</h3><span className="text-sm text-stone-600">{formatScore(item.score)}</span></div><p className="mt-2 text-xs leading-6 text-stone-500">最近依据：{item.flaw}</p><p className="mt-2 text-xs leading-6 text-primary-700">{item.plan}</p></li>)}</ul>
+              </section>}
+            </div>
+          </>}
+    <AbilityEvidence />
+  </div>;
 }

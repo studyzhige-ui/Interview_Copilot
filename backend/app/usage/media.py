@@ -123,6 +123,7 @@ def descriptor(cfg, file_path: str, language: str | None, units: dict):
         for chunk in iter(lambda: handle.read(65536), b""):
             digest.update(chunk)
     return dict(
+        local_execution=cfg.provider.kind == "local_whisperx",
         meter="transcription",
         provider=cfg.provider_id,
         model=cfg.model,

@@ -91,11 +91,15 @@ providers. Monitor provider invoices and token traces; set provider-side hard
 budgets as the final circuit breaker. Do not hard-code mutable vendor prices in
 application code.
 
-Create a PostgreSQL backup, optionally including S3 objects:
+Create a PostgreSQL backup, optionally including files from the configured filesystem or S3 store:
 
 ```bash
 python scripts/backup.py create --output /secure/backups --include-objects
 ```
+
+Stop writers before backup/restore. Restore files into an empty target store using
+the same storage backend; existing objects are never overwritten. PostgreSQL and
+file restoration are separate operations, not one atomic transaction.
 
 Restore only into a pre-created target database, then rebuild the pgvector projection from the
 PostgreSQL chunk source of truth:

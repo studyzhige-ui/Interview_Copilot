@@ -18,14 +18,21 @@ type InterviewRecordStatus =
 
 export interface InterviewRecordListItem {
   id: string;
-  // backend writes 'upload' | 'mock'; frontend may also synthesize 'draft' for
+  // frontend may also synthesize 'draft' for
   // local-only entries that haven't been persisted yet.
-  source: 'upload' | 'mock' | 'draft';
+  source: 'upload' | 'mock' | 'invitation' | 'draft';
   title: string;
   tag?: string | null;
   job_opportunity_id?: string | null;
   status: InterviewRecordStatus | string;
   created_at: string;
+  scheduled_start_at?: string | null;
+  scheduled_end_at?: string | null;
+  source_timezone?: string | null;
+  stage_label?: string | null;
+  scheduled_location?: string | null;
+  meeting_url?: string | null;
+  contact?: { name?: string; email?: string } | null;
 }
 
 export interface InterviewQA {
@@ -61,14 +68,8 @@ export interface InterviewQA {
     evidence_schema_version: number;
     structure_schema_version: number;
     structure_revision: number;
-    question_utterance_ids: string[];
-    answer_utterance_ids: string[];
-    crossing_utterance_ids: string[];
     question_word_ids: string[];
     answer_word_ids: string[];
-    hidden_words: Array<{ word_id: string; reason: string }>;
-    punctuation: Array<{ after_word_id: string; mark: string }>;
-    confidence: number;
     manual_override?: {
       question: boolean;
       answer: boolean;
@@ -107,15 +108,12 @@ export interface InterviewAnalysis {
 }
 
 export interface InterviewTranscriptStructure {
-  schema_version: 1;
+  schema_version: number;
   revision: number;
   speaker_roles: Array<{
     speaker_id: string;
     role: 'interviewer' | 'candidate' | 'unknown';
-    confidence: number;
   }>;
-  /** Full utterance projections remain an audit payload; this view only needs roles. */
-  utterances: unknown[];
 }
 
 export interface InterviewRecordDetail extends InterviewRecordListItem {
@@ -132,15 +130,8 @@ export interface InterviewRecordDetail extends InterviewRecordListItem {
   transcript_segments: unknown;
   transcript_structure?: InterviewTranscriptStructure | null;
   transcript_quality?: {
-    aligned_word_ratio: number;
-    known_speaker_word_ratio: number;
-    role_resolved_substantive_word_ratio: number;
-    candidate_substantive_word_coverage: number;
-    question_word_coverage: number;
-    hidden_word_ratio: number;
-    overlap_word_ratio: number;
-    low_confidence_episode_count: number;
-    status: 'complete' | 'needs_review';
+    status: 'complete';
+    warnings?: string[];
   } | null;
   analysis: InterviewAnalysis | null;
   qa: InterviewQA[];
@@ -610,8 +601,13 @@ export interface MockAnswerResp {
 
 /** One uploaded recording, prepared for editing before answer submission. */
 export interface MockAnswerAudioResp {
+  request_id: string;
+  question_message_id: number;
+  status: 'queued' | 'transcribing' | 'completed' | 'failed';
   text: string;
   audio_file_asset_id: string;
+  audio_url: string | null;
+  error: string | null;
 }
 
 /** ``POST /mock-interviews/{record_id}/finish`` and ``/retry-review`` — the

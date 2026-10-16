@@ -48,8 +48,50 @@ class ActiveTurnContextReducer:
             1, self._usage_prompt_tokens + estimate - self._usage_request_estimate
         )
 
+    async def revalidate_memory(self, messages, *, user_pk: int):
+        from app.conversation.context_window import kind
+        from app.memory.recall import revalidate_recall
+
+        snapshots = {
+            m.get("content", "")
+            for m in [*messages, *self.initial_context]
+            if kind(m) == "memory_block"
+        }
+        if not snapshots:
+            return
+        conversation_id = getattr(self.assembled, "conversation_id", "")
+        refreshed = {}
+        for block in snapshots:
+            refreshed[block] = await asyncio.to_thread(
+                revalidate_recall,
+                block,
+                user_pk=user_pk,
+                conversation_id=conversation_id,
+            )
+        # Both owners must change: otherwise compression restores a revoked
+        # snapshot from initial_context after it was removed from messages.
+        for projection in (messages, self.initial_context):
+            projection[:] = [
+                {**m, "content": refreshed[m["content"]]}
+                if kind(m) == "memory_block"
+                else m
+                for m in projection
+                if kind(m) != "memory_block" or refreshed.get(m.get("content"))
+            ]
+
     def is_at_blocking_limit(self, prompt_tokens):
         return prompt_tokens >= self.blocking_limit
+
+    def update_runtime_state(self, messages, state):
+        """Keep one current plan projection, including when the plan disappears."""
+        if state == self.runtime_state:
+            return
+        messages[:] = [
+            m for m in messages if m.get("_context", {}).get("kind") != "runtime_state"
+        ]
+        if state:
+            messages.append(item({"role": "user", "content": state}, "runtime_state"))
+        self.runtime_state = state
 
     def should_compact(self, prompt_tokens):
         return prompt_tokens >= self.cheap_prepass_threshold

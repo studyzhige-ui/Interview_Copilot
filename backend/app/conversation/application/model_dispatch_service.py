@@ -73,7 +73,8 @@ def start_model_dispatch(
         turn is None
         or turn.user_id != user_id
         or int(turn.dispatch_generation or 1) != dispatch_generation
-        or turn.status in {"completed", "blocked", "failed", "cancelled"}
+        or turn.status != "running"
+        or turn.cancel_requested
     ):
         raise ModelDispatchConflictError("stale_model_dispatch_generation")
 
@@ -124,6 +125,29 @@ def start_model_dispatch(
     db.commit()
     db.refresh(row)
     return row
+
+
+def close_running_model_dispatches(db: Session, *, turn_id: str) -> None:
+    """A terminal turn cannot own running calls; absent receipts remain unknown."""
+    rows = (
+        db.query(AgentModelDispatch)
+        .filter_by(turn_id=turn_id, status="running")
+        .with_for_update()
+        .all()
+    )
+    for row in rows:
+        model_budget_service.settle(
+            db,
+            user_id=row.user_id,
+            turn_id=turn_id,
+            call_id=row.call_id,
+            outcome="unknown",
+            observed_tokens=None,
+        )
+        row.status = "unknown"
+        row.error_code = "turn_terminal_without_model_receipt"
+        row.completed_at = utc_now()
+        row.updated_at = row.completed_at
 
 
 def start_model_dispatch_for_turn(**kwargs: Any) -> AgentModelDispatch:

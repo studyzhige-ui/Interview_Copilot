@@ -32,7 +32,7 @@ class CopilotPreference(Base):
     )
 
     id = Column(
-        String(35),
+        String(37),
         primary_key=True,
         default=lambda: f"pref_{uuid.uuid4().hex}",
     )

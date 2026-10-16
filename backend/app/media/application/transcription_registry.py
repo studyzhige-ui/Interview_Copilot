@@ -231,11 +231,8 @@ async def _send_audio(client, url, headers, data, file_path):
 async def transcribe_plain(file_path: str, language: Optional[str] = "zh") -> str:
     """Short-clip ASR: plain text, no speaker labels, no diarization.
 
-    Used by the mock-interview /transcribe endpoint (ANA-5): when
-    TRANSCRIPTION_PROVIDER resolves to a remote provider, the API process
-    never touches WhisperX (no 1.5GB model in the request path, no lock
-    serialization). Raises ``LocalProviderOnly`` for the local kind — the
-    endpoint then runs its own locked local path.
+    Called inside the transcription worker. Raises ``LocalProviderOnly``
+    for its shared local decoder; remote providers use this HTTP adapter.
     """
     import httpx
 

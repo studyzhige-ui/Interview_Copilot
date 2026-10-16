@@ -146,24 +146,6 @@
     },
     {
       "provider": "openai",
-      "model": "gpt-4o-transcribe-diarize",
-      "display_name": "GPT 4o Transcribe Diarize",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "supports_vision": false
-    },
-    {
-      "provider": "openai",
-      "model": "gpt-4o-transcribe",
-      "display_name": "GPT 4o Transcribe",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "supports_vision": false
-    },
-    {
-      "provider": "openai",
       "model": "gpt-4o",
       "display_name": "GPT 4o",
       "supports_function_calling": true,
@@ -184,15 +166,6 @@
       "provider": "openai",
       "model": "o4-mini",
       "display_name": "O4 Mini",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "supports_vision": false
-    },
-    {
-      "provider": "openai",
-      "model": "gpt-4o-mini-transcribe",
-      "display_name": "GPT 4o Mini Transcribe",
       "supports_function_calling": true,
       "context_window": 128000,
       "max_output_tokens": 16384,
@@ -290,44 +263,8 @@
     },
     {
       "provider": "openai",
-      "model": "sora-2-pro",
-      "display_name": "Sora 2 Pro",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "supports_vision": false
-    },
-    {
-      "provider": "openai",
-      "model": "sora-2",
-      "display_name": "Sora 2",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "supports_vision": false
-    },
-    {
-      "provider": "openai",
       "model": "o1",
       "display_name": "O1",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "supports_vision": false
-    },
-    {
-      "provider": "openai",
-      "model": "babbage-002",
-      "display_name": "Babbage 002",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "supports_vision": false
-    },
-    {
-      "provider": "openai",
-      "model": "davinci-002",
-      "display_name": "Davinci 002",
       "supports_function_calling": true,
       "context_window": 128000,
       "max_output_tokens": 16384,
@@ -948,15 +885,6 @@
       "provider": "nvidia_nim",
       "model": "google/gemma-3-12b-it",
       "display_name": "Google/gemma 3 12b It",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "baai/bge-m3",
-      "display_name": "Baai/bge M3",
       "supports_function_calling": false,
       "context_window": 128000,
       "max_output_tokens": 4096,

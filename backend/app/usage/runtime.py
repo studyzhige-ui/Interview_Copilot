@@ -244,14 +244,23 @@ async def finish_async(receipt, outcome, units=None):
         raise
 
 
-def invoke_sync(call: Callable, *, observed: Callable | None = None, **descriptor):
+def invoke_sync(
+    call: Callable,
+    *,
+    observed: Callable | None = None,
+    local_execution: bool = False,
+    **descriptor,
+):
+    # A local execution failure is directly observed, not an ambiguous remote
+    # response. Preserve its cause; uncertain resource usage still retains its
+    # reservation until reconciled, just as before.
     receipt = begin(**descriptor)
     try:
         result = call()
     except BaseException as exc:
         outcome = failure_outcome(exc)
         finish(receipt, outcome)
-        if outcome == "unknown" and isinstance(exc, Exception):
+        if outcome == "unknown" and not local_execution and isinstance(exc, Exception):
             raise ModelOutcomeUnknownError("consumption_outcome_unknown") from exc
         raise
     # Result/usage parsing errors after dispatch do not release the allowance.
@@ -265,7 +274,11 @@ def invoke_sync(call: Callable, *, observed: Callable | None = None, **descripto
 
 
 async def invoke_async(
-    call: Callable, *, observed: Callable | None = None, **descriptor
+    call: Callable,
+    *,
+    observed: Callable | None = None,
+    local_execution: bool = False,
+    **descriptor,
 ):
     receipt = await begin_async(**descriptor)
     try:
@@ -274,7 +287,7 @@ async def invoke_async(
     except BaseException as exc:
         outcome = failure_outcome(exc)
         await finish_async(receipt, outcome)
-        if outcome == "unknown" and isinstance(exc, Exception):
+        if outcome == "unknown" and not local_execution and isinstance(exc, Exception):
             raise ModelOutcomeUnknownError("consumption_outcome_unknown") from exc
         raise
     try:

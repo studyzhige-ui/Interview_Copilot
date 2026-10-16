@@ -236,7 +236,7 @@ def sweep_stale_pipeline_records(self):
     from app.models.artifact import Artifact, ArtifactResumeState
     from app.models.document_chunk import DocumentChunk
     from app.models.knowledge import KnowledgeDocument
-    from app.worker.tasks.ingestion import process_document_ingestion
+    from app.rag.application.document_commands import enqueue_ingestion
     from app.worker.tasks.resume import process_resume_parse
 
     cutoff = utc_now() - _PIPELINE_STALE_AFTER
@@ -271,7 +271,7 @@ def sweep_stale_pipeline_records(self):
 
         for document in documents:
             try:
-                task = process_document_ingestion.delay(document.id)
+                enqueue_ingestion(db, document_id=document.id, replace_stale=True)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "stale knowledge re-dispatch failed for %s: %s",
@@ -279,11 +279,6 @@ def sweep_stale_pipeline_records(self):
                     exc,
                 )
                 continue
-            from app.rag.application.document_commands import record_ingestion_dispatch
-
-            record_ingestion_dispatch(
-                db, document_id=document.id, task_id=task.id, now=utc_now()
-            )
             dispatched += 1
 
         for resume in resumes:

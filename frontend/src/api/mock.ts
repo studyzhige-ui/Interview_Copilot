@@ -61,19 +61,48 @@ export async function retryMockReview(recordId: string): Promise<MockFinishResp>
 export async function prepareMockAnswerAudio(
   recordId: string,
   blob: Blob,
-  options?: { signal?: AbortSignal },
+  questionMessageId: number,
+  options: { signal: AbortSignal; requestId: string },
 ): Promise<MockAnswerAudioResp> {
   const fd = new FormData();
   const mime = blob.type.toLowerCase().split(';', 1)[0].trim();
   const extension = ({ 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/wav': 'wav', 'audio/webm': 'webm' } as Record<string, string>)[mime];
   if (!extension || !blob.size) throw new Error('录音格式不受支持或录音为空，请重新录制。');
   fd.append('file', blob, `answer.${extension}`);
+  fd.append('request_id', options.requestId);
+  fd.append('question_message_id', String(questionMessageId));
   const res = await apiClient.post(
     `/mock-interviews/${encodeURIComponent(recordId)}/answer-audio`,
     fd,
-    { signal: options?.signal },
+    { signal: options.signal },
   );
   return res.data;
+}
+
+export async function readMockAnswerAudio(recordId: string, params: { request_id?: string; question_message_id?: number }, signal?: AbortSignal): Promise<MockAnswerAudioResp | null> {
+  return (await apiClient.get(`/mock-interviews/${encodeURIComponent(recordId)}/answer-audio`, { params, signal })).data;
+}
+
+export async function retryMockAnswerAudio(recordId: string, requestId: string, newRequestId: string, signal: AbortSignal): Promise<MockAnswerAudioResp> {
+  return (await apiClient.post(`/mock-interviews/${encodeURIComponent(recordId)}/answer-audio/${encodeURIComponent(requestId)}/retry`, { new_request_id: newRequestId }, { signal })).data;
+}
+
+/** Reads the admitted task only; refresh or reconnect never starts recognition. */
+export async function waitForMockAnswerAudio(recordId: string, initial: MockAnswerAudioResp, signal: AbortSignal, onState: (state: MockAnswerAudioResp) => void): Promise<MockAnswerAudioResp> {
+  let state = initial;
+  while (!signal.aborted) {
+    onState(state);
+    if (state.status === 'completed' || state.status === 'failed') return state;
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => { clearTimeout(timer); reject(signal.reason); };
+      const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, 1000);
+      signal.addEventListener('abort', abort, { once: true });
+    });
+    const next = await readMockAnswerAudio(recordId, { request_id: initial.request_id }, signal);
+    if (!next || next.request_id !== initial.request_id) throw new Error('录音任务已不可用');
+    state = next;
+  }
+  throw signal.reason;
 }
 
 interface InProgressMock {

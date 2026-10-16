@@ -94,6 +94,12 @@ def record_current_offer(
     job_id = _identity(job_opportunity_id, "job_opportunity_id", 35)
     key = _identity(operation_key, "operation_key", 128)
     _require_job_owner(db, user_pk, job_id, job_owner_checker)
+    from app.career.application import process
+    from app.schemas.job_opportunity import ProcessEventAppend
+
+    job = process._locked_opportunity(db, user_pk, job_id)
+    if job.outcome:
+        raise OfferOperationConflictError("申请已结束，请先重新开启岗位")
     candidate = _terms_payload(terms)
     source_snapshot = _source_snapshot(source)
     source_excerpt = _source_excerpt(source_snapshot, terms)
@@ -158,6 +164,21 @@ def record_current_offer(
     db.add(row)
     db.flush()
     _ensure_offer_deadline_action(db, offer=row)
+    process.append_confirmed_process_event(
+        db,
+        user_pk=user_pk,
+        opportunity_id=job_id,
+        command=ProcessEventAppend(
+            kind="offer_received",
+            occurred_at=source.observed_at,
+            observed_at=source.observed_at,
+            source_kind="observation",
+            source_identity=source.identity,
+            source_version=source.version,
+            description="已记录收到的 Offer 条款",
+            idempotency_key=f"offer-received:{row.id}",
+        ),
+    )
     return row
 
 

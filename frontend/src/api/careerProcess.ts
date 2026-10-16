@@ -11,31 +11,15 @@ import type {
   ProcessEventKind,
 } from '@/types/career';
 
-export interface OpportunityCreateInput {
-  company_name: string;
-  job_title: string;
-  entry_reason: 'explicit_tracking' | 'targeted_preparation' | 'user_confirmed_application';
-  occurred_at: string;
-  source_kind: 'user_assertion';
-  source_identity: string;
-  source_description: string;
-  location?: string;
-  team?: string;
-  source_url?: string;
-  idempotency_key?: string;
-  directions?: Array<{ direction_id: string; match_reason: string }>;
-}
-
 export async function listJobOpportunities(includeArchived = false): Promise<JobOpportunity[]> {
-  return (
-    await apiClient.get('/career-process/opportunities', {
-      params: { include_archived: includeArchived },
-    })
-  ).data;
-}
-
-export async function createJobOpportunity(input: OpportunityCreateInput): Promise<JobOpportunity> {
-  return (await apiClient.post('/career-process/opportunities', input)).data;
+  const all: JobOpportunity[] = [];
+  for (let offset = 0; ; offset += 500) {
+    const rows = (await apiClient.get<JobOpportunity[]>('/career-process/opportunities', {
+      params: { include_archived: includeArchived, limit: 500, offset },
+    })).data;
+    all.push(...rows);
+    if (rows.length < 500) return all;
+  }
 }
 
 export async function listJobOpportunityMergeCandidates(): Promise<JobOpportunityMergeCandidate[]> {
@@ -99,12 +83,6 @@ export async function replaceJobOpportunityDirections(input: {
         directions: input.directions,
       },
     )
-  ).data;
-}
-
-export async function listProcessEvents(opportunityId: string): Promise<ProcessEvent[]> {
-  return (
-    await apiClient.get(`/career-process/opportunities/${encodeURIComponent(opportunityId)}/events`)
   ).data;
 }
 

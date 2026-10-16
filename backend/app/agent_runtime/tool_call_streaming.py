@@ -60,6 +60,10 @@ class ToolCallAssembler:
 
     def finish(self) -> list[_ToolCallAccumulator]:
         if not self.calls:
+            if self.stop_reason not in {"stop", "end_turn"}:
+                raise ToolCallProtocolError(
+                    "model response did not complete; partial text is not a final answer"
+                )
             return []
         if self.stop_reason not in {"tool_calls", "tool_use", "stop", "end_turn"}:
             raise ToolCallProtocolError(

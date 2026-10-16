@@ -33,7 +33,7 @@ class ObservationProcess:
             "id": task["id"],
             "binding": task["binding"],
             "status": "completed",
-            "values": {"regular": [], "exclusive": [], "speakers": []},
+            "values": {"regular": [], "exclusive": [], "embeddings": []},
         }
 
     async def close(self):
@@ -121,7 +121,7 @@ async def test_completed_silence_is_an_empty_observation_not_a_fake_speaker(conf
         assert await Client(config.socket_path).acall(task, dimension=1) == {
             "regular": [],
             "exclusive": [],
-            "speakers": [],
+            "embeddings": [],
         }
     finally:
         await server.close()

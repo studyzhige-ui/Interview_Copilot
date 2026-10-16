@@ -33,7 +33,7 @@ class JobDescriptionSnapshotFromProductUI(BaseModel):
     source_kind: Literal["typed_product_ui"] = "typed_product_ui"
     source_identity: str = Field(min_length=1, max_length=256)
     source_version: str = Field(min_length=1, max_length=128)
-    original_url: str = Field(min_length=1, max_length=4_000)
+    original_url: str = Field(default="", max_length=4_000)
     observed_at: AwareDatetime
     provider: str = Field(min_length=1, max_length=80)
     canonical_content: str = Field(min_length=1, max_length=120_000)

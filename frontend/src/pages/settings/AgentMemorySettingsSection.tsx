@@ -62,6 +62,7 @@ function defaultPromotionInstruction(memory: AgentMemory): string {
 }
 
 export function AgentMemorySettingsSection() {
+  const [showHistory, setShowHistory] = useState(false);
   const settingsQuery = useQuery({
     queryKey: AGENT_MEMORY_SETTINGS_KEY,
     queryFn: getAgentMemorySettings,
@@ -76,9 +77,9 @@ export function AgentMemorySettingsSection() {
       <div className="flex items-start gap-3">
         <Brain size={18} className="mt-0.5 shrink-0 text-primary-600" />
         <div>
-          <h2 className="text-sm font-semibold text-stone-800">Long-term Agent Memory</h2>
+          <h2 className="text-sm font-semibold text-stone-800">长期协作记忆</h2>
           <p className="mt-1 text-xs leading-relaxed text-stone-500">
-            这里只保存过去协作中对你有帮助或无帮助的软性经验。它不是个人事实、业务记录、历史原文、指令或项目级 Memory；需要事实时 Agent 仍会读取权威所有者。
+            让 Copilot 记住过去的协作经验。你可以查看依据、修订内容，或停止使用某条记忆。个人经历仍以个人档案为准。
           </p>
         </div>
       </div>
@@ -99,10 +100,10 @@ export function AgentMemorySettingsSection() {
       <div className="mt-6 border-t border-stone-100 pt-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h3 className="text-sm font-medium text-stone-800">已形成的 Memory</h3>
-            <p className="mt-1 text-xs text-stone-500">包含有效、失效和已删除状态；已删除内容不会被自动恢复。</p>
+            <h3 className="text-sm font-medium text-stone-800">已保存的协作经验</h3>
+            <p className="mt-1 text-xs text-stone-500">默认展示正在使用的记忆；历史状态可展开查看。</p>
           </div>
-          <Btn kind="ghost" size="sm" onClick={() => memoriesQuery.refetch()}>刷新</Btn>
+          <div className="flex gap-3 items-center"><label className="flex gap-2 text-xs text-stone-500"><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} />显示历史状态</label><Btn kind="ghost" size="sm" onClick={() => memoriesQuery.refetch()}>刷新</Btn></div>
         </div>
 
         {memoriesQuery.isLoading ? (
@@ -111,12 +112,12 @@ export function AgentMemorySettingsSection() {
           <div role="alert" className="mt-4 rounded-lg border border-danger-200 bg-danger-50 px-3 py-2 text-xs text-danger-700">
             {extractErr(memoriesQuery.error, 'Memory 列表暂时无法读取')}
           </div>
-        ) : (memoriesQuery.data ?? []).length === 0 ? (
+        ) : (memoriesQuery.data ?? []).filter((memory) => showHistory || memory.status === 'active').length === 0 ? (
           <div className="mt-4 rounded-lg bg-stone-50 px-4 py-5 text-center text-xs text-stone-500">
             还没有形成长期协作经验。开启贡献后，系统会在对话结束并空闲一段时间后提取有依据的经验，再结合过去的记录整理；并非每段对话都需要记住。
           </div>
         ) : (
-          <MemoryList memories={memoriesQuery.data ?? []} />
+          <MemoryList memories={(memoriesQuery.data ?? []).filter((memory) => showHistory || memory.status === 'active')} />
         )}
       </div>
       <MemoryActivity memories={memoriesQuery.data ?? []} />
@@ -312,7 +313,8 @@ function MemoryList({ memories }: { memories: AgentMemory[] }) {
             )}
           </div>
 
-          <dl className="mt-4 grid gap-2 border-t border-stone-100 pt-3 text-[11px] text-stone-500 sm:grid-cols-2">
+          <details className="mt-4 border-t border-stone-100 pt-3"><summary className="cursor-pointer text-xs text-stone-500">来源依据与使用情况</summary>
+          <dl className="mt-3 grid gap-2 text-[11px] text-stone-500 sm:grid-cols-2">
             <div><dt className="inline font-medium text-stone-600">形成时间：</dt><dd className="inline">{displayDate(memory.formed_at)}</dd></div>
             <div><dt className="inline font-medium text-stone-600">最近确认：</dt><dd className="inline">{displayDate(memory.last_confirmed_at)}</dd></div>
             <div><dt className="inline font-medium text-stone-600">最近召回：</dt><dd className="inline">{displayDate(memory.last_recalled_at)}（{memory.recall_count} 次）</dd></div>
@@ -345,6 +347,7 @@ function MemoryList({ memories }: { memories: AgentMemory[] }) {
             ))}
             <p className="mt-2 text-[11px] text-stone-400">读取 {memory.recall_count} 次 · 回答中引用 {memory.usage_count ?? 0} 次</p>
           </div>
+          </details>
         </article>
       ))}
 

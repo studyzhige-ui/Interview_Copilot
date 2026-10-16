@@ -18,7 +18,8 @@ from typing import BinaryIO
 from .errors import ProtocolError
 
 VERSION = 1
-MAX_FRAME = 4 * 1024 * 1024
+# Includes bounded float32 observations for recording-wide clustering.
+MAX_FRAME = 16 * 1024 * 1024
 MAX_TEXT_BYTES = 256 * 1024
 MAX_ITEMS = 32
 ROLES = {
@@ -108,7 +109,18 @@ def request(value: dict) -> dict:
         "timeout",
     }
     if isinstance(value, dict) and value.get("role") == "diarization":
-        expected = (expected - {"texts", "query"}) | {"audio", "max_speakers"}
+        if value.get("operation") == "cluster":
+            expected = (expected - {"texts", "query"}) | {
+                "embeddings",
+                "min_speakers",
+                "max_speakers",
+            }
+        else:
+            expected = (expected - {"texts", "query"}) | {
+                "audio",
+                "max_speakers",
+                "centroids",
+            }
     if not isinstance(value, dict) or set(value) != expected:
         raise ProtocolError("invalid_request")
     if type(value["version"]) is not int or value["version"] != VERSION:
@@ -135,6 +147,10 @@ def request(value: dict) -> dict:
     ):
         raise ProtocolError("invalid_timeout")
     if value["role"] == "diarization":
+        if value["operation"] == "cluster":
+            from .speaker_audio import validate_clustering_request
+
+            return validate_clustering_request(value)
         from .speaker_audio import validate_diarization_request
 
         return validate_diarization_request(value)
@@ -183,6 +199,10 @@ def same_user(sock) -> bool:
 
 def validate_output(task, values, *, dimension):
     if task["role"] == "diarization":
+        if task["operation"] == "cluster":
+            from .speaker_audio import validate_clustering_result
+
+            return validate_clustering_result(task, values)
         from .speaker_audio import validate_diarization_result
 
         return validate_diarization_result(task, values)

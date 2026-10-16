@@ -1,5 +1,5 @@
 # Optional CPU media environment; never downloads model weights at runtime.
-# Install with the API runtime, not in the GPU Qwen/CosyVoice environment.
+# Install with the API media runtime; model weights remain operator-managed.
 aiortc==1.15.0
-onnxruntime==1.23.2
+onnxruntime==1.31.0
 transformers==4.57.6

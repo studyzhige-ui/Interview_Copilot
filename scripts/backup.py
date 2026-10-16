@@ -84,7 +84,31 @@ def _run_postgres_tool(
 
 
 def _backup_objects(destination: Path) -> int:
-    from app.core.storage import s3_client
+    from app.core.storage import open_local_object, s3_client
+
+    if settings.STORAGE_BACKEND == "filesystem":
+        root = Path(settings.STORAGE_DIR).resolve()
+        if destination.resolve().is_relative_to(root):
+            raise ValueError("Backup destination must be outside the live object store")
+        if not root.is_dir():
+            raise FileNotFoundError("Configured object store is missing")
+        count = 0
+        for path in root.rglob("*"):
+            if path.is_symlink():
+                raise ValueError("Symlink in object store")
+            if not path.is_file():
+                continue
+            key = path.relative_to(root).as_posix()
+            target = destination / key
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with (
+                open_local_object("local://" + key) as source,
+                target.open("xb") as output,
+            ):
+                shutil.copyfileobj(source, output)
+            count += 1
+        destination.mkdir(parents=True, exist_ok=True)
+        return count
 
     destination.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -102,13 +126,16 @@ def _backup_objects(destination: Path) -> int:
 
 
 def _restore_objects(source: Path) -> int:
-    from app.core.storage import s3_client
+    from app.core.storage import store_object, storage_uri_for_key
 
     count = 0
     for path in source.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("Symlink in backup object store")
         if path.is_file():
             key = path.relative_to(source).as_posix()
-            s3_client.upload_file(str(path), settings.S3_BUCKET_NAME, key)
+            with path.open("rb") as content:
+                store_object(content, storage_uri_for_key(key))
             count += 1
     return count
 
@@ -136,6 +163,7 @@ def create_backup(args: argparse.Namespace) -> Path:
         "database_dump": dump_path.name,
         "objects_included": args.include_objects,
         "object_count": object_count,
+        "storage_backend": settings.STORAGE_BACKEND,
         "retrieval_rebuild_command": "python scripts/reingest_hybrid.py --execute",
     }
     (destination / "manifest.json").write_text(
@@ -150,6 +178,15 @@ def restore_backup(args: argparse.Namespace) -> int:
     dump_path = source / "database.dump"
     if not dump_path.is_file():
         raise FileNotFoundError(f"Missing backup file: {dump_path}")
+    if args.restore_objects:
+        objects = source / "objects"
+        if not objects.is_dir():
+            raise FileNotFoundError("Backup does not contain an objects directory")
+        manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
+        if manifest.get("storage_backend", "s3") != settings.STORAGE_BACKEND:
+            raise ValueError(
+                "Restore requires the original storage backend; persisted URIs are not migrated"
+            )
     source_db = _database_parts(settings.DATABASE_URL)["database"]
     target = _database_parts(args.target_database_url)
     if target["database"] == source_db and not args.allow_source_database:
@@ -206,9 +243,6 @@ def restore_backup(args: argparse.Namespace) -> int:
                 env={**os.environ, "PGPASSWORD": target["password"]},
             )
     if args.restore_objects:
-        objects = source / "objects"
-        if not objects.is_dir():
-            raise FileNotFoundError("Backup does not contain an objects directory")
         _restore_objects(objects)
     return 0
 

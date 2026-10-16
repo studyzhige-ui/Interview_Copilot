@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Mic, Square, CornerUpRight, Loader2, Volume2, VolumeX } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { Modal } from '@/components/ui/Modal';
@@ -13,6 +14,9 @@ import {
   getMockLiveState,
   getMockAnswerReceipt,
   prepareMockAnswerAudio,
+  readMockAnswerAudio,
+  retryMockAnswerAudio,
+  waitForMockAnswerAudio,
   submitMockAnswer,
 } from '@/api/mock';
 import { extractErr } from '@/api/client';
@@ -40,6 +44,7 @@ interface PendingAnswer {
 
 interface VoiceDraft {
   audioAssetId: string;
+  transcriptionRequestId?: string;
 }
 
 interface Props {
@@ -103,6 +108,15 @@ export function MockLive({
   const [voiceDraft, setVoiceDraft] = useState<VoiceDraft | null>(null);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [retryRecording, setRetryRecording] = useState<Blob | null>(null);
+  const [savedRecordingUrl, setSavedRecordingUrl] = useState<string | null>(null);
+  const recordingPlayer = useRef<HTMLAudioElement>(null);
+  useEffect(() => {
+    if (!recordingPlayer.current) return;
+    const player = recordingPlayer.current;
+    const url = retryRecording ? URL.createObjectURL(retryRecording) : savedRecordingUrl;
+    if (url) player.src = url;
+    return () => { player.pause(); player.removeAttribute('src'); if (retryRecording && url) URL.revokeObjectURL(url); };
+  }, [retryRecording, savedRecordingUrl]);
   const rec = useMediaRecorder();
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -171,6 +185,7 @@ export function MockLive({
     setVoiceDraft(null);
     setVoiceError(null);
     setRetryRecording(null);
+    setSavedRecordingUrl(null);
     setRecoveryNotice(null);
     if (endSuggested) {
       setEndSuggested(true);
@@ -279,28 +294,73 @@ export function MockLive({
     }
   };
 
-  const [inputPhase, setInputPhase] = useState<'idle' | 'preparing'>('idle');
+  const [inputPhase, setInputPhase] = useState<'idle' | 'preparing' | 'queued' | 'transcribing'>('idle');
   const preparationRef = useRef<AbortController | null>(null);
+  const recordingIntentRef = useRef<{ blob: Blob; requestId: string } | null>(null);
+  const retryIntentRef = useRef<{ source: string; requestId: string } | null>(null);
   useEffect(() => () => {
     const previous = preparationRef.current;
     preparationRef.current = null;
     previous?.abort();
   }, [recordId]);
 
-  const prepareRecording = async (blob: Blob) => {
+  const audioState = useCallback((state: import('@/types/api').MockAnswerAudioResp) => {
+    setSavedRecordingUrl(state.audio_url);
+    if (state.status === 'queued' || state.status === 'transcribing') setInputPhase(state.status);
+    else {
+      if (state.status === 'completed') setTyping(state.text);
+      setVoiceDraft({ audioAssetId: state.audio_file_asset_id, transcriptionRequestId: state.request_id });
+      setVoiceError(state.error);
+    }
+  }, []);
+
+  useEffect(() => {
+    const questionId = latestInterviewerMessage?.id;
+    if (!questionId) return;
+    const controller = new AbortController();
+    const restore = async () => {
+      const draft = await readMockAnswerAudio(recordId, { question_message_id: questionId }, controller.signal);
+      if (!draft || controller.signal.aborted || preparationRef.current) return;
+      preparationRef.current = controller;
+      try { await waitForMockAnswerAudio(recordId, draft, controller.signal, audioState); }
+      finally {
+        if (preparationRef.current === controller) {
+          preparationRef.current = null;
+          if (!controller.signal.aborted) setInputPhase('idle');
+        }
+      }
+    };
+    void restore().catch(() => { if (!controller.signal.aborted) setVoiceError('录音任务读取失败，请重新连接后核对。'); });
+    return () => controller.abort();
+  }, [recordId, latestInterviewerMessage?.id, audioState]);
+
+  const prepareRecording = async (blob?: Blob) => {
     if (!isMounted.current || preparationRef.current) return;
+    const source = voiceDraft?.transcriptionRequestId;
+    if (!blob && !source) return;
+    if (blob && recordingIntentRef.current?.blob !== blob) recordingIntentRef.current = { blob, requestId: crypto.randomUUID() };
+    if (!blob && source && retryIntentRef.current?.source !== source) retryIntentRef.current = { source, requestId: crypto.randomUUID() };
+    const requestId = (blob ? recordingIntentRef.current : retryIntentRef.current)!.requestId;
     const controller = new AbortController();
     preparationRef.current = controller;
     const current = () => isMounted.current && preparationRef.current === controller && !controller.signal.aborted;
-    setRetryRecording(blob);
+    if (blob) {
+      setRetryRecording(blob);
+      setSavedRecordingUrl(null);
+      setVoiceDraft(null);
+    }
     setVoiceError(null);
     setInputPhase('preparing');
     try {
-      const prepared = await prepareMockAnswerAudio(recordId, blob, { signal: controller.signal });
+      if (!latestInterviewerMessage) throw new Error('面试问题尚未就绪');
+      const admitted = blob
+        ? await prepareMockAnswerAudio(recordId, blob, latestInterviewerMessage.id, { signal: controller.signal, requestId })
+        : await retryMockAnswerAudio(recordId, source!, requestId, controller.signal);
+      const prepared = await waitForMockAnswerAudio(recordId, admitted, controller.signal, audioState);
       if (!current()) return;
-      setTyping(prepared.text);
-      setVoiceDraft({ audioAssetId: prepared.audio_file_asset_id });
-      setRetryRecording(null);
+      recordingIntentRef.current = null;
+      retryIntentRef.current = null;
+      if (prepared.status === 'completed') setRetryRecording(null);
     } catch (error) {
       if (!current()) return;
       setVoiceError(
@@ -315,7 +375,7 @@ export function MockLive({
   };
 
   const onMicToggle = async () => {
-    if (operation !== 'idle' || inputPhase === 'preparing') return;
+    if (operation !== 'idle' || inputPhase !== 'idle') return;
     if (rec.state === 'recording') {
       const blob = await rec.stop();
       if (!isMounted.current) return;
@@ -333,7 +393,7 @@ export function MockLive({
 
   const micPhase = rec.state === 'recording'
     ? 'recording'
-    : inputPhase === 'preparing' || rec.state === 'stopping'
+    : inputPhase !== 'idle' || rec.state === 'stopping'
     ? 'preparing'
     : rec.state === 'requesting'
     ? 'requesting'
@@ -347,7 +407,7 @@ export function MockLive({
     micPhase === 'recording'
       ? fmtDuration(rec.durationMs)
       : micPhase === 'preparing'
-      ? '正在转写…'
+      ? ({ idle: '', preparing: '正在准备转写…', queued: '等待语音服务…', transcribing: '正在转写…' }[inputPhase] || '正在结束录音…')
       : micPhase === 'requesting'
       ? '正在连接…'
       : '点击录音';
@@ -395,7 +455,8 @@ export function MockLive({
     try {
       const r = await finishMockInterview(recordId);
       setConfirmingFinish(false);
-      setOperation('completed');
+      // Release the router blocker before the parent navigates and unmounts us.
+      flushSync(() => setOperation('completed'));
       onFinished(r.record_id);
     } catch (e) {
       // A stale tab's finish lands 409 with an actionable server message
@@ -446,8 +507,8 @@ export function MockLive({
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-6 py-3 border-b border-stone-200 bg-white flex items-center gap-3">
-        <div className="text-sm font-medium text-stone-800">模拟面试 · 进行中</div>
+      <div className="mock-live-header px-6 py-3 border-b border-stone-200 bg-white flex items-center gap-3">
+        <div className="text-sm font-medium text-stone-800">模拟面试 · 已答 {answeredCount} 题</div>
         {tts.state.phase === 'playing' && (
           <span className="text-[11px] text-primary-600 inline-flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-primary-500 animate-pulse" />
@@ -587,7 +648,7 @@ export function MockLive({
       </Modal>
 
       <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto px-6 py-8">
-        <div className="max-w-[760px] mx-auto flex flex-col gap-4">
+        <div className="mock-live-messages flex flex-col gap-4">
           {messages.map((message) => (
             <div
               key={message.id}
@@ -639,14 +700,14 @@ export function MockLive({
       </div>
 
       <div className="border-t border-stone-200 bg-white px-6 py-4">
-        <div className="max-w-[760px] mx-auto flex flex-col items-center gap-3">
+        <div className="mock-live-composer flex flex-col items-start gap-3">
           <button
             onClick={() => void onMicToggle()}
             disabled={micDisabled}
             aria-label={micPhase === 'recording' ? '结束录音' : '开始录音'}
             title={micPhase === 'recording' ? '点击结束录音' : '点击开始录音'}
             className={[
-              'w-[88px] h-[88px] rounded-full flex flex-col items-center justify-center transition-all',
+              'h-10 px-4 rounded-lg inline-flex gap-2 items-center justify-center transition-all',
               micPhase === 'recording'
                 ? 'bg-danger-500 text-white animate-pulse'
                 : micPhase === 'preparing' || micPhase === 'requesting'
@@ -657,13 +718,13 @@ export function MockLive({
             ].join(' ')}
           >
             {micPhase === 'preparing' || micPhase === 'requesting' ? (
-              <Loader2 size={28} className="animate-spin" />
+              <Loader2 size={18} className="animate-spin" />
             ) : micPhase === 'recording' ? (
-              <Square size={28} />
+              <Square size={18} />
             ) : (
-              <Mic size={28} />
+              <Mic size={18} />
             )}
-            <div className="text-[10px] mt-1">{micLabel}</div>
+            <span className="text-xs">{micLabel}</span>
           </button>
           <div className="text-[10px] text-stone-400">
             录音结束后生成可编辑文字，确认无误再提交（最长 {MAX_RECORDING_MS / 60_000} 分钟，{MAX_RECORDING_BYTES / 1024 / 1024} MiB）
@@ -673,15 +734,21 @@ export function MockLive({
               <span className="flex-1 text-xs leading-5 text-amber-900">
                 {voiceError || rec.errorMessage}
               </span>
-              {voiceError && retryRecording && (
+              {voiceError && (retryRecording || voiceDraft?.transcriptionRequestId) && (
                 <button
                   type="button"
-                  onClick={() => void prepareRecording(retryRecording)}
+                  onClick={() => void prepareRecording(voiceDraft?.transcriptionRequestId ? undefined : retryRecording ?? undefined)}
                   className="shrink-0 text-xs font-medium text-amber-800 hover:text-amber-950"
                 >
                   重试转写
                 </button>
               )}
+            </div>
+          )}
+          {(retryRecording || savedRecordingUrl) && (
+            <div className="w-full text-xs text-stone-600">
+              <p>回听本次录音；若没有声音，请检查系统输入设备和麦克风静音设置。</p>
+              <audio ref={recordingPlayer} controls aria-label="本次录音回放" className="mt-2 w-full" />
             </div>
           )}
           {voiceDraft && (
@@ -700,6 +767,7 @@ export function MockLive({
           )}
           <div className="w-full flex items-end gap-2">
             <textarea
+              aria-label="面试回答"
               value={typing}
               onChange={(e) => setTyping(e.target.value)}
               rows={2}

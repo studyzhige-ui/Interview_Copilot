@@ -26,6 +26,7 @@ class ArtifactProvenanceInput(BaseModel):
 class ArtifactWriteInput(BaseModel):
     title: str = Field(min_length=1, max_length=240)
     content_text: str | None = None
+    document_json: dict | None = None
     content_format: str = Field(default="markdown", min_length=1, max_length=64)
     file_asset_id: str | None = Field(default=None, min_length=1, max_length=128)
     file_asset_version: str | None = Field(default=None, min_length=1, max_length=96)
@@ -33,6 +34,13 @@ class ArtifactWriteInput(BaseModel):
 
     @model_validator(mode="after")
     def has_real_content(self):
+        if self.document_json is not None:
+            from app.schemas.career_workspace import ResumeDocument
+
+            document = ResumeDocument.model_validate(self.document_json)
+            self.document_json = document.model_dump()
+            self.content_text = document.plain_text()
+            self.content_format = "markdown"
         if not (self.content_text or "").strip() and self.file_asset_id is None:
             raise ValueError("an Artifact version requires text or a FileAsset")
         if self.file_asset_version is not None and self.file_asset_id is None:
@@ -48,6 +56,7 @@ class ArtifactVersionView(BaseModel):
     version_no: int
     title: str
     content_text: str | None
+    document_json: dict | None = None
     content_format: str
     file_asset_id: str | None
     file_asset_version: str | None

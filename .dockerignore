@@ -3,6 +3,8 @@
 .claude
 .env
 .env.*
+.venv
+.test-deps
 
 data
 rag_eval_corpus
@@ -17,8 +19,11 @@ dist
 **/.coverage
 **/htmlcov
 
-frontend/node_modules
+**/node_modules
 frontend/dist
+desktop/.runtime
+desktop/release
+output
 backend/tests
 evaluation
 docs
@@ -27,3 +32,6 @@ scripts/*
 !scripts/consistency_scan.py
 !scripts/init_models.py
 !scripts/reingest_hybrid.py
+!scripts/prepare_rag_hnsw.py
+!scripts/prepare_local_inference.py
+!scripts/run_local_inference.py

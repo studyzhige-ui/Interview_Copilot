@@ -41,7 +41,7 @@ def authenticate(db: Session, username: str, password: str) -> User | None:
     """
     user = get_by_username(db, username)
     if not user:
-        verify_and_maybe_rehash(password, "$argon2id$v=19$m=65536,t=3,p=4$bm9uZQ$x")
+        get_password_hash(password)
         return None
 
     valid, new_hash = verify_and_maybe_rehash(password, user.hashed_password)

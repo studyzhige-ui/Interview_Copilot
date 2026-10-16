@@ -8,7 +8,6 @@ or QA projection must cite these stable word identities.
 from __future__ import annotations
 
 import hashlib
-import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -19,20 +18,6 @@ from app.media.application.speaker_timeline import SpeakerTimeline
 
 EVIDENCE_SCHEMA_VERSION = 2
 _TURN_PAUSE_SECONDS = 1.2
-_NON_LEXICAL = {
-    "嗯",
-    "呃",
-    "额",
-    "啊",
-    "唔",
-    "erm",
-    "uh",
-    "um",
-    "[noise]",
-    "[music]",
-    "[laughter]",
-}
-_PUNCTUATION_ONLY = re.compile(r"^[\s\W_]+$", re.UNICODE)
 
 
 class AudioEvidenceIdentity(BaseModel):
@@ -280,65 +265,6 @@ def group_acoustic_turns(words: list[EvidenceWord]) -> list[AcousticTurn]:
     return turns
 
 
-def render_word_ids(
-    evidence: TranscriptEvidence,
-    word_ids: list[str],
-    *,
-    hidden_word_ids: set[str] | None = None,
-    punctuation_after: dict[str, str] | None = None,
-) -> str:
-    """Render source words in evidence order; never accept model-authored text."""
-
-    hidden = hidden_word_ids or set()
-    punctuation = punctuation_after or {}
-    selected = set(word_ids)
-    pieces: list[str] = []
-    for word in evidence.words:
-        if word.word_id not in selected or word.word_id in hidden:
-            continue
-        pieces.append(word.text)
-        if mark := punctuation.get(word.word_id):
-            pieces.append(mark)
-    return "".join(pieces).strip()
-
-
-def strict_display_hidden_words(words: list[EvidenceWord]) -> dict[str, str]:
-    """Return only audit-safe, non-semantic cleanup edits.
-
-    This is intentionally conservative.  It does not remove discourse markers
-    such as “然后” or “就是”, because they may carry the candidate's meaning.
-    """
-
-    hidden: dict[str, str] = {}
-    previous_visible: EvidenceWord | None = None
-    for word in words:
-        normalized = word.text.strip().lower()
-        if normalized in _NON_LEXICAL:
-            hidden[word.word_id] = "filled_pause_or_noise"
-            continue
-        if (
-            previous_visible is not None
-            and normalized
-            and normalized == previous_visible.text.strip().lower()
-            and word.start is not None
-            and previous_visible.end is not None
-            and word.start - previous_visible.end <= 0.45
-        ):
-            hidden[word.word_id] = "immediate_exact_repetition"
-            continue
-        previous_visible = word
-    return hidden
-
-
-def is_substantive_word(word: EvidenceWord) -> bool:
-    normalized = word.text.strip().lower()
-    return bool(
-        normalized
-        and normalized not in _NON_LEXICAL
-        and not _PUNCTUATION_ONLY.fullmatch(normalized)
-    )
-
-
 def render_raw_turns(evidence: TranscriptEvidence) -> str:
     index = evidence.word_index()
     lines: list[str] = []
@@ -357,9 +283,6 @@ __all__ = [
     "EvidenceWord",
     "TranscriptEvidence",
     "build_transcript_evidence",
-    "is_substantive_word",
     "render_raw_turns",
-    "render_word_ids",
     "sha256_file",
-    "strict_display_hidden_words",
 ]

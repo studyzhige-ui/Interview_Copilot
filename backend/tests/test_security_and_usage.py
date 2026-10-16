@@ -2,6 +2,7 @@
 
 import io
 import os
+import asyncio
 import pytest
 from app.core import passwords, storage
 from app.core.config import settings
@@ -11,6 +12,139 @@ from app.agent_runtime.tool_policy import (
     evaluate_tool_policy,
 )
 from app.usage import service as usage
+
+
+def test_unknown_account_performs_real_password_work(db, monkeypatch):
+    from app.identity.application import user_account_service as accounts
+
+    hashes = []
+
+    def hash_password(value):
+        result = passwords.get_password_hash(value)
+        hashes.append(result)
+        return result
+
+    monkeypatch.setattr(accounts, "get_password_hash", hash_password)
+    assert accounts.authenticate(db, "missing-account", "wrong-password") is None
+    assert len(hashes) == 1
+    assert passwords.verify_password("wrong-password", hashes[0])
+
+
+@pytest.mark.parametrize("local", [True, False])
+@pytest.mark.parametrize("asynchronous", [True, False])
+def test_local_model_failure_preserves_cause_without_refunding_usage(
+    monkeypatch, local, asynchronous
+):
+    from app.usage import runtime
+    from app.core.execution_errors import ModelOutcomeUnknownError
+
+    settlements = []
+    monkeypatch.setattr(runtime, "begin", lambda **_: object())
+    monkeypatch.setattr(
+        runtime, "finish", lambda receipt, outcome, *args: settlements.append(outcome)
+    )
+    cause = ValueError("invalid_alignment_time")
+
+    def fail():
+        raise cause
+
+    async def afail():
+        fail()
+
+    with pytest.raises(ValueError if local else ModelOutcomeUnknownError) as caught:
+        if asynchronous:
+            asyncio.run(runtime.invoke_async(afail, local_execution=local))
+        else:
+            runtime.invoke_sync(fail, local_execution=local)
+    if local:
+        assert caught.value is cause
+    assert settlements == ["unknown"]
+
+
+@pytest.mark.parametrize(
+    "state", ["pending", "waiting", "cancel_requested", "cancelled"]
+)
+def test_model_admission_rejects_non_running_or_cancel_requested_turn(
+    db, owners, state
+):
+    from app.models.chat import Conversation
+    from app.models.conversation_turn import ConversationTurn
+    from app.models.model_dispatch import AgentModelDispatch
+    from app.conversation.application.model_dispatch_service import (
+        start_model_dispatch,
+        ModelDispatchConflictError,
+    )
+
+    conversation = Conversation(user_id=owners[0].id)
+    db.add(conversation)
+    db.flush()
+    turn = ConversationTurn(
+        conversation_id=conversation.id,
+        user_id=owners[0].id,
+        mode="agent",
+        message="task",
+        status="running" if state == "cancel_requested" else state,
+        cancel_requested=state == "cancel_requested",
+        dispatch_generation=1,
+    )
+    db.add(turn)
+    db.flush()
+    with pytest.raises(ModelDispatchConflictError):
+        start_model_dispatch(
+            db,
+            call_id="forbidden-call",
+            turn_id=turn.id,
+            user_id=owners[0].id,
+            dispatch_generation=1,
+            provider="test",
+            model="test",
+            fingerprint="a" * 64,
+        )
+    assert db.query(AgentModelDispatch).count() == 0
+
+
+def test_terminal_turn_closes_unreceipted_model_call_without_refunding(
+    db, owners, monkeypatch
+):
+    from app.models.chat import Conversation
+    from app.models.conversation_turn import ConversationTurn
+    from app.conversation.application.model_dispatch_service import start_model_dispatch
+    from app.conversation.application.turn_store import _terminalize
+
+    # Keep service commits inside this SQLite fixture's rollback boundary.
+    monkeypatch.setattr(db, "commit", db.flush)
+    conversation = Conversation(user_id=owners[0].id)
+    db.add(conversation)
+    db.flush()
+    turn = ConversationTurn(
+        conversation_id=conversation.id,
+        user_id=owners[0].id,
+        mode="chat",
+        message="test",
+        status="running",
+    )
+    db.add(turn)
+    db.flush()
+    conversation.active_turn_id = turn.id
+    dispatch = start_model_dispatch(
+        db,
+        call_id="lost-call",
+        turn_id=turn.id,
+        user_id=owners[0].id,
+        dispatch_generation=1,
+        provider="test",
+        model="test",
+        fingerprint="a" * 64,
+        token_allowance=100,
+    )
+    changed, _ = _terminalize(
+        db, turn.id, allowed_statuses={"running"}, status="failed", error="worker_lost"
+    )
+    db.refresh(dispatch)
+    assert changed and conversation.active_turn_id is None
+    assert dispatch.status == "unknown" and dispatch.completed_at is not None
+    view = usage.usage_view(db, user_id=owners[0].id)
+    assert view["tokens_reserved"] == 100 and view["unresolved_all_dates"] == 1
 
 
 def test_password_hash_never_accepts_wrong_or_malformed_passwords():

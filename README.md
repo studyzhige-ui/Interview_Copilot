@@ -2,8 +2,9 @@
 
 Interview Copilot is a local-first career copilot. It combines job-search
 tracking, mock interviews, recording analysis, resume/JD retrieval, durable
-artifacts, user Skills, and MCP tools. Long-term Agent Memory remains behind
-its evaluation gate; the current runtime does not produce or recall it.
+artifacts, user Skills, and MCP tools. Automatic long-term memory production is disabled by default behind an
+evaluation gate. Recall of existing active memories is controlled separately
+by account and conversation settings.
 
 The repository ships one shared product core in two editions:
 
@@ -22,19 +23,13 @@ The repository ships one shared product core in two editions:
 · [Codebase architecture](docs/architecture/codebase.md) ·
 [Product and systems audit](docs/reports/full-product-and-systems-audit-2026-08-04.md)
 
-## Refactor branch status
+## Verification status
 
-The `refactor/product-runtime-convergence` branch integrates the shared Copilot
-workspace, invitation confirmation/preparation, text-first mock handoff, and
-runtime/RAG correctness fixes. It is not a completed product release: the
-[existing implementation ledger](docs/implementation/career-agent-os-ledger.md)
-records implementation and fixed-commit evidence. The branch now also contains
-real Celery/PostgreSQL recovery and Chromium campaigns, mock-answer generation
-fences, explicit retry consent, bounded retrieval workers and fail-closed model
-configuration. Use the current PR's checks, not an earlier green commit, as the
-execution evidence. No historical user records are discarded to make migrations
-pass. Live model quality, full-platform monetary accounting and memory release
-remain separate gates.
+See the [current Web/Docker acceptance record](docs/implementation/web-release-acceptance-2026-10-12.md)
+for tested workflows, fixes and remaining limitations. Passing contract tests
+does not certify external OAuth connections, live speech quality or vendor
+billing. Model weights are downloaded by the operator and are not distributed
+with this repository. No Windows installer is provided for this release scope.
 
 ## Core features
 
@@ -57,7 +52,7 @@ Native Windows users should use the [desktop launcher](desktop/README.md) with
 Docker Desktop or the full container stack below. The backend and Celery run in
 Linux. Use the Bash launchers below for host-backend development.
 
-Requirements: Python 3.11–3.13, Node.js 20+, Docker, and an active Python
+Requirements: Python 3.11–3.13, Node.js 24 LTS, Docker, and an active Python
 virtual environment. The setup script installs dependencies, starts the local
 infrastructure, applies migrations, and installs the frontend packages.
 
@@ -78,9 +73,11 @@ Open `http://localhost:5173`.
 
 ### Full container stack
 
-Copy the Community template, set a generated `SECRET_KEY` and any provider
-keys, then start the complete stack. Database migrations are built into this
-path.
+Copy the Community template, set a generated `SECRET_KEY` and the required
+provider keys, then start the Web services. Database migrations are built into
+this path. The lightweight image alone does not provide WhisperX speech;
+follow [local model deployment](docs/deployment/community.md#local-model-containers)
+for the local dependencies, weights and broker before testing audio.
 
 ```bash
 cp .env.community.example .env

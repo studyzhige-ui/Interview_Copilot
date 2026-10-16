@@ -2,10 +2,18 @@ import { apiClient } from './client';
 import type {
   Artifact,
   ArtifactRelation,
-  ArtifactSubmission,
   ArtifactVersion,
   ArtifactWriteInput,
 } from '@/types/career';
+
+export async function listAllArtifacts(includeArchived = false): Promise<Artifact[]> {
+  const all: Artifact[] = [];
+  for (let offset = 0; ; offset += 100) {
+    const rows = await listArtifacts(includeArchived, 100, offset);
+    all.push(...rows);
+    if (rows.length < 100) return all;
+  }
+}
 
 export async function listArtifacts(
   includeArchived = false,
@@ -33,33 +41,8 @@ export async function createArtifact(input: {
   ).data;
 }
 
-export async function getArtifact(artifactId: string): Promise<Artifact> {
-  return (await apiClient.get(`/artifacts/${encodeURIComponent(artifactId)}`)).data;
-}
-
 export async function listArtifactVersions(artifactId: string): Promise<ArtifactVersion[]> {
   return (await apiClient.get(`/artifacts/${encodeURIComponent(artifactId)}/versions`)).data;
-}
-
-export async function listArtifactRelations(artifactId: string): Promise<ArtifactRelation[]> {
-  return (await apiClient.get(`/artifacts/${encodeURIComponent(artifactId)}/related`)).data;
-}
-
-export async function listArtifactSubmissions(artifactId: string): Promise<ArtifactSubmission[]> {
-  return (await apiClient.get(`/artifacts/${encodeURIComponent(artifactId)}/submissions`)).data;
-}
-
-export async function createArtifactVersion(input: {
-  artifactId: string;
-  operationKey: string;
-  version: ArtifactWriteInput;
-}): Promise<Artifact> {
-  return (
-    await apiClient.post(`/artifacts/${encodeURIComponent(input.artifactId)}/versions`, {
-      operation_key: input.operationKey,
-      version: input.version,
-    })
-  ).data;
 }
 
 export async function archiveArtifact(artifactId: string): Promise<Artifact> {
@@ -75,18 +58,4 @@ export async function relateArtifactToOpportunity(
   })).data;
 }
 
-export async function recordArtifactSubmission(input: {
-  artifactId: string;
-  artifactVersionId: string;
-  jobOpportunityId: string;
-  operationKey: string;
-}): Promise<ArtifactSubmission> {
-  return (
-    await apiClient.post(`/artifacts/${encodeURIComponent(input.artifactId)}/submitted`, {
-      operation_key: input.operationKey,
-      artifact_version_id: input.artifactVersionId,
-      job_opportunity_id: input.jobOpportunityId,
-      ui_confirmation: 'product_ui',
-    })
-  ).data;
-}
+export async function restoreArtifact(artifactId: string): Promise<Artifact> { return (await apiClient.post<Artifact>(`/artifacts/${encodeURIComponent(artifactId)}/restore`)).data; }

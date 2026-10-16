@@ -177,11 +177,11 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
       setResume(EMPTY_RESUME);
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {
-        // Two-active-resume limit hit — guide the user to pick an existing one.
-        toast.error('已有两份简历，请从“选已有”中选择，或到“资料 > 资料库”管理');
+        // A conflict needs an explicit retry or an existing resume selection.
+        toast.error('简历保存发生冲突，请重试或到“求职 > 简历与材料”管理');
         setResumeMode('existing');
       } else if ((e as Error)?.message?.includes('解析')) {
-        toast.error('简历处理未完成，请到“资料 > 资料库”查看或替换');
+        toast.error('简历处理未完成，请到“求职 > 简历与材料”查看或替换');
         setResumeMode('existing');
       } else {
         toast.error('简历上传失败');
@@ -226,9 +226,9 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
     <p>用途：{purposeLabel}{focus && ` · ${focus}`}</p>
     <p>简历：{prefill.resume_id ? (resume.filename || '正在核实…') : '本次未使用简历'}</p>
     <p>回答方式：{prefill.input_mode === 'text' ? '文字，无需麦克风' : '语音，需检查麦克风'}</p>
-    <p>风格：{prefill.interviewer_style} · 预计题量：{prefill.target_question_count}</p>
-    {prefill.job_opportunity_id && <p>关联机会：{prefill.job_opportunity_id}</p>}
-    <label className="grid gap-2">本次岗位说明<textarea readOnly rows={8} className="rounded-lg border p-3" value={prefill.jd_text} /></label>
+    <p>风格：{STYLE_OPTIONS.find((option) => option.id === prefill.interviewer_style)?.label} · 预计题量：{prefill.target_question_count}</p>
+    {prefill.job_opportunity_id && <JobOpportunitySelect value={prefill.job_opportunity_id} onChange={() => {}} disabled ariaLabel="已关联岗位" />}
+    {prefill.jd_text && <details><summary className="cursor-pointer text-sm text-stone-500">查看本次岗位说明</summary><textarea aria-label="本次岗位说明" readOnly rows={8} className="mt-3 w-full rounded-lg border p-3" value={prefill.jd_text} /></details>}
     <p className="text-sm">以上设置绑定本次请求。需要调整时，请取消后修改 Copilot 请求。</p>
     <div className="flex gap-4">
       <button disabled={!ready || loadingResumes || starting} onClick={() => onPrefillApplied?.({ outcome: 'acknowledged' })}>确认设置并继续</button>
@@ -237,13 +237,13 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
   </section>;
 
   return (
-    <div className="px-4 md:px-6 py-8">
-      <div className="max-w-[720px] w-full mx-auto flex flex-col items-center">
+    <div className="workspace-page mock-setup">
+      <div className="max-w-[860px] w-full mx-auto flex flex-col items-center">
         {/* Header: clean, single hierarchy — title + subtitle, both centered. */}
-        <header className="mb-9 text-center">
-          <h2 className="text-[26px] font-semibold text-stone-800 leading-tight">
-            先确定本次练习目标
-          </h2>
+        <header className="mb-6 w-full">
+          <h1 className="text-[26px] font-semibold text-stone-800 leading-tight">
+            开始一次模拟面试
+          </h1>
           <p className="text-stone-500 text-[15px] mt-2.5 leading-relaxed">
             完整模拟需要简历和岗位说明；项目深挖只需简历，专项练习可以直接从具体目标开始。
           </p>
@@ -263,8 +263,9 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
           </label>}
         </div>
         {purpose === 'focused_practice' && <p className="mb-3 text-sm text-stone-500">简历和岗位说明均可不提供。{resume.id && <button type="button" className="ml-2 text-primary-700" onClick={() => setResume(EMPTY_RESUME)}>本次不使用简历</button>}</p>}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
           <ResumeCard
+            required={purpose !== 'focused_practice'}
             mode={resumeMode}
             setMode={setResumeMode}
             state={resume}
@@ -275,6 +276,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
             onPickExisting={pickExistingResume}
           />
           <JdCard
+            required={purpose === 'full'}
             mode={jdMode}
             setMode={setJdMode}
             state={jdDocument}
@@ -299,13 +301,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
             target_question_count: targetQuestionCount,
           })}
         />}
-        <div className="w-full mt-8 space-y-4">
-          <PrefGroup
-            label="面试官风格"
-            options={STYLE_OPTIONS}
-            value={style}
-            onChange={setStyle}
-          />
+        <div className="w-full mt-6 space-y-4">
           <PrefGroup
             label="回答方式"
             options={[
@@ -316,6 +312,10 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
             onChange={setInputMode}
             columns={2}
           />
+          <details className="rounded-xl border border-stone-200 bg-white p-5">
+            <summary className="cursor-pointer text-sm font-medium text-stone-700">调整面试风格、题量与关联岗位</summary>
+            <div className="mt-4 space-y-4">
+          <PrefGroup label="面试官风格" options={STYLE_OPTIONS} value={style} onChange={setStyle} />
           <PrefGroup
             label="预计题量"
             options={LENGTH_OPTIONS}
@@ -326,7 +326,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
           <p className="px-1 text-[12px] leading-relaxed text-stone-500">
             预计题量只用于控制面试节奏，实际题数可能因回答和追问有所变化。
           </p>
-          <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
+          <div className="rounded-xl border border-stone-200 bg-white p-5 ">
             <label className="text-[16px] font-semibold text-stone-800">关联岗位机会（可选）</label>
             <p className="mt-1 text-[12px] text-stone-500">选择后，本次模拟面试及后续复盘会关联到该求职进展。</p>
             <div className="mt-3">
@@ -338,7 +338,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
               />
             </div>
           </div>
-          <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
+          <div className="bg-white border border-stone-200 rounded-xl p-5 ">
             <label htmlFor="tts-voice" className="text-[16px] font-semibold text-stone-800">
               面试官音色
             </label>
@@ -356,9 +356,11 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
               语音合成需要部署中已启用相应服务；不可用时仍可继续文字面试。
             </p>
           </div>
+            </div>
+          </details>
         </div>
 
-        <div className="mt-9 flex justify-center">
+        <div className="mt-6 flex justify-center">
           <Btn
             size="lg"
             icon={ready ? <Mic size={16} /> : <Upload size={16} />}
@@ -387,6 +389,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
 }
 
 function ResumeCard({
+  required,
   mode,
   setMode,
   state,
@@ -396,6 +399,7 @@ function ResumeCard({
   onPickFile,
   onPickExisting,
 }: {
+  required: boolean;
   mode: 'upload' | 'existing';
   setMode: (m: 'upload' | 'existing') => void;
   state: ResumeState;
@@ -411,7 +415,7 @@ function ResumeCard({
     <div
       style={{ minHeight: 210 }}
       className={[
-        'p-5 bg-white rounded-2xl transition-all border-2 border-dashed shadow-[0_2px_10px_rgba(15,23,42,0.04)] flex flex-col',
+        'p-5 bg-white rounded-xl transition-all border-2 border-dashed  flex flex-col',
         done ? 'border-success-500' : 'border-stone-300 hover:border-primary-300',
       ].join(' ')}
     >
@@ -439,7 +443,7 @@ function ResumeCard({
         <div className="flex-1 min-w-0">
           <div className="text-[16px] font-semibold text-stone-800 flex items-center gap-1.5 leading-tight">
             上传简历
-            <span className="text-[11px] text-danger-500">*</span>
+            <span className={`text-[11px] ${required ? 'text-danger-500' : 'text-stone-400'}`}>{required ? '必选' : '可选'}</span>
           </div>
           <div className="text-[12px] text-stone-500 mt-0.5">用于个性化提问</div>
         </div>
@@ -563,7 +567,7 @@ function PrefGroup<T extends string | number>({
   columns?: 2 | 3;
 }) {
   return (
-    <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
+    <div role="group" aria-label={label} className="bg-white border border-stone-200 rounded-xl p-5">
       <div className="text-[16px] font-semibold text-stone-800 mb-3.5">{label}</div>
       <div className={`grid gap-2.5 ${columns === 3 ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
         {options.map((opt) => {
@@ -572,6 +576,7 @@ function PrefGroup<T extends string | number>({
             <button
               key={opt.id}
               type="button"
+              aria-pressed={active}
               onClick={() => onChange(opt.id)}
               className={[
                 'text-left px-3.5 py-2.5 rounded-xl border transition-colors',
@@ -600,6 +605,7 @@ function PrefGroup<T extends string | number>({
 
 
 function JdCard({
+  required,
   mode,
   setMode,
   state,
@@ -608,6 +614,7 @@ function JdCard({
   inputRef,
   onPick,
 }: {
+  required: boolean;
   mode: 'upload' | 'paste';
   setMode: (m: 'upload' | 'paste') => void;
   state: JdState;
@@ -623,7 +630,7 @@ function JdCard({
     <div
       style={{ minHeight: 210 }}
       className={[
-        'p-5 bg-white rounded-2xl transition-all border-2 border-dashed shadow-[0_2px_10px_rgba(15,23,42,0.04)] flex flex-col',
+        'p-5 bg-white rounded-xl transition-all border-2 border-dashed  flex flex-col',
         done ? 'border-success-500' : 'border-stone-300 hover:border-primary-300',
       ].join(' ')}
     >
@@ -650,7 +657,7 @@ function JdCard({
         <div className="flex-1 min-w-0">
           <div className="text-[16px] font-semibold text-stone-800 flex items-center gap-1.5 leading-tight">
             上传岗位 JD
-            <span className="text-[11px] text-danger-500">*</span>
+            <span className={`text-[11px] ${required ? 'text-danger-500' : 'text-stone-400'}`}>{required ? '必选' : '可选'}</span>
           </div>
           <div className="text-[12px] text-stone-500 mt-0.5">用于定位提问方向</div>
         </div>

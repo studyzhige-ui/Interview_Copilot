@@ -1,6 +1,6 @@
 # Agent Memory 生命周期
 
-状态：2026-09-23 当前实现说明。范围为 Interview Copilot 的低权威经验记忆；不替代 CareerProfile、History、CopilotPreference、Artifact 或运行状态，也不修改已迁移的 CareerOS 项目。本轮已验证的记忆保留、版本反馈和上下文预算改进见 [非 RAG 发布记录](../implementation/non-rag-release-20260923.md)。
+状态：2026-10-14 核对当前主线。范围为 Interview Copilot 的低权威经验记忆；不替代 CareerProfile、History、CopilotPreference、Artifact 或运行状态。历史记忆保留、版本反馈和上下文预算改进见 [非 RAG 发布记录](../implementation/non-rag-release-20260923.md)，当前链路验收见 [项目审查记录](../implementation/full-project-audit-2026-10-13.md#2026-10-14-记忆模块复核)。
 
 ## 设计来源与适配
 
@@ -95,8 +95,8 @@ Context Compiler 先取当前用户最多 100 条有效记忆的简短索引，�
 
 ## 验证与边界
 
-契约与事务测试：`backend/tests/test_services/test_memory_pipeline.py`。
-真实 PostgreSQL 并发领取和非空旧数据升级：`backend/tests/test_db/test_memory_pipeline_postgres.py`。
+当前契约与生命周期测试：`backend/tests/test_memory_lifecycle.py`，覆盖贡献与召回控制、两个生产阶段、用户隔离、编辑与晋升、删除与保留期限、失败退避和模型调用期间撤销。
+真实 PostgreSQL 迁移及跨连接并发领取：`backend/tests/test_database_mainline.py`。非空旧数据升级的历史验证保留在迁移记录，不把已删除的旧测试文件列为当前入口。
 真实内部模型合成场景：`python evaluation/memory_lifecycle_eval.py --live --output data/logs/memory-eval.json`。
 
 真实模型与完整服务链路（临时 SQLite，不使用用户数据）：`python evaluation/memory_lifecycle_eval.py --live --integration-only --output data/logs/memory-integration.json`。

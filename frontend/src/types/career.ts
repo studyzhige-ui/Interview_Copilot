@@ -8,6 +8,7 @@ export interface ConfirmationInput {
 interface DatedFact {
   start_date?: string | null;
   end_date?: string | null;
+  ongoing?: boolean;
 }
 
 export type PersonalFact =
@@ -31,7 +32,12 @@ export type PersonalFact =
       description?: string | null;
       technologies: string[];
     })
-  | { kind: 'skill'; name: string; category?: string | null }
+  | { kind: 'skill'; name: string; category?: string | null; description?: string | null }
+  | { kind: 'personal'; name: string; gender?: 'male' | 'female' | 'undisclosed'; birth_date?: string | null; career_status?: string | null; availability?: string | null }
+  | { kind: 'summary'; text: string }
+  | { kind: 'certificate'; title: string; issuer?: string | null; occurred_on?: string | null; description?: string | null }
+  | (DatedFact & { kind: 'organization'; organization: string; role?: string | null; description?: string | null })
+  | (DatedFact & { kind: 'volunteer'; organization: string; role?: string | null; hours?: number | null; description?: string | null })
   | {
       kind: 'achievement';
       title: string;
@@ -111,9 +117,8 @@ export interface CareerProfileDraft {
   version: number;
   created_at: string;
   resolved_at: string | null;
-  /** Present on the canonical 0029 projection; optional keeps cached/legacy
-   * clients readable during a rolling deployment. */
-  candidates?: CareerProfileCandidateItem[];
+  /** Canonical reviewable items created by the profile owner. */
+  candidates: CareerProfileCandidateItem[];
 }
 
 export interface CareerProfileCandidateItem {
@@ -305,6 +310,7 @@ export interface ArtifactWriteInput {
 }
 
 export interface ArtifactVersion {
+  document_json?: Record<string, unknown> | null;
   id: string;
   artifact_id: string;
   version_no: number;
@@ -333,20 +339,6 @@ export interface ArtifactRelation {
   artifact_id: string;
   job_opportunity_id: string;
   created_at: string;
-}
-
-export interface ArtifactSubmission {
-  id: string;
-  job_opportunity_id: string;
-  artifact_id: string;
-  artifact_version_id: string;
-  basis: 'user_confirmation' | 'product_ui_confirmation' | 'external_receipt';
-  confirmation_message_id: number | null;
-  receipt_owner_type: string | null;
-  receipt_owner_id: string | null;
-  submitted_at: string;
-  /** Immutable version frozen when this use assertion was recorded. */
-  submitted_version: ArtifactVersion;
 }
 
 export interface OfferSourceInput {

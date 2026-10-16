@@ -5,7 +5,7 @@ it came from a real audio upload (source='upload') or an AI mock interview
 (source='mock'). Per-question rows live in InterviewQA, addressed by the
 record's id.
 
-The analysis orchestrator (see services/interview/analysis_orchestrator.py)
+The analysis orchestrator (see interviews/application/analysis_orchestrator.py)
 drives state transitions; this module is just persistence helpers.
 """
 
@@ -33,7 +33,7 @@ from app.interviews.application.analysis_context import build_analysis_context
 from app.media.application.transcript_evidence import TranscriptEvidence
 from app.media.application.transcript_evidence import render_raw_turns
 
-from app.interviews.application.review_fence import lock_record
+from app.interviews.application.review_fence import ReviewSuperseded, lock_record
 from app.core.scoring import validate_score
 
 logger = logging.getLogger(__name__)
@@ -161,6 +161,8 @@ class InterviewRecordService:
         *,
         offset: int = 0,
         limit: int = 20,
+        job_opportunity_id: str | None = None,
+        include_invitations: bool = True,
     ) -> list[InterviewRecord]:
         """Records for the review list. mock_in_progress is always hidden
         (the run lives on the mock page, not here). processing_review is
@@ -170,21 +172,26 @@ class InterviewRecordService:
         db: Session = SessionLocal()
         try:
             stale_review_cutoff = utc_now() - _PROCESSING_REVIEW_GRACE
-            return (
-                db.query(InterviewRecord)
-                .filter(
-                    InterviewRecord.user_id == resolve_user_pk(db, user_id),
-                    or_(
-                        ~InterviewRecord.status.in_(MOCK_HIDDEN_STATUSES),
-                        # Stuck reviews become visible after the grace
-                        # period so the user can reach the retry button.
-                        and_(
-                            InterviewRecord.status == STATUS_PROCESSING_REVIEW,
-                            InterviewRecord.updated_at < stale_review_cutoff,
-                        ),
+            query = db.query(InterviewRecord).filter(
+                InterviewRecord.user_id == resolve_user_pk(db, user_id),
+                or_(
+                    ~InterviewRecord.status.in_(MOCK_HIDDEN_STATUSES),
+                    # Stuck reviews become visible after the grace
+                    # period so the user can reach the retry button.
+                    and_(
+                        InterviewRecord.status == STATUS_PROCESSING_REVIEW,
+                        InterviewRecord.updated_at < stale_review_cutoff,
                     ),
+                ),
+            )
+            if job_opportunity_id is not None:
+                query = query.filter(
+                    InterviewRecord.job_opportunity_id == job_opportunity_id
                 )
-                .order_by(InterviewRecord.created_at.desc())
+            if not include_invitations:
+                query = query.filter(InterviewRecord.source != "invitation")
+            return (
+                query.order_by(InterviewRecord.created_at.desc())
                 .offset(offset)
                 .limit(limit)
                 .all()
@@ -393,43 +400,41 @@ class InterviewRecordService:
             if own_db:
                 db.close()
 
-    def set_transcript_projection(
+    def publish_recording_qa(
         self,
+        record_id: str,
         transcript_id: str,
         *,
         structure: dict[str, Any],
         quality: dict[str, Any],
-        db: Session | None = None,
+        qa_pairs: list[dict[str, Any]],
     ) -> None:
-        own_db = db is None
-        if own_db:
-            db = SessionLocal()
-        try:
-            transcript = (
-                db.query(InterviewTranscript)
-                .filter(InterviewTranscript.id == transcript_id)
-                .first()
-            )
-            if transcript is None:
-                raise ValueError(f"InterviewTranscript {transcript_id} does not exist")
-            lock_record(db, transcript.record_id)
-            transcript.structure_schema_version = int(
-                structure.get("schema_version") or 1
-            )
-            transcript.structure_json = structure
-            transcript.quality_json = quality
-            transcript.updated_at = utc_now()
-            if own_db:
-                db.commit()
-            else:
-                db.flush()
-        except Exception:
-            if own_db:
-                db.rollback()
-            raise
-        finally:
-            if own_db:
-                db.close()
+        """Publish one complete extraction checkpoint in a short transaction."""
+        with SessionLocal() as db:
+            with db.begin():
+                record = lock_record(db, record_id)
+                if record is None or record.transcript_id != transcript_id:
+                    raise ReviewSuperseded("review_transcript_superseded")
+                transcript = db.get(InterviewTranscript, transcript_id)
+                if transcript is None or transcript.record_id != record_id:
+                    raise ReviewSuperseded("review_transcript_superseded")
+                # A retry replaces the whole extraction; row counts cannot prove
+                # that a previous partial result belongs to this model response.
+                db.query(InterviewQA).filter_by(record_id=record_id).delete(
+                    synchronize_session=False
+                )
+                self.bulk_insert_qa(
+                    record_id,
+                    [
+                        {**pair, "source_transcript_id": transcript_id}
+                        for pair in qa_pairs
+                    ],
+                    db=db,
+                )
+                transcript.structure_schema_version = structure["schema_version"]
+                transcript.structure_json = structure
+                transcript.quality_json = quality
+                transcript.updated_at = utc_now()
 
     def get_transcript_text(self, record_id: str, db: Session | None = None) -> str:
         """Return the record's current transcript full text ("" if none)."""
@@ -532,10 +537,20 @@ class InterviewRecordService:
         try:
             lock_record(db, record_id)
             inserted: list[InterviewQA] = []
-            existing_count = (
-                db.query(InterviewQA).filter(InterviewQA.record_id == record_id).count()
+            previous = (
+                db.query(InterviewQA)
+                .filter(InterviewQA.record_id == record_id)
+                .order_by(InterviewQA.order_idx)
+                .all()
             )
+            existing_count = len(previous)
             for offset, payload in enumerate(qa_inputs):
+                parent = None
+                if payload.get("parent_index") is not None:
+                    index = payload["parent_index"]
+                    if type(index) is not int or not 1 <= index <= len(previous):
+                        raise ValueError("QA parent must reference an earlier question")
+                    parent = previous[index - 1]
                 refs = payload.get("grounding_refs")
                 aq = payload.get("answer_quality")
                 row = InterviewQA(
@@ -548,11 +563,13 @@ class InterviewRecordService:
                     answer=str(payload.get("answer") or ""),
                     question_summary=payload.get("question_summary"),
                     is_follow_up=bool(payload.get("is_follow_up", False)),
-                    parent_qa_id=payload.get("parent_qa_id"),
+                    parent_qa_id=parent.id if parent else payload.get("parent_qa_id"),
                     grounding_refs_json=(
                         json.dumps(refs, ensure_ascii=False) if refs else None
                     ),
-                    follow_up_depth=int(payload.get("follow_up_depth") or 0),
+                    follow_up_depth=(parent.follow_up_depth + 1)
+                    if parent
+                    else int(payload.get("follow_up_depth") or 0),
                     source_segment_start=payload.get("source_segment_start"),
                     source_segment_end=payload.get("source_segment_end"),
                     source_transcript_id=payload.get("source_transcript_id"),
@@ -568,6 +585,7 @@ class InterviewRecordService:
                 )
                 db.add(row)
                 inserted.append(row)
+                previous.append(row)
             if own_db:
                 db.commit()
                 for row in inserted:

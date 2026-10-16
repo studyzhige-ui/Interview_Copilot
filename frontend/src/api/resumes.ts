@@ -55,7 +55,7 @@ export async function waitForResumeUsable(
 
 /** Upload a file as a NEW personal resume entity. Returns the resume (parsing
  *  into sections happens asynchronously server-side). May 409 if the user
- *  already has two active resumes. */
+ *  has reached the active resume capacity. */
 export async function createResumeFromFile(
   file: File,
   opts: { title?: string; make_default?: boolean } = {},
@@ -69,7 +69,7 @@ export async function createResumeFromFile(
   });
 }
 
-/** Replace one resume without briefly exceeding the two-resume limit. */
+/** Replace the source file while retaining the same resume identity and history. */
 export async function replaceResumeFromFile(
   id: string,
   file: File,
@@ -92,8 +92,4 @@ export async function setDefaultResume(id: string): Promise<PersonalResume> {
 export async function retryResumeParse(id: string): Promise<PersonalResume> {
   const res = await apiClient.post(`/resumes/${encodeURIComponent(id)}/parse`);
   return res.data;
-}
-
-export async function deleteResume(id: string): Promise<void> {
-  await apiClient.delete(`/resumes/${encodeURIComponent(id)}`);
 }

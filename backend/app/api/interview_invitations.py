@@ -17,8 +17,6 @@ from app.career.application.interview_invitation_operations import (
     InvitationVersionConflictError,
     InterviewInvitationOperationError,
     get_interview_invitation_candidate,
-    get_interview_invitation_handoff,
-    list_interview_invitation_handoffs,
 )
 from app.career.application.fixture_invitation_adapter import (
     ingest_fixture_interview_invitation,
@@ -32,7 +30,6 @@ from app.schemas.interview_invitation import (
     FixtureInterviewInvitationInput,
     FixtureInterviewInvitationResult,
     InterviewInvitationCandidateView,
-    InterviewInvitationHandoffView,
 )
 
 
@@ -170,39 +167,6 @@ def read_invitation_candidate(
             db,
             user_pk=current_user.id,
             candidate_id=candidate_id,
-        )
-    except InterviewInvitationOperationError as exc:
-        raise _http_error(exc) from exc
-
-
-@router.get(
-    "/interviews",
-    response_model=list[InterviewInvitationHandoffView],
-)
-def list_confirmed_invitation_interviews(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db, scope="function"),
-) -> list[InterviewInvitationHandoffView]:
-    return list_interview_invitation_handoffs(
-        db,
-        user_pk=current_user.id,
-    )
-
-
-@router.get(
-    "/interviews/{interview_id}/handoff",
-    response_model=InterviewInvitationHandoffView,
-)
-def read_invitation_handoff(
-    interview_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db, scope="function"),
-) -> InterviewInvitationHandoffView:
-    try:
-        return get_interview_invitation_handoff(
-            db,
-            user_pk=current_user.id,
-            interview_id=interview_id,
         )
     except InterviewInvitationOperationError as exc:
         raise _http_error(exc) from exc

@@ -56,8 +56,8 @@ function AnswerPlayer({ recordId, qaId, assetId, url }: Props) {
       if (!controller.signal.aborted) setStatus('failed');
     } finally { pending.current = false; }
   };
-  return <span className="min-w-0 max-w-full">
-    <audio key={generation} ref={audio} controls preload="none" src={source} className="h-7 w-full max-w-[220px]"
+  return <div className="mb-2 w-full max-w-sm">
+    <audio key={generation} ref={audio} controls preload="none" src={source} className="w-full"
       aria-label="回答原录音" onError={() => { void recover(); }} onLoadedMetadata={() => {
         const player = audio.current;
         if (!player || restoreTime.current === null) return;
@@ -68,5 +68,5 @@ function AnswerPlayer({ recordId, qaId, assetId, url }: Props) {
     {status === 'renewing' && <span role="status" className="block text-xs text-stone-500">正在重新核实原录音…</span>}
     {status === 'renewed' && <span role="status" className="block text-xs text-stone-500">播放链接已刷新，请重新播放</span>}
     {status === 'failed' && <span role="alert" className="block text-xs text-stone-600">原录音暂不可用，请重新读取记录后再试。</span>}
-  </span>;
+  </div>;
 }

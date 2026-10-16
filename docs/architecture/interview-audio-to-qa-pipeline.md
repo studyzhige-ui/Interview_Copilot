@@ -1,282 +1,51 @@
-# 面试录音到可审计 QA 的证据流水线
+# 面试录音到问答的主线
 
-> 状态：现行专项实施设计；不定义产品或目标架构
-> 上位规范：[`career-agent-os-blueprint.md`](./career-agent-os-blueprint.md)
-> 本设计继续替代旧的“长文本分块后让模型生成 QA 文本”实现；与上位规范冲突时必须先修订本设计。
+现行实现，2026-10-14 更新。产品边界见 [架构蓝图](career-agent-os-blueprint.md)。
 
-## 1. 目标与非目标
+## 职责与数据流
 
-上传录音的复盘链必须同时满足三件事：
+1. `FileAsset` 管理原始录音、归属和版本。
+2. WhisperX 在有界 PCM 窗口中转写并强制对齐；窗口核心区各自拥有原始音频区间，重叠部分为说话人判断提供上下文。
+3. Pyannote 收集各窗口中经过模型自身有效语音过滤的原始声学观测，在完整录音范围执行 PLDA／VBx 聚类，再逐窗用全局中心重建说话人时间轨。不能先把窗口内观测平均为中心再聚类，那会丢失每种声音的样本支持。默认由模型在 1–32 人的协议容量内推断人数，不把面试角色数量当成声学人数；已知人数时可显式配置上下界。向量不持久化，不用自定余弦阈值决定新身份。
+4. `InterviewTranscript.evidence_json` 保存原始识别词、稳定 word ID、时间、声学说话人和普通／exclusive 时间轨。模型无法对齐的词保留缺失标记，不伪造时间。
+5. `recording_qa_service` 一次接收完整转写，让 LLM 直接提取通顺的问答及其来源范围。声学角色和自动转写均可能出错，允许基于语义纠正明显错字和归属；不得补写经历、数字、观点或替候选人回答。
+6. `InterviewQA` 保存整理正文与 `source_provenance_json`。分析服务只负责评分、建议和综合报告；示范答案与来源回答分开。
 
-1. 尽可能完整保留候选人的原始回答；
-2. 把 ASR 的停顿词、环境噪声、立即重复和说话人交叉整理成可读问答；
-3. 任何展示内容都能回到真实录音对应的词级证据，不允许模型悄悄改写。
+原始转写是识别结果，不是绝对正确的语义事实。最终问答允许整理，原始词仍可回读、定位录音。LLM 的语义判断不会反写原始证据。
 
-本流水线不把“润色答案”混进原始 QA。改进建议和示范答案仍属于后续分析结果，必须与来源回答分栏显示。
+全录音声学观测最多 8192 条；跨进程以小端 float32 编码传递，保持模型原值，消息帧上限 16 MiB。超过容量时明确失败，不抽样丢弃观测。此限制与音频时长、词数和 LLM 上下文限制共同生效，不代表已验证任意时长录音。
 
-## 2. 权威依据
+## 模型执行归属
 
-- WhisperX 使用 VAD、强制对齐和词级时间戳处理长音频，说明 ASR 文本和词级对齐应当是两个明确步骤，而不是只保存一段 Markdown。
-- pyannote Community-1 同时提供普通 diarization 与 exclusive diarization。普通轨保留重叠语音事实；exclusive 轨为每一时刻选择一个主要说话人，适合与转写词时间戳对齐。
-- meeting recognition 研究表明说话人变化可能发生在句中，不能把整段 ASR segment 的多数说话人直接赋给每个词。
-- MRDA 等会议语料将 dialogue act 与 adjacency pair 分开标注。因此“这句话是什么行为”和“它属于哪个问答”必须是两个层次。
-- ASR 标点恢复、口语不流利识别和正文编辑是下游变换。变换不能覆盖原始识别证据。
+模拟面试的短录音、实时语音窗口、上传录音和音频资料入库统一在 `transcription` Worker 执行。Worker 启动时加载并预热 WhisperX，面试期间及面试之间保持模型常驻；API 不加载模型。短回答只生成可编辑文字，完整录音继续执行下述证据与问答流程。
 
-权威实现参考：WhisperX、pyannote.audio Community-1、NVIDIA NeMo diarization、ICSI MRDA。具体链接记录在本文末尾。
+短录音先保存原声和转写任务，再返回任务身份。页面区分准备、排队和转写，刷新只读取同一任务；中断时保留原声，明确重试复用原文件而不是重复上传。实时窗口只使用短期结果，不写入正式面试记录，确认回答仍是独立业务操作。
 
-## 3. 单一事实所有权
+## 提取契约
 
-```text
-FileAsset(audio)
-  -> InterviewTranscript.evidence_json       # 不可变词级证据
-  -> InterviewTranscript.structure_json      # 可重算结构投影
-  -> InterviewQA.source_provenance_json       # 冻结的 QA 证据范围
-  -> InterviewQA.question / answer            # 由程序从证据渲染
-  -> scoring / synthesis / AbilitySignal      # 下游分析，不反写来源
-```
+模型直接返回 question、answer、phase、parent_index 和 question_sources／answer_sources。来源是原始词的起止 ID 区间，可以跨声学标签。追问引用前面的题号。未回答的问题保留空答案，不编造回复。
 
-- `InterviewTranscript` 是录音转写的唯一 owner。
-- `InterviewQA` 只保存该 transcript 的确定性投影和精确 provenance。
-- LLM 不拥有问题或答案正文。
-- `segments_json` 旧字符串格式退出生产读取；升级后的上传录音必须存在 v2 evidence。
-- Mock Interview 已经有结构化 ConversationMessage，不经过音频 evidence 流水线。
+服务端验证 JSON、引用存在、范围有序且无重叠、问题与答案不引用同一词、追问指向前题。来源 ID 用于定位，不要求整理正文与 ASR 逐字相同。声学标签不确定不阻止语义提取。完整输入不截断；超过模型能力或模型返回不完整 JSON 时失败，不发布部分结果。
 
-## 4. 冻结不变量
+`structure_json` schema 2 只保留显示所需的声学角色建议。`quality_json` 保存提取完成状态和具体疑点，不再将模型自己的分类当成正确率或覆盖率。前端显示整理说明、疑点及回听入口。
 
-1. ASR 词一旦写入 evidence，不得由结构化或分析阶段修改、删除或替换。
-2. 每个词有稳定 `word_id`、时间区间、ASR 置信度和说话人归属证据。
-3. 普通 diarization 保留重叠；exclusive diarization 只用于确定主说话人，不覆盖重叠事实。
-4. 结构模型只能返回已存在的 ID、枚举和置信度，不能返回问题或答案文本。
-5. QA 正文只能由服务端按 `word_id` 拼接；任何隐藏词都记录 `word_id + reason`。
-6. 允许的 display edit 只有：插入标点、隐藏明确噪声/填充词、隐藏紧邻的完全重复口吃。禁止同义改写、概括和重排。
-7. 面试官的短确认、追问插话不能截断候选人的长回答；下一个真实问题或会话终止才关闭回答窗口。
-8. 候选人的实质性词覆盖率必须被计算。未进入 QA 的内容要么归类为非回答行为并可审计，要么使结果进入 `needs_review`，不能静默成功。
-9. 说话人角色不确定、词级对齐缺失、结构 ID 非法或覆盖率不足时，分析报告不得继续生成。
-10. 重新结构化可以生成新 projection revision，但不能改变 evidence revision。
+## 恢复与用户修正
 
-## 5. Stage A：音频标准化
+- 转写已完成时可从 extract 阶段重新提取，不重复支付 ASR 成本。
+- 只有完成提取阶段的 QA 才能在失败恢复时复用。完成状态、结构与整组 QA 在同一事务发布；写入失败整体回滚，当前转写或 review generation 已变化的旧任务不能发布。
+- 用户纠正转写或角色后保存新证据版本，旧分析失效；用户明确重分析后重新提取。
+- 用户直接编辑 QA 时保留原始来源及编辑标记。
+- Mock Interview 使用已有结构化对话消息，直接进入统一分析服务，不转成音频再识别。
 
-输入是 owner 已验证的 `FileAsset`。运行时生成临时 WAV：单声道、16 kHz、float/PCM 规范化；不覆盖原文件。记录：
+## 已移除的设计
 
-- 原文件 identity/version；
-- 音频 SHA-256、时长、采样率和声道数；
-- ASR、alignment、diarization 模型及版本；
-- pipeline schema version。
+不再保留角色分类、utterance 分类、episode 分类三段 LLM 链；不再由程序按声学角色拼接答案；删除角色修补分支、词表隐藏、标点插补及自算覆盖率门槛。不是放宽旧门槛，而是移除不能证明语义正确的判断依据。
 
-解码失败、空音频、时长越界为 typed failure。
+## 验证依据与边界
 
-## 6. Stage B：词级 ASR 与强制对齐
+- `test_recording_qa.py`：同一错误声学标签覆盖双方、ASR 同音错误、引用定位与原始证据不变；无效引用拒绝发布。
+- `test_audio_boundaries.py`：PCM 核心区完整归属、全局说话人聚类及 broker 契约。
+- `model_acceptance/test_complete_recording.py`：完整 121.617375 秒录音、393 个实质字符、跨窗口关键句与说话人连续性。
+- 真实 DeepSeek 验收对照合成双人录音全文核对最终问答；不能以状态 completed 或来源引用有效替代内容检查。
 
-本地路径使用 WhisperX：
-
-1. VAD 切分语音区域；
-2. ASR 生成词序列；
-3. language-specific align model 生成词级 `start/end`；
-4. 无法对齐的 token 保留并标记 `alignment_status=missing`，不得凭空制造时间。
-
-生产 QA 要求实质性词具备可用时间范围。仅有段级文本的旧 transcript 不能重新提取 QA，用户必须选择“从录音重新转写”。
-
-## 7. Stage C：说话人分离与重叠语音
-
-面试默认以两位说话人为约束运行 Community-1：
-
-- regular diarization：保留重叠区间；
-- exclusive diarization：为转写对齐提供单一主说话人；
-- 每个词按时间重叠面积分配 exclusive speaker；
-- 同时计算该词与 regular tracks 的重叠比例和 `overlap=true/false`；
-- 没有足够重叠时使用 `speaker_id=null`，而不是继承上一句。
-
-角色映射是独立步骤。模型依据有界的 acoustic turns 判定 `interviewer/candidate/unknown`，并只返回 speaker ID。若两者无法可靠区分则进入人工确认，不继续生成报告。
-
-## 8. Canonical Evidence JSON v2
-
-```json
-{
-  "schema_version": 2,
-  "audio": {
-    "file_asset_id": "...",
-    "file_asset_version": "...",
-    "sha256": "...",
-    "duration_seconds": 123.4
-  },
-  "models": {
-    "asr": "...",
-    "alignment": "...",
-    "diarization": "pyannote/speaker-diarization-community-1"
-  },
-  "words": [
-    {
-      "word_id": "w000001",
-      "text": "您好",
-      "start": 1.02,
-      "end": 1.31,
-      "asr_confidence": 0.94,
-      "alignment_status": "aligned",
-      "speaker_id": "SPEAKER_00",
-      "speaker_confidence": 0.91,
-      "overlap": false
-    }
-  ],
-  "diarization": {
-    "regular": [{"start": 1.0, "end": 1.4, "speaker_id": "SPEAKER_00"}],
-    "exclusive": [{"start": 1.0, "end": 1.4, "speaker_id": "SPEAKER_00"}]
-  },
-  "acoustic_turns": [
-    {
-      "turn_id": "t0001",
-      "speaker_id": "SPEAKER_00",
-      "start_word_id": "w000001",
-      "end_word_id": "w000020"
-    }
-  ]
-}
-```
-
-Evidence 在写入前执行完整校验：ID 唯一、词序单调、时间不倒退、turn 范围连续且同 speaker、所有引用存在。
-
-## 9. Stage D：对话结构投影
-
-结构模型接收 acoustic turn、词 ID 和原词，但输出严格 JSON：
-
-```json
-{
-  "speaker_roles": [
-    {"speaker_id": "SPEAKER_00", "role": "interviewer", "confidence": 0.97}
-  ],
-  "utterances": [
-    {
-      "utterance_id": "u0001",
-      "speaker_id": "SPEAKER_00",
-      "start_word_id": "w000001",
-      "end_word_id": "w000020",
-      "dialogue_act": "question",
-      "confidence": 0.95,
-      "punctuation": [{"after_word_id": "w000020", "mark": "？"}],
-      "hidden_words": [{"word_id": "w000002", "reason": "filled_pause"}]
-    }
-  ]
-}
-```
-
-允许的 `dialogue_act`：`question | answer | acknowledgement | context | interruption | closing | noise`。
-
-服务端拒绝以下输出：不存在的 ID、跨 speaker 范围、重叠/倒序 utterance、非法标点、隐藏实质性词、超过原 acoustic turn 边界。未覆盖词会自动形成 `context/unknown` utterance，因此模型不能让词消失。
-
-## 10. Stage E：确定性 QA episode
-
-模型最多只标记问题 utterance 的关系：
-
-```json
-{
-  "episodes": [
-    {
-      "question_utterance_ids": ["u0003", "u0004"],
-      "phase": "technical",
-      "is_follow_up": true,
-      "parent_episode_index": 1,
-      "confidence": 0.92
-    }
-  ]
-}
-```
-
-答案范围由程序生成：
-
-1. 从问题结束后开始；
-2. 收集 candidate 的 `answer/context` utterance；
-3. interviewer 的 acknowledgement/interruption 作为交叉对话保留在 provenance，但不截断回答；
-4. 遇到下一个有效 question 或 closing 结束；
-5. 没有候选回答的提问不生成已回答 QA，可作为 `unanswered` 结构项展示。
-
-问题和回答都从 evidence 重新渲染，绝不使用模型返回正文。
-
-## 11. Display cleanup
-
-原始 transcript 与整理后的 QA 同时可读：
-
-- 原始转写：按 acoustic turns 展示全部原词；
-- 整理 QA：隐藏审计允许的非语义 token，插入标点和段落；
-- 改进回答：分析层单独展示，不得标成原话。
-
-默认允许隐藏：`嗯/呃/额/啊` 等孤立填充词、显式 `[noise]`、相邻且内容完全相同的口吃 token。诸如“然后”“就是”“我觉得”可能承载语义，不得仅凭词表删除。
-
-## 12. 覆盖率与完成门
-
-保存以下指标：
-
-- `aligned_word_ratio`；
-- `known_speaker_word_ratio`；
-- `role_resolved_substantive_word_ratio`：声学轨缺口可由模型只引用词 ID
-  做保守角色恢复；原始 `speaker_id=null` 保持不变，来源标为
-  `semantic_recovery`，不得把语义判断伪装成声学事实；
-- `candidate_substantive_word_coverage`；
-- `question_word_coverage`；
-- `hidden_word_ratio`；
-- `overlap_word_ratio`；
-- `low_confidence_episode_count`。
-
-默认完成门：候选人实质性词覆盖率不低于 95%，隐藏实质性词为 0，所有 QA provenance 可回读。低于门槛时状态为 `needs_review`，报告和 AbilitySignal 不得标记完整生成。
-
-## 13. 持久层
-
-`interview_transcripts` 新增：
-
-- `evidence_schema_version`；
-- `evidence_json` JSONB；
-- `structure_schema_version`；
-- `structure_json` JSONB；
-- `quality_json` JSONB。
-
-`interview_qa` 新增：
-
-- `source_transcript_id` FK；
-- `source_provenance_json` JSONB，其中保存 question/answer word IDs、交叉 utterance、隐藏词、标点和 projection revision。
-
-旧 `segments_json` 不再被新运行时写入或读取。迁移保留旧列仅用于历史审计；后续数据保留期结束后再单独物理删除，避免部署升级直接丢历史。
-
-## 14. 失败与恢复
-
-| code | 语义 | 恢复 |
-| --- | --- | --- |
-| `transcript_evidence_required` | 只有旧文本，没有词级证据 | 从原录音重新转写 |
-| `word_alignment_incomplete` | 实质性词无法对齐 | 重试 ASR/align 或人工复核 |
-| `speaker_roles_ambiguous` | 无法可靠区分面试官和候选人 | 用户确认角色 |
-| `structure_projection_invalid` | 模型返回非法 ID/范围 | 同 evidence 重试结构投影 |
-| `qa_coverage_insufficient` | 回答覆盖不足 | 人工复核结构，不生成完整报告 |
-| `audio_overlap_requires_review` | 关键问题位于严重重叠区 | 展示音频窗口并人工确认 |
-
-重试分层执行：ASR 失败才重做 evidence；结构失败只重做 structure；评分失败只重做分析。任何后层重试都不修改前层 owner。
-
-## 15. 替换与删除清单
-
-实现时必须一次性完成：
-
-1. 删除 analysis service 中旧的文本分块、speaker 行正则、关键词角色投票、问题结尾启发式、chunk overlap 去重和二次配对实现；
-2. 删除旧 QA extraction/pairing prompts；
-3. 上传录音 orchestrator 只调用新 evidence/structure/QA projection services；
-4. 文档音频摄取仍可使用返回纯文本的通用 transcription API，两条路径不混用；
-5. 旧 transcript 无 v2 evidence 时 fail closed，不偷偷回退旧 extractor；
-6. 删除只服务旧 extractor 的测试，新增 evidence、validator、coverage、重叠语音、长回答不中断和真实录音回归测试。
-
-## 16. 验收场景
-
-- 候选人连续回答数分钟，中间有面试官“嗯/好的”插话：回答保持完整；
-- 面试官连续追问两个独立技术问题：形成两个 QA，不合并；
-- 候选人反问、面试官解释：不把面试官解释写入候选人答案；
-- 两人重叠讲话：regular track 保留 overlap，exclusive track 用于主 speaker，低置信度标记复核；
-- 结尾寒暄和“服务”等 ASR 碎片：不伪造成问题；
-- 任意结构模型尝试返回改写正文：schema 拒绝；
-- 展示答案逐词来自 evidence，隐藏项可展开审计；
-- APUS 真实录音中项目动机、workflow 失败和架构取舍分别成题，候选人长回答字符覆盖达到门槛。
-
-## 17. 参考
-
-- WhisperX paper: https://arxiv.org/abs/2303.00747
-- WhisperX repository: https://github.com/m-bain/whisperX
-- pyannote Community-1: https://huggingface.co/pyannote-community/speaker-diarization-community-1
-- pyannote diarization pipeline: https://github.com/pyannote/pyannote-audio/blob/main/src/pyannote/audio/pipelines/speaker_diarization.py
-- NVIDIA NeMo speaker diarization: https://docs.nvidia.com/nemo-framework/user-guide/24.12/nemotoolkit/asr/speaker_diarization/intro.html
-- Word-level speaker segmentation: https://arxiv.org/abs/2309.16482
-- ICSI MRDA corpus: https://aclanthology.org/W/W04/W04-2319.pdf
-- Disfluency unediting: https://aclanthology.org/N15-1161.pdf
-- Punctuation restoration: https://aclanthology.org/2021.wnut-1.19/
+这些用例不是对任意噪声、重叠讲话或超长录音的准确率承诺。实时麦克风链路与文件上传链路分别验收。实际执行结果见 [本轮验收记录](../implementation/web-release-acceptance-2026-10-12.md)。

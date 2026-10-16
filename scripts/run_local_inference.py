@@ -10,7 +10,7 @@ import signal
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "backend" if (ROOT / "backend").is_dir() else ROOT))
 
 from app.local_inference.config import BrokerConfig  # noqa: E402
 from app.local_inference.client import Client  # noqa: E402

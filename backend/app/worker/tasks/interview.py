@@ -23,6 +23,42 @@ _TASK_OPTIONS = {
 }
 
 
+@celery_app.task(name="tasks.process_mock_audio_transcription", **_TASK_OPTIONS)
+def process_mock_audio_transcription(self, record_id: str, request_id: str):
+    from app.interviews.application.mock_audio import execute
+
+    execute(record_id, request_id)
+
+
+@celery_app.task(
+    name="tasks.recognize_live_audio",
+    ignore_result=False,
+    resultrepr_maxsize=0,
+    acks_late=False,
+    time_limit=120,
+    soft_time_limit=110,
+    max_retries=0,
+)
+def recognize_live_audio(payload, user_id: int, operation_id: str):
+    import tempfile
+    import wave
+    from pathlib import Path
+    from app.local_inference.audio import decode_pcm, SAMPLE_RATE
+    from app.media.application.short_clip_transcription import _local_clip
+    from app.usage.runtime import scope
+
+    pcm = decode_pcm(payload)
+    with tempfile.TemporaryDirectory(prefix="copilot-live-asr-") as directory:
+        path = Path(directory) / "window.wav"
+        with wave.open(str(path), "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(SAMPLE_RATE)
+            audio.writeframes(pcm)
+        with scope(user_id, operation_id):
+            return _local_clip(str(path), "auto")
+
+
 @celery_app.task(name="tasks.process_interview_analysis", **_TASK_OPTIONS)
 def process_interview_analysis(
     self, record_id: str, language: str = "zh", review_generation: int = 0

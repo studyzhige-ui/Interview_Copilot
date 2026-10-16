@@ -19,6 +19,8 @@ x-backend-service: &backend-service
   environment: *backend-environment
   volumes:
     - ./data:/app/data
+    # Unix sockets require a Linux volume, including on Docker Desktop.
+    - local_runtime:/app/data/runtime
   # Role-specific health checks belong to the API/DB/Redis services below.
   # Workers and Beat are running services, not HTTP servers; migrations must
   # finish successfully before their dependents may start.
@@ -34,6 +36,19 @@ x-runtime-dependencies: &runtime-dependencies
     condition: service_completed_successfully
 
 services:
+  # The same broker used by Linux/WSL host launches. Prepare its immutable
+  # config once with prepare_local_inference.py before enabling this profile.
+  local-inference:
+    <<: *backend-service
+    profiles: [local]
+    command: ["python", "scripts/run_local_inference.py", "--config", "/app/data/runtime/local-inference/config.json"]
+    healthcheck:
+      test: ["CMD", "gosu", "app", "python", "scripts/run_local_inference.py", "--config", "/app/data/runtime/local-inference/config.json", "--status"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
   # Community development stack. The default profile starts infrastructure;
   # `--profile full` also starts the API, workers, scheduler, and frontend.
   # This is not the production Cloud topology.
@@ -252,6 +267,7 @@ services:
       <<: *runtime-dependencies
 
 volumes:
+  local_runtime:
   # Retained declaration only: no MinIO service is started or old data removed.
   minio_data:
   pgdata:

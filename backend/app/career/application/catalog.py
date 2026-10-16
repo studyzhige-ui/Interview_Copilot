@@ -100,13 +100,6 @@ CAREER_OPERATION_CATALOG = OperationCatalog(
             allowed_adapters=frozenset({"ui", "agent", "automation"}),
             verification="none",
         ),
-        OperationDefinition(
-            name="get_interview_invitation_handoff",
-            schema_version=1,
-            effect=OperationEffect.READ,
-            allowed_adapters=frozenset({"ui", "agent"}),
-            verification="none",
-        ),
     )
 )
 

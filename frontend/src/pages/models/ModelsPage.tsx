@@ -7,6 +7,7 @@
  * VendorAvatar).
  */
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { RefreshCw, Activity, Sparkles, Plus } from 'lucide-react';
 import { Pill } from '@/components/ui/Pill';
 import { Spinner } from '@/components/ui/Spinner';
@@ -19,9 +20,11 @@ import { ModelUsagePanel } from './ModelUsagePanel';
 import { ShowMoreProvidersModal } from './ShowMoreProvidersModal';
 
 export function ModelsPage() {
+  const [params, setParams] = useSearchParams();
+  const view = params.get('view') === 'usage' ? 'usage' : 'configuration';
   const edition = useEditionPolicy();
   const {
-    loading, profiles, providers, apiKeys, selection, pingResults,
+    loading, error, profiles, providers, apiKeys, selection, pingResults,
     pinging, refreshingCatalog,
     refresh, assign, pingAll, refreshCatalog,
     onSaveKey, onDeleteKey, onSaveProviderSettings, onToggleProvider, onResetProvider,
@@ -51,7 +54,7 @@ export function ModelsPage() {
       }));
   }, [providers, profiles]);
 
-  if (loading) {
+  if (view === 'configuration' && loading) {
     return (
       <div className="p-6 flex items-center gap-2 text-stone-500 text-sm">
         <Spinner size={14} /> 载入中...
@@ -59,9 +62,10 @@ export function ModelsPage() {
     );
   }
 
+  if (view === 'configuration' && error) return <div className="workspace-page" role="alert"><h1 className="text-xl font-semibold">模型配置暂时无法读取</h1><p className="mt-2 text-sm text-stone-500">重新加载后可继续查看已有配置。</p><button className="today-primary-link mt-4" onClick={() => { void refresh(); }}>重新加载</button></div>;
+
   return (
-    <div className="p-4 md:p-8 max-w-7xl mx-auto">
-      <ModelUsagePanel />
+    <div className="workspace-page">
       <div className="flex flex-wrap items-start gap-3 mb-4">
         <div>
           <h2 className="text-2xl font-semibold text-stone-800">
@@ -73,7 +77,7 @@ export function ModelsPage() {
               : '配置模型提供商，并为不同对话角色选择模型。'}
           </p>
         </div>
-        <div className="w-full lg:w-auto lg:ml-auto flex flex-wrap items-center gap-2">
+        {view === 'configuration' && <div className="w-full lg:w-auto lg:ml-auto flex flex-wrap items-center gap-2">
           <button
             onClick={() => setShowMoreOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border border-stone-200 text-stone-700 hover:bg-stone-50"
@@ -98,18 +102,22 @@ export function ModelsPage() {
             title="测试每个模型的可达性"
           >
             {pinging ? <Spinner size={12} /> : <Activity size={13} />}
-            <span>Ping 测试</span>
+            <span>测试连接</span>
           </button>
           <button
             onClick={() => refresh()}
             className="p-2 rounded-md text-stone-500 hover:bg-stone-100"
-            title="重新载入页面缓存（不打厂商 API）"
+            title="刷新配置"
           >
             <RefreshCw size={14} />
           </button>
-        </div>
+        </div>}
       </div>
-
+      <nav aria-label="模型设置分类" className="profile-tabs">
+        <button type="button" aria-pressed={view === 'configuration'} onClick={() => setParams({})}>模型与提供商</button>
+        <button type="button" aria-pressed={view === 'usage'} onClick={() => setParams({ view: 'usage' })}>用量记录</button>
+      </nav>
+      {view === 'usage' ? <ModelUsagePanel /> : <>
       {/* Compact role assignment bar */}
       <div className="bg-white rounded-xl border border-stone-200 shadow-xs px-4 py-2.5 mb-6 flex flex-wrap items-stretch gap-y-2 divide-x divide-stone-200">
         {ROLES.map((r) => {
@@ -149,6 +157,7 @@ export function ModelsPage() {
         ))}
       </div>
 
+      </>}
       {showMoreOpen && (
         <ShowMoreProvidersModal
           providers={providers}

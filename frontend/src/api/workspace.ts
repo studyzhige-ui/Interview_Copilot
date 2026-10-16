@@ -7,8 +7,11 @@ export interface WorkspaceOverview {
   recent_work: Array<{
     session_id: string;
     title: string;
-    status: 'not_started' | 'pending' | 'running' | 'waiting' | 'completed' | 'blocked' | 'failed' | 'cancelled' | 'unknown';
+    status: 'pending' | 'running' | 'waiting' | 'blocked' | 'failed';
     updated_at: string | null;
+  }>;
+  upcoming_interviews: Array<{
+    id: string; opportunity_id: string; company_name: string; job_title: string; starts_at: string;
   }>;
 }
 

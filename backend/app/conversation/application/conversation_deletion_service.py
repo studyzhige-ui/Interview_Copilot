@@ -178,21 +178,12 @@ def delete_conversation(
     conversation.active_turn_id = None
 
     if turn_ids:
-        model_dispatches = (
-            db.query(AgentModelDispatch)
-            .filter(
-                AgentModelDispatch.turn_id.in_(turn_ids),
-                AgentModelDispatch.status == "running",
-            )
-            .with_for_update()
-            .all()
+        from app.conversation.application.model_dispatch_service import (
+            close_running_model_dispatches,
         )
-        for dispatch in model_dispatches:
-            dispatch.status = "cancelled"
-            dispatch.error_code = "conversation_deleted"
-            dispatch.completed_at = now
-            dispatch.updated_at = now
-            db.add(dispatch)
+
+        for turn_id in turn_ids:
+            close_running_model_dispatches(db, turn_id=turn_id)
 
     tombstone_count = 0
     for call in calls:

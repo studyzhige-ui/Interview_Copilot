@@ -126,13 +126,6 @@ export function ClientActionBridge() {
           }
         } else if (!clientGuardAllows(action)) {
           result = { outcome: 'refused', reason: '当前页面有未保存内容，用户取消了跳转' };
-        } else if (action.action === 'interview.preparation.open' && action.payload.kind === 'interview_preparation_open') {
-          // Subscribe before navigation so a quickly mounted page cannot race its ACK.
-          const receipt = waitForMockClientActionUiResult(action.action_id);
-          navigate(`/interviews?interview=${encodeURIComponent(action.payload.interview_id)}`, {
-            state: { mockClientAction: action } satisfies MockRouteActionState,
-          });
-          result = await receipt;
         } else {
           const receipt = waitForMockClientActionUiResult(action.action_id, action.action === 'mock_interview.prefill' ? 15 * 60_000 : 30_000);
           navigate('/mock', {
@@ -146,7 +139,7 @@ export function ClientActionBridge() {
           getSourceClientId(),
           result,
         );
-        if (action.action === 'mock_interview.enter_live' || action.action === 'interview.preparation.open' || result.outcome !== 'acknowledged') {
+        if (action.action === 'mock_interview.enter_live' || result.outcome !== 'acknowledged') {
           saveActiveHandoff(null);
           return;
         }

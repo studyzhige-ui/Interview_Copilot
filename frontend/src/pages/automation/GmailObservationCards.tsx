@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { invalidateCareerQueries } from '@/lib/productQueries';
 import { Check, Inbox, RefreshCw, RotateCcw, SkipForward, X } from 'lucide-react';
 import { listJobOpportunities } from '@/api/careerProcess';
 import {
@@ -78,12 +79,11 @@ export function GmailObservationCards({
 
   const refresh = async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['workspace'] }),
+      invalidateCareerQueries(queryClient),
       queryClient.invalidateQueries({ queryKey: ['pending-interactions'] }),
       queryClient.invalidateQueries({ queryKey: cardsKey }),
       queryClient.invalidateQueries({ queryKey: observationsKey }),
       queryClient.invalidateQueries({ queryKey: ['persistent-task', task.id, 'triggers'] }),
-      queryClient.invalidateQueries({ queryKey: ['job-opportunities'] }),
     ]);
   };
 
@@ -160,7 +160,7 @@ export function GmailObservationCards({
       {(observationsQuery.data ?? []).some((observation) => observationSet.has(observation.id)
         && observation.invitation_handoff?.candidate_status === 'confirmed') && (
         <p role="status" className="mt-3 text-sm text-stone-600">
-          已确认的邀请由面试记录保存；<a href="/interviews" className="underline">查看正式安排</a>。
+          已确认的邀请由面试记录保存；<a href="/career-process" className="underline">查看岗位与安排</a>。
         </p>
       )}
 

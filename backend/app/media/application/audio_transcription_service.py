@@ -74,14 +74,13 @@ def _collect_evidence(
     ) as source:
         units = media.audio_units(source.path)
         descriptor = media.descriptor(config, source.path, language, units)
-        return runtime.invoke_sync(
-            lambda: compose_transcript_evidence(
-                source,
-                collector(source.path, model=config.model, language=language),
-                max_duration_ms=settings.USAGE_AUDIO_MAX_MS,
-            ),
+        parts = runtime.invoke_sync(
+            lambda: collector(source.path, model=config.model, language=language),
             observed=lambda _: units,
             **descriptor,
+        )
+        return compose_transcript_evidence(
+            source, parts, max_duration_ms=settings.USAGE_AUDIO_MAX_MS
         )
 
 

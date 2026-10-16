@@ -21,9 +21,14 @@ Files use the private local provider by default, shared by the API and workers.
 Requirements:
 
 - Python 3.11–3.13 in an active virtual environment
-- Node.js 20+
+- Node.js 24 LTS (the frontend tooling also supports Node 22.12+ and 26+)
 - Docker with Compose v2
 - Enough RAM and disk for local models, or remote provider credentials
+
+SQLAlchemy 2.1 uses psycopg 3. The packaged driver is `psycopg[binary]`;
+keep the documented `postgresql://...` database URL. Deployments that explicitly
+selected `postgresql+psycopg2://...` must switch to `postgresql://...` before
+installing the updated dependencies. The database schema does not change.
 
 Run the one-time setup:
 
@@ -61,6 +66,21 @@ outside the database directory and `GMAIL_CREDENTIAL_STORE_KEY` as an
 independently generated recovery secret. Back up the encrypted file and key
 separately. Missing, unreadable, corrupt, or wrongly keyed stores make the
 connector unavailable instead of starting an unrecoverable OAuth flow.
+
+### Optional automatic Memory
+
+The example environment keeps `AGENT_MEMORY_PRODUCER_ENABLED=false`. This is
+deployment availability: the settings page cannot enable contribution while
+the operator has disabled the producer. Existing memories can still be recalled.
+
+To enable it in an explicitly opted-in local deployment, set
+`AGENT_MEMORY_PRODUCER_ENABLED=true` in the environment used by that deployment
+and restart its API, workers and Beat. An internal LLM and the `background` and
+`default` workers must be available. Each user then enables contribution in
+Settings → Personalization; enabling the deployment does not opt users in.
+Eligible completed conversations wait 600 seconds by default, and interactions
+without reusable evidence correctly produce no memory. See the
+[lifecycle and acceptance limits](../architecture/agent-memory-lifecycle.md).
 
 ## Full container mode
 
@@ -126,14 +146,46 @@ local capability the wizard offers compatible model choices, accepts a custom
 Hugging Face repository, updates `.env`, and downloads only the selection.
 Embedding, reranker, speech, diarization, and Docling can be chosen separately.
 
-For full containers, build the local extra first and run the same wizard in a
-one-shot container before starting the stack:
+### Local model containers
+
+The lightweight image does not include WhisperX or the BGE/Pyannote runtime.
+For a complete local CPU deployment, set these values in `.env` before building:
+
+```dotenv
+APP_EXTRAS=local
+EMBEDDING_PROVIDER=local
+RERANKER_PROVIDER=local
+TRANSCRIPTION_PROVIDER=local_whisperx
+LOCAL_INFERENCE_SOCKET=/app/data/runtime/local-inference/worker.sock
+```
+
+Build the local extra, prepare the selected model weights with the existing
+wizard, and generate the broker's immutable config once:
 
 ```bash
-APP_EXTRAS=local docker compose build api
+docker compose build api
 docker compose run --rm api python scripts/init_models.py
-docker compose --profile full up -d --wait
+docker compose run --rm --no-deps local-inference python scripts/prepare_local_inference.py --python /opt/venv/bin/python --device cpu --runtime-dir /app/data/runtime/local-inference
+docker compose --profile local up -d --wait local-inference
+docker compose --profile full --profile local up -d --wait
 ```
+
+The broker uses the same implementation as Linux/WSL launches; it owns BGE
+embedding/reranking and Pyannote speaker observations. WhisperX remains in the
+transcription worker. All services share the `local_runtime` Docker volume for
+Unix sockets, which cannot live on a Windows bind mount. Model weights remain
+under `data/cache/models`. Broker readiness confirms connectivity, not model
+quality; validate an uploaded recording and a document query after startup.
+Config preparation refuses to overwrite an existing config. Do not rerun it
+against a running broker. CPU transcription can take substantially longer than
+the recording; CUDA deployment also needs explicit Docker GPU access.
+
+Keep `worker-transcription` running during voice interviews. It preloads WhisperX
+at startup and reuses the same model across recorded answers, live PCM windows,
+uploaded recordings and audio ingestion. API instances do not load speech models.
+Recorded answers return a task identity immediately after storage; refreshing the
+page reads that task, and an explicit retry reuses the saved original. Short tasks
+precede queued long recordings, but a running long recording is not preempted.
 
 Automation never waits for a prompt: use `--non-interactive`, `--only ROLE`,
 or `--dry-run`. All model weights live under `data/cache/models`; library

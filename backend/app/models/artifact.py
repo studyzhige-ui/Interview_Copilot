@@ -29,6 +29,7 @@ from sqlalchemy import text
 from app.db.database import Base
 from app.db.types import UTCDateTime as DateTime
 from app.db.types import utc_now
+from app.db.types import JSONValue
 
 
 def generate_artifact_id() -> str:
@@ -119,6 +120,8 @@ class ArtifactVersion(Base):
     operation_key = Column(String(128), nullable=False)
     title = Column(String(240), nullable=False)
     content_text = Column(Text, nullable=True)
+    document_json = Column(JSONValue, nullable=True)
+    draft_revision = Column(Integer, nullable=True)
     content_format = Column(String(64), nullable=False)
     # Reuses the real raw-file owner. ArtifactVersion owns no duplicate blob.
     file_asset_id = Column(

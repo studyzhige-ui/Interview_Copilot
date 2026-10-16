@@ -1,117 +1,83 @@
-import { ActivityFeed } from '@/pages/activities/ActivityCenterPage';
-import { PendingConfirmations } from './PendingConfirmations';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { ArrowRight, ArrowUpRight, CalendarDays, RefreshCw } from 'lucide-react';
+import { ArrowRight, BriefcaseBusiness, Mic, UserRound } from 'lucide-react';
 import { getNextActionAgenda } from '@/api/careerInsights';
-import { listJobOpportunities } from '@/api/careerProcess';
-import { copilotObjectHandoffHref } from '@/lib/copilotObjectReference';
-import type { NextActionAgendaItem } from '@/types/career';
 import { getWorkspaceOverview } from '@/api/workspace';
-import { GettingStarted } from './GettingStarted';
+import type { NextActionAgendaItem } from '@/types/career';
+import { PendingConfirmations } from './PendingConfirmations';
+import { isScheduledAction } from '@/lib/schedule';
 
-type View = 'attention' | 'upcoming' | 'suggested';
-const views: Array<{ id: View; label: string }> = [
-  { id: 'attention', label: '需要处理' }, { id: 'upcoming', label: '接下来' }, { id: 'suggested', label: '待采纳建议' },
-];
-const phases = { pending_application: '待投递', applied: '已投递', in_process: '推进中', offer: '收到 Offer' };
-
-function agendaView(item: NextActionAgendaItem): View {
-  if (item.action.status === 'suggested' || item.bucket === 'suggested') return 'suggested';
-  if (item.overdue || item.bucket === 'today' || item.bucket === 'conflict') return 'attention';
-  return 'upcoming';
+function needsAttention(item: NextActionAgendaItem) {
+  return item.overdue || item.bucket === 'today' || item.bucket === 'conflict';
 }
 
 function actionTime(item: NextActionAgendaItem) {
   const value = item.action.starts_at ?? item.action.due_at;
   if (!value) return '时间待定';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '时间待核对';
-  return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  return new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-function LoadError({ subject, retry, pending }: { subject: string; retry: () => void; pending: boolean }) {
-  return <div className="today-error" role="alert">
-    <strong>暂时无法读取{subject}</strong>
-    <p>请检查服务连接后重试。已有记录不会因此改变。</p>
-    <button type="button" onClick={retry} disabled={pending}><RefreshCw size={14} />{pending ? '正在重试…' : '重新加载'}</button>
-  </div>;
-}
+const workStatus = { running: '正在处理', pending: '等待执行', waiting: '等待你回复', blocked: '需要你处理', failed: '查看失败原因' };
 
 export function TodayPage() {
-  const [view, setView] = useState<View>('attention');
-  const workspace = useQuery({ queryKey: ['workspace'], queryFn: getWorkspaceOverview, retry: false, refetchInterval: 15000 });
-  const agenda = useQuery({ queryKey: ['next-action-agenda'], queryFn: getNextActionAgenda, retry: false });
-  const jobs = useQuery({ queryKey: ['today-job-opportunities'], queryFn: () => listJobOpportunities(), retry: false });
-  const items = (agenda.data?.items ?? []).filter((item) => item.action.status === 'planned' || item.action.status === 'suggested');
-  const visibleItems = items.filter((item) => agendaView(item) === view);
-  const activeJobs = (jobs.data ?? []).filter((job) => !job.outcome && !job.archived_at);
-  const isStarting = workspace.isSuccess && workspace.data.active_opportunities === 0 && workspace.data.open_actions === 0
-    && agenda.isSuccess && items.length === 0 && jobs.isSuccess && activeJobs.length === 0;
+  const [upcoming, setUpcoming] = useState(false);
+  const workspace = useQuery({ queryKey: ['workspace'], queryFn: getWorkspaceOverview, retry: false, refetchInterval: 30000 });
+  const agenda = useQuery({ queryKey: ['next-action-agenda'], queryFn: getNextActionAgenda, retry: false, refetchInterval: 30000 });
+  const planned = (agenda.data?.items ?? []).filter((item) => isScheduledAction(item.action));
+  const attention = planned.filter(needsAttention);
+  const visible = upcoming ? planned.filter((item) => !needsAttention(item)) : attention;
+  const ongoing = (workspace.data?.recent_work ?? []).filter((work) => work.status in workStatus).slice(0, 3);
+  const todayInterviews = (workspace.data?.upcoming_interviews ?? []).filter((interview) => new Date(interview.starts_at).toDateString() === new Date().toDateString()).length;
+  const intro = todayInterviews ? '今天有面试安排，请先检查时间与准备情况。'
+    : agenda.isSuccess ? attention.length ? `${attention.length} 项安排需要处理，先完成最重要的一件。` : '今天没有紧急安排，可以继续准备下一次机会。'
+      : '你的待办与进行中的协作，都在这里。';
+
   return <div className="today-page">
     <header className="today-heading">
-      <div>
-        <p className="today-dateline">{new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}</p>
-        <h1>今天，从这里开始。</h1>
-        <p className="today-intro">明确目标、准备材料、练习面试，一次推进一件事。</p>
+      <div><p className="today-dateline">{new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}</p>
+        <h1>今天</h1><p className="today-intro">{intro}</p>
       </div>
-      <Link className="today-primary-link" to="/career-process">管理求职机会 <ArrowUpRight size={16} /></Link>
+      <Link className="today-primary-link" to="/general-chat">开始新的协作 <ArrowRight size={16} /></Link>
     </header>
-    {workspace.isPending ? <p role="status">正在读取你的准备进度…</p> : workspace.isError
-      ? <LoadError subject="协作进度" pending={workspace.isFetching} retry={() => { void workspace.refetch(); }} />
-      : <GettingStarted overview={workspace.data} />}
     <PendingConfirmations />
-    <ActivityFeed limit={5} />
-    {!isStarting && <div className="today-layout">
-      <section className="today-agenda" aria-labelledby="agenda-heading">
-        <div className="today-section-heading"><h2 id="agenda-heading">你的安排</h2><CalendarDays size={18} /></div>
+    <div className="today-layout">
+      <section className="today-panel" aria-labelledby="agenda-heading">
+        <div className="today-section-heading"><h2 id="agenda-heading">待办安排</h2><Link to="/career-calendar?view=actions">管理全部安排 <ArrowRight size={14} /></Link></div>
         <div className="today-filters" role="group" aria-label="筛选安排">
-          {views.map((tab) => <button key={tab.id} type="button" aria-pressed={view === tab.id} onClick={() => setView(tab.id)}>
-            {tab.label}{agenda.isSuccess && <span>{items.filter((item) => agendaView(item) === tab.id).length}</span>}
-          </button>)}
+          <button type="button" aria-pressed={!upcoming} onClick={() => setUpcoming(false)}>今天与逾期{agenda.isSuccess && <span>{attention.length}</span>}</button>
+          <button type="button" aria-pressed={upcoming} onClick={() => setUpcoming(true)}>接下来{agenda.isSuccess && <span>{planned.length - attention.length}</span>}</button>
         </div>
         {agenda.isPending ? <p className="today-loading" role="status">正在读取安排…</p>
-          : agenda.isError ? <LoadError subject="安排" pending={agenda.isFetching} retry={() => { void agenda.refetch(); }} />
-          : visibleItems.length ? <ul className="today-actions">{visibleItems.map((item) => {
-            const job = jobs.data?.find((candidate) => candidate.id === item.action.job_opportunity_id);
-            return <li key={item.action.id}>
-              <div className="today-action-time"><span>{actionTime(item)}</span>
-                {item.overdue && <small className="today-overdue">已逾期</small>}
-                {item.conflict_action_ids.length > 0 && <small className="today-overdue">时间冲突</small>}
-              </div>
-              <div className="today-action-body"><h3>{item.action.content}</h3>
-                <p>{job ? `${job.company_name} · ${job.job_title}` : item.action.job_opportunity_id ? '关联求职机会' : '个人安排'}{view === 'suggested' ? ' · 尚未加入计划' : ''}</p>
-                <Link to={copilotObjectHandoffHref('next_action', item.action.id, item.action.content)}>与 Copilot 讨论 <ArrowUpRight size={12} /></Link>
-              </div>
-              <Link to={'/career-insights#action-' + encodeURIComponent(item.action.id)} className="today-row-link" aria-label={`查看安排：${item.action.content}`}>查看 <ArrowRight size={14} /></Link>
-            </li>;
-          })}</ul> : <div className="today-empty">
-            <span className="today-empty-rule" />
-            <h3>{view === 'attention' ? '眼下没有需要处理的安排' : view === 'upcoming' ? '还没有后续安排' : '没有待采纳的建议'}</h3>
-            <p>{view === 'attention' ? '可以继续准备面试，或看看正在跟进的机会。' : view === 'upcoming' ? '在求职进程中记录下一步，安排会显示在这里。' : '只有你采纳的建议，才会成为正式计划。'}</p>
-            <Link to={view === 'attention' ? '/mock' : '/career-process'}>{view === 'attention' ? '开始一次模拟面试' : '前往求职进程'} <ArrowRight size={15} /></Link>
+          : agenda.isError ? <div className="today-empty" role="alert"><h3>安排暂时无法加载</h3><button onClick={() => { void agenda.refetch(); }}>重新加载</button></div>
+          : visible.length ? <ul className="today-actions">{visible.slice(0, 6).map((item) => <li key={item.action.id}>
+            <div className="today-action-time"><span>{actionTime(item)}</span>{item.overdue && <small className="today-overdue">已逾期</small>}{item.conflict_action_ids.length > 0 && <small className="today-overdue">时间冲突</small>}</div>
+            <Link className="today-action-body" to={'/career-calendar?view=actions#action-' + encodeURIComponent(item.action.id)}><h3>{item.action.content}</h3><span>查看并处理 <ArrowRight size={13} /></span></Link>
+          </li>)}</ul> : <div className="today-empty"><div className="today-empty-mark" aria-hidden="true">✓</div>
+            <h3>{upcoming ? '还没有后续安排' : '没有需要处理的安排'}</h3><p>{upcoming ? '在求职进程中记录下一步，或与 Copilot 讨论计划。' : '可以练一次面试，或继续尚未完成的协作。'}</p>
+            <Link to={upcoming ? '/career-process' : '/mock'}>{upcoming ? '记录求职进展' : '开始模拟面试'} <ArrowRight size={14} /></Link>
           </div>}
-        <Link className="today-section-footer" to="/career-insights">查看全部行动与决策 <ArrowRight size={15} /></Link>
+        {visible.length > 6 && <Link className="today-section-footer" to="/career-calendar?view=actions">另有 {visible.length - 6} 项安排 <ArrowRight size={14} /></Link>}
       </section>
-      <aside className="today-opportunities" aria-labelledby="opportunities-heading">
-        <div className="today-section-heading"><h2 id="opportunities-heading">正在跟进</h2>{jobs.isSuccess && <span>{activeJobs.length} 个机会</span>}</div>
-        {jobs.isPending ? <p className="today-loading" role="status">正在读取机会…</p>
-          : jobs.isError ? <LoadError subject="求职机会" pending={jobs.isFetching} retry={() => { void jobs.refetch(); }} />
-          : !activeJobs.length ? <div className="today-empty today-empty-small"><h3>从一个心仪的岗位开始</h3><p>记下公司和岗位，后续进展、准备和材料就有了归处。</p><Link to="/career-process">添加求职机会 <ArrowRight size={15} /></Link></div>
-          : <ul className="today-job-list">{activeJobs.slice(0, 5).map((job) => <li key={job.id}>
-            <div><span className="today-company">{job.company_name}</span><small>{phases[job.phase]}</small></div>
-            <Link to={`/career-process?opportunity=${encodeURIComponent(job.id)}`}>{job.job_title}<ArrowUpRight size={14} /></Link>
-            {job.current_step && <p>{job.current_step}</p>}
-          </li>)}</ul>}
-        <Link className="today-section-footer" to="/career-process">全部求职机会 <ArrowRight size={15} /></Link>
+      <aside className="today-side">
+        {!!workspace.data?.upcoming_interviews.length && <section className="today-panel" aria-labelledby="interview-heading">
+          <div className="today-section-heading"><h2 id="interview-heading">近期面试</h2><span className="text-xs text-stone-400">未来 30 天</span></div>
+          <ul className="today-work">{workspace.data.upcoming_interviews.map((interview) => <li key={interview.id}><Link to={`/career-process?opportunity=${encodeURIComponent(interview.opportunity_id)}`}>
+            <span><strong>{interview.company_name} · {interview.job_title}</strong><small>{new Date(interview.starts_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</small></span><ArrowRight size={15} />
+          </Link></li>)}</ul>
+        </section>}
+        <section className="today-panel" aria-labelledby="continue-heading">
+          <div className="today-section-heading"><h2 id="continue-heading">继续协作</h2><Link to="/history">历史记录 <ArrowRight size={14} /></Link></div>
+          {workspace.isPending ? <p className="today-loading" role="status">正在读取协作…</p> : workspace.isError ? <div className="today-empty" role="alert"><p>协作暂时无法加载。</p><button onClick={() => { void workspace.refetch(); }}>重新加载</button></div>
+            : ongoing.length ? <ul className="today-work">{ongoing.map((work) => <li key={work.session_id}><Link to={`/general-chat?session=${encodeURIComponent(work.session_id)}`}><span><strong>{work.title}</strong><small>{workStatus[work.status as keyof typeof workStatus]}</small></span><ArrowRight size={15} /></Link></li>)}</ul>
+              : <p className="today-quiet">没有进行中的协作。</p>}
+        </section>
+        <section className="today-shortcuts" aria-label="常用入口">
+          <Link to="/career-process"><BriefcaseBusiness size={18} /><span><strong>求职进展</strong><small>{workspace.isSuccess ? `${workspace.data.active_opportunities} 个岗位正在跟进` : '管理岗位与面试安排'}</small></span><ArrowRight size={15} /></Link>
+          <Link to="/mock"><Mic size={18} /><span><strong>模拟面试</strong><small>选择练习目标，开始问答</small></span><ArrowRight size={15} /></Link>
+          <Link to="/career-profile"><UserRound size={18} /><span><strong>个人档案</strong><small>维护已确认的经历与目标</small></span><ArrowRight size={15} /></Link>
+        </section>
       </aside>
-    </div>}
-    {!isStarting && <section className="today-next" aria-label="继续准备">
-      <div><span className="today-dateline">每一次准备，都算数</span><h2>为下一次机会做好准备</h2></div>
-      <Link to="/mock"><span><strong>练一次面试</strong><small>带着简历和岗位要求，进入模拟问答</small></span><ArrowUpRight size={19} /></Link>
-      <Link to="/career-profile"><span><strong>整理个人档案</strong><small>把经历与优势，变成可复用的资料</small></span><ArrowUpRight size={19} /></Link>
-    </section>}
+    </div>
   </div>;
 }
-

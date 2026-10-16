@@ -169,11 +169,10 @@ class Settings(BaseSettings):
     #                timestamps (e.g. openai/whisper-1).
     #   "none"     — never diarize; transcripts come back single-speaker.
     DIARIZATION_MODE: str = "auto"
-    # Interview diarization speaker bounds. 1:1 interviews are the norm
-    # (2/2); bump MAX for panel interviews. Hardcoding 2 forced every
-    # 3-speaker recording to merge two voices into one.
-    DIARIZATION_MIN_SPEAKERS: int = 2
-    DIARIZATION_MAX_SPEAKERS: int = 2
+    # Let acoustic evidence determine the count within the broker's capacity.
+    # Interview roles are inferred later; they do not imply exactly two voices.
+    DIARIZATION_MIN_SPEAKERS: int = Field(default=1, ge=1, le=32)
+    DIARIZATION_MAX_SPEAKERS: int = Field(default=32, ge=1, le=32)
     DIARIZATION_MODEL_ID: str = "pyannote-community/speaker-diarization-community-1"
     # Usage is observed per turn but does not determine task completion.
     # Cancellation, context limits, request/tool timeouts, and the worker
@@ -183,6 +182,9 @@ class Settings(BaseSettings):
     AGENT_TOOL_TIMEOUT_SECONDS: int = 30
     AGENT_TEMPERATURE: float = 0.2
     AGENT_MAX_RESPONSE_TOKENS: int = 4096
+    # Native DeepSeek defaults to high reasoning, which can exhaust the entire
+    # bounded answer budget before visible text. Make this an explicit policy.
+    DEEPSEEK_REASONING_EFFORT: Literal["none", "low", "high", "max"] = "none"
     AGENT_TOOL_SCHEMA_STRICT: bool = True
     AGENT_MAX_TOOL_ARG_CHARS: int = 4000
     # Transport cap, not an authorization to give every tool a larger payload.
@@ -447,6 +449,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_rag_policy(self) -> "Settings":
+        if self.DIARIZATION_MIN_SPEAKERS > self.DIARIZATION_MAX_SPEAKERS:
+            raise ValueError("DIARIZATION_MIN_SPEAKERS must not exceed MAX_SPEAKERS")
         if self.PGVECTOR_HNSW_EF_CONSTRUCTION < 2 * self.PGVECTOR_HNSW_M:
             raise ValueError("PGVECTOR_HNSW_EF_CONSTRUCTION must be >= 2 * M")
         if self.RAG_DEVICE not in {"auto", "cpu", "cuda"}:

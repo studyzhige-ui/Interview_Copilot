@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
-logger = logging.getLogger(__name__)
-
 
 class TranscriptionUnavailable(RuntimeError):
     """The configured ASR provider or local model is not ready."""
@@ -14,9 +10,8 @@ class TranscriptionUnavailable(RuntimeError):
 async def transcribe_short_clip(file_path: str, *, language: str = "zh") -> str:
     """Return plain text for one candidate recording.
 
-    Remote providers stay outside the local ML process. The local path loads
-    WhisperX lazily and intentionally skips diarization because a mock-answer
-    clip has exactly one speaker.
+    Called only by the transcription worker. Its local model stays loaded
+    across answers; one candidate clip needs no diarization or alignment.
     """
     from app.media.application import transcription_registry
     from app.core.execution_errors import ModelOutcomeUnknownError
@@ -50,18 +45,15 @@ def _local_clip(file_path: str, language: str) -> str:
     cfg = transcription_registry.resolve_transcription()
 
     def transcribe():
-        if whisperx_engine.whisper_model is None:
-            whisperx_engine.init_whisper_model()
         model = whisperx_engine.whisper_model
         if model is None:
             raise TranscriptionUnavailable("WhisperX model did not initialize")
         import whisperx
 
         audio = whisperx.load_audio(file_path)
-        kwargs = {"batch_size": 8}
-        if language and language.lower() != "auto":
-            kwargs["language"] = language
-        return model.transcribe(audio, **kwargs)
+        return whisperx_engine.transcribe_with_word_timestamps(
+            audio, language=None if language.lower() == "auto" else language
+        )
 
     result = runtime.invoke_sync(
         transcribe,

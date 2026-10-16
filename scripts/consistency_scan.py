@@ -10,8 +10,8 @@ can accumulate, per the RFC acceptance criterion "巡检脚本能输出可修复
                                  best-effort node_id-level Postgres facts/projection check
                                  (missing_in_index / stale_in_index /
                                  metadata_mismatch / dimension_mismatch).
-  3. Subject-less conversations — ``conversations`` with a non-chat ``mode`` but
-                                 no ``subject_type`` / ``subject_id`` binding.
+  3. Subject-less conversations — interview conversations with a missing,
+                                 deleted or foreign interview binding.
   4. Legacy migration sources — ``memory_ability_states.evidence_refs_json``
                                  pointing at deleted interview QA / records /
                                  conversation messages; used only to decide
@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 
 # Make the ``app`` package importable. Two layouts: repo (<root>/backend/app,
@@ -40,6 +41,7 @@ from sqlalchemy import text  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
 from app.db.database import SessionLocal  # noqa: E402
+from app.db.types import utc_now  # noqa: E402
 
 _SAMPLE = 20  # ids to show per finding
 
@@ -62,9 +64,8 @@ def _rows(db: Session, sql: str, **params) -> list:
 def scan_orphan_file_assets(db: Session) -> list[Finding]:
     findings: list[Finding] = []
 
-    # A consumed/uploaded resume asset that no resume row points at. (resume is
-    # the only purpose wired to file_assets today; other purposes are reported
-    # as "no consumer yet" below rather than as orphans.)
+    # All immutable Artifact versions retain their files, including archived
+    # resumes and previous versions. The retired resumes table is not an owner.
     rows = _rows(
         db,
         """
@@ -72,7 +73,9 @@ def scan_orphan_file_assets(db: Session) -> list[Finding]:
         WHERE fa.purpose = 'resume'
           AND fa.deleted_at IS NULL
           AND fa.upload_status IN ('uploaded', 'consumed')
-          AND NOT EXISTS (SELECT 1 FROM resumes r WHERE r.file_asset_id = fa.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM artifact_versions av WHERE av.file_asset_id = fa.id
+          )
     """,
     )
     ids = [r[0] for r in rows]
@@ -81,7 +84,7 @@ def scan_orphan_file_assets(db: Session) -> list[Finding]:
             "orphan_resume_file_assets",
             len(ids),
             ids[:_SAMPLE],
-            note="resume asset with no referencing resumes row",
+            note="resume asset with no referencing Artifact version; review before cleanup",
         )
     )
 
@@ -92,8 +95,9 @@ def scan_orphan_file_assets(db: Session) -> list[Finding]:
         SELECT id FROM file_assets
         WHERE upload_status = 'pending_upload'
           AND deleted_at IS NULL
-          AND created_at < (NOW() - INTERVAL '24 hours')
+          AND created_at < :cutoff
     """,
+        cutoff=utc_now() - timedelta(hours=24),
     )
     ids = [r[0] for r in rows]
     findings.append(
@@ -256,9 +260,15 @@ def scan_subjectless_conversations(db: Session) -> list[Finding]:
     rows = _rows(
         db,
         """
-        SELECT id FROM conversations
-        WHERE mode IS NOT NULL AND mode <> 'chat'
-          AND (subject_type IS NULL OR subject_id IS NULL)
+        SELECT c.id FROM conversations c
+        WHERE c.type IN ('debrief', 'mock_interview')
+          AND (
+            c.subject_type IS NULL OR c.subject_type <> 'interview_record'
+            OR NOT EXISTS (
+                SELECT 1 FROM interview_records ir
+                WHERE ir.id = c.subject_id AND ir.user_id = c.user_id
+            )
+          )
     """,
     )
     ids = [r[0] for r in rows]
@@ -267,7 +277,7 @@ def scan_subjectless_conversations(db: Session) -> list[Finding]:
             "subjectless_conversations",
             len(ids),
             ids[:_SAMPLE],
-            note="non-chat mode but no subject_type/subject_id binding",
+            note="interview conversation without an owned InterviewRecord binding",
         )
     ]
 
@@ -333,13 +343,13 @@ def scan_legacy_migration_sources(db: Session) -> list[Finding]:
 
 def run_scan() -> list[Finding]:
     findings: list[Finding] = []
-    with SessionLocal() as db:
-        for scan in (
-            scan_orphan_file_assets,
-            scan_orphan_chunks,
-            scan_subjectless_conversations,
-            scan_legacy_migration_sources,
-        ):
+    for scan in (
+        scan_orphan_file_assets,
+        scan_orphan_chunks,
+        scan_subjectless_conversations,
+        scan_legacy_migration_sources,
+    ):
+        with SessionLocal() as db:
             try:
                 findings.extend(scan(db))
             except Exception as exc:  # noqa: BLE001 — one check failing shouldn't abort the rest
@@ -357,7 +367,7 @@ def main() -> int:
         if f.sample_ids:
             print(f"        sample: {f.sample_ids}")
     print(f"=== {total} issue(s) flagged ===")
-    return 0
+    return 2 if any(f.count < 0 for f in findings) else 1 if total else 0
 
 
 if __name__ == "__main__":

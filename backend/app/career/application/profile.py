@@ -112,6 +112,10 @@ def upsert_personal_fact(
         confirmation=confirmation,
     )
     facts = _load_facts(profile)
+    if fact_id is None and fact.kind in {"personal", "summary"}:
+        fact_id = next(
+            (item.id for item in facts if item.value.kind == fact.kind), None
+        )
     canonical_id = fact_id or _id("cpf")
     existing_idx = next(
         (index for index, item in enumerate(facts) if item.id == canonical_id),
@@ -964,13 +968,13 @@ def _fact_identity_key(fact: PersonalFactInput) -> tuple[str, ...]:
             normalized(fact.degree),
             normalized(fact.field_of_study),
         )
-    if fact.kind == "experience":
+    if fact.kind in {"experience", "organization", "volunteer"}:
         return fact.kind, normalized(fact.organization), normalized(fact.role)
     if fact.kind == "project":
         return fact.kind, normalized(fact.name)
     if fact.kind == "skill":
         return fact.kind, normalized(fact.name)
-    if fact.kind == "achievement":
+    if fact.kind in {"achievement", "certificate"}:
         return fact.kind, normalized(fact.title)
     if fact.kind == "contact":
         return fact.kind, normalized(fact.channel)

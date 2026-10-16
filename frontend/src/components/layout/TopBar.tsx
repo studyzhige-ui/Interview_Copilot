@@ -41,7 +41,6 @@ export function TopBar({ pageTitle, onOpenCopilot }: { pageTitle?: string; onOpe
       {pathname !== '/general-chat' && (onOpenCopilot
         ? <button type="button" onClick={onOpenCopilot} className="workspace-copilot-shortcut">打开 Copilot</button>
         : <Link to="/general-chat" className="workspace-copilot-shortcut">打开 Copilot</Link>)}
-      {isSupabaseAuth() && <Link to="/auth" className="text-xs text-stone-500">{isLocalUnlockSession() ? '本地已解锁 · 账号登录' : '账号与本地解锁'}</Link>}
       <div className="ml-auto relative" ref={ref}>
         <button
           aria-expanded={open}
@@ -62,6 +61,7 @@ export function TopBar({ pageTitle, onOpenCopilot }: { pageTitle?: string; onOpe
         </button>
         {open && (
           <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-lg shadow-lg border border-stone-200 overflow-hidden z-30">
+            {isSupabaseAuth() && <Link to="/auth" onClick={() => setOpen(false)} className="block border-b border-stone-100 px-3 py-2 text-sm text-stone-700">{isLocalUnlockSession() ? '账号登录' : '登录与本地解锁'}</Link>}
             <button
               onClick={() => {
                 setOpen(false);
@@ -70,7 +70,7 @@ export function TopBar({ pageTitle, onOpenCopilot }: { pageTitle?: string; onOpe
               className="w-full flex items-center gap-2 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 border-b border-stone-100"
             >
               <UserRound size={14} />
-              <span>个人中心</span>
+              <span>账户设置</span>
             </button>
             <button
               onClick={async () => {

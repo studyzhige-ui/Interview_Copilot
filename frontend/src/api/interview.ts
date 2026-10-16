@@ -11,13 +11,23 @@ import type {
 export async function listInterviewRecords(
   offset = 0,
   limit = 50,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; jobOpportunityId?: string; includeInvitations?: boolean } = {},
 ): Promise<InterviewRecordListItem[]> {
   const res = await apiClient.get('/interview-records', {
-    params: { offset, limit },
+    params: { offset, limit, job_opportunity_id: opts.jobOpportunityId, include_invitations: opts.includeInvitations },
     signal: opts.signal,
   });
   return res.data;
+}
+
+/** Exhaust all pages for cross-record calendar and association selectors. */
+export async function listAllInterviewRecords(): Promise<InterviewRecordListItem[]> {
+  const all: InterviewRecordListItem[] = [];
+  for (let offset = 0; ; offset += 100) {
+    const page = await listInterviewRecords(offset, 100);
+    all.push(...page);
+    if (page.length < 100) return all;
+  }
 }
 
 export async function getInterviewRecord(
@@ -76,7 +86,17 @@ export async function cancelAnalyze(recordId: string): Promise<void> {
   await apiClient.post(`/analyze/${encodeURIComponent(recordId)}/cancel`);
 }
 
-export async function getAnalyticsReport(): Promise<unknown> {
+export type AnalyticsReport = { status: 'empty'; message: string } | {
+  status: 'success';
+  overall: number | null;
+  score_scale: { version: string; meaning: string };
+  axes: Array<{ k: string; v: number | null; assessment_count: number; evidence_count: number; confidence: 'none' | 'low' | 'medium' | 'high' }>;
+  totals: { ability_topics: number; scored_topics: number; assessment_count: number };
+  strengths: Array<{ topic: string; evidence: string; score: number }>;
+  weaknesses: Array<{ topic: string; flaw: string; plan: string; score: number }>;
+};
+
+export async function getAnalyticsReport(): Promise<AnalyticsReport> {
   const res = await apiClient.get('/analytics/report');
   return res.data;
 }

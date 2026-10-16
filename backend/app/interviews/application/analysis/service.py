@@ -1,7 +1,7 @@
 """Scoring and synthesis for already-grounded interview QA.
 
-Upload recordings are structured by transcript_structure_service from immutable
-word evidence. Mock interviews arrive as ConversationMessage-derived QA. This
+Upload recordings are extracted by recording_qa_service using full
+ASR context and references to original audio. Mock interviews arrive as ConversationMessage-derived QA. This
 module intentionally owns neither ASR nor QA extraction.
 """
 
@@ -25,6 +25,7 @@ from app.interviews.domain.assessment import (
     RUBRIC_VERSION,
 )
 from app.core.scoring import validate_score, score_scale
+from app.interviews.domain.specification import PHASE_LABELS
 from app.prompts.voice_analysis import QUESTION_ANALYSIS_PROMPT, SYNTHESIS_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -172,15 +173,6 @@ async def _request_batch_result(
 # Stage 3: Global Synthesis Report (Reduce)
 # ══════════════════════════════════════════════════════════════════════════
 
-_PHASE_NAME_MAP: dict[str, str] = {
-    "self_intro": "自我介绍",
-    "resume_deep_dive": "简历项目深挖",
-    "technical": "技术基础",
-    "behavioral": "行为面试",
-    "reverse_qa": "反问环节",
-    "general": "综合",
-}
-
 
 async def _request_synthesis_payload(llm: LLM, prompt: str) -> dict[str, Any]:
     """Repair completed structured-output failures.
@@ -256,7 +248,7 @@ async def _synthesize_report(
         phase_rows.append(
             {
                 "phase": phase,
-                "phase_name": _PHASE_NAME_MAP.get(phase, phase),
+                "phase_name": PHASE_LABELS.get(phase, phase),
                 "score": round(sum(phase_scores) / len(phase_scores), 1)
                 if phase_scores
                 else None,
@@ -296,7 +288,7 @@ async def _synthesize_report(
     summary_lines: list[str] = []
     for pq in assessed:
         summary_lines.append(
-            f"第{pq['index']}题 [{_PHASE_NAME_MAP.get(pq.get('phase', ''), pq.get('phase', ''))}] "
+            f"第{pq['index']}题 [{PHASE_LABELS.get(pq.get('phase', ''), pq.get('phase', ''))}] "
             f"评分:{pq['score']}/10\n"
             f"  问题: {pq['question']}\n"
             f"  分析: {pq['critique']}\n"

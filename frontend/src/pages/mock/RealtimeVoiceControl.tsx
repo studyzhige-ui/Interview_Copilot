@@ -33,7 +33,7 @@ export function RealtimeVoiceControl(props: Props) {
         <button disabled={live.phase !== 'listening'} onClick={() => live.control('play_question')}>朗读当前问题</button>
       </>}
     </div>
-    <p className="text-xs text-stone-500 mt-2">单次回答最多 {live.maxSeconds} 秒。临时转写不保存；断开不会自动重发回答。播放记录是浏览器报告，不代表已经听到。</p>
+    <p className="text-xs text-stone-500 mt-2">单次回答最多 {live.maxSeconds} 秒。临时转写不写入面试记录；断开不会自动重发回答。播放记录是浏览器报告，不代表已经听到。</p>
     {live.error && <p role="alert" className="text-amber-800 mt-2">{live.error}</p>}
     {live.partial && <p className="text-stone-500 mt-2">临时转写：{live.partial}</p>}
     {live.draft && <div className="mt-2"><p className="whitespace-pre-wrap">{live.draft.text}</p><button onClick={() => live.control('commit')}>确认并发送回答</button></div>}

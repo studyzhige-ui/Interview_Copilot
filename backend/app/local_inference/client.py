@@ -115,7 +115,14 @@ def checked_response(task, response, dimension):
 
 
 def make_audio_request(
-    role, binding, pcm, *, max_speakers, priority="background", timeout=120
+    role,
+    binding,
+    pcm,
+    *,
+    max_speakers,
+    centroids=None,
+    priority="background",
+    timeout=120,
 ):
     from .audio import pcm_payload
 
@@ -129,6 +136,7 @@ def make_audio_request(
                 "diarization": "diarize",
             }.get(role, ""),
             audio=pcm_payload(pcm),
+            centroids=centroids or [],
             max_speakers=max_speakers,
             priority=priority,
             timeout=timeout,

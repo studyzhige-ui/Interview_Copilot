@@ -80,9 +80,10 @@ def create_job_description_snapshot(
 
     opportunity = _locked_opportunity(db, user_pk, opportunity_id)
     original_url = command.original_url.strip()
-    normalized_url = normalize_job_description_url(original_url)
+    normalized_url = normalize_job_description_url(original_url) if original_url else ""
     if (
-        opportunity.normalized_source_url
+        normalized_url
+        and opportunity.normalized_source_url
         and opportunity.normalized_source_url != normalized_url
     ):
         raise JobDescriptionSnapshotSourceError(
@@ -157,7 +158,7 @@ def create_job_description_snapshot(
         idempotency_key=idempotency_key,
         creation_fingerprint=fingerprint,
     )
-    if opportunity.source_url is None:
+    if original_url and opportunity.source_url is None:
         opportunity.source_url = original_url
         opportunity.normalized_source_url = normalized_url
     if opportunity.source_provider is None:

@@ -36,7 +36,9 @@ from app.schemas.file_assets import (
     UploadUrlRequest,
     UploadUrlResponse,
 )
-from app.files.application.file_asset_service import UPLOAD_STATUS_UPLOADED
+from app.files.application.file_asset_service import (
+    READABLE_UPLOAD_STATUSES,
+)
 from app.files.application.file_asset_service import UnknownUploadPurpose
 from app.files.application.file_asset_service import UploadTooLarge
 from app.files.application.file_asset_service import confirm_file_asset
@@ -60,13 +62,17 @@ def upload_too_large_http(exc: UploadTooLarge) -> HTTPException:
     )
 
 
-def require_uploaded(db: Session, upload: FileAsset, noun: str) -> FileAsset:
+def require_readable_upload(db: Session, upload: FileAsset, noun: str) -> FileAsset:
     """Confirm-on-consume gate for business endpoints: verify a possibly
     still-pending asset and 400 with its validation error if it isn't
     readable. ``noun`` names the file in the user-facing message (文档 /
     音频文件 / ...)."""
     upload = ensure_uploaded(db, upload)
-    if upload.upload_status != UPLOAD_STATUS_UPLOADED:
+    if (
+        upload.deleted_at is not None
+        or upload.upload_status not in READABLE_UPLOAD_STATUSES
+        or upload.validation_status != "passed"
+    ):
         raise HTTPException(
             status_code=400,
             detail=f"{noun}校验未通过：{upload.validation_error or '上传未完成'}",
@@ -233,7 +239,8 @@ def permanently_delete_file_asset(
     return execution.result
 
 
-@router.api_route("/file-assets/{file_asset_id}/download", methods=["GET", "HEAD"])
+@router.get("/file-assets/{file_asset_id}/download")
+@router.head("/file-assets/{file_asset_id}/download")
 def download_file_asset(
     request: Request,
     file_asset_id: str,
@@ -549,7 +556,8 @@ def _stream_asset(request: Request, asset, *, attachment=False):
     )
 
 
-@router.api_route("/file-assets/{file_asset_id}/content", methods=["GET", "HEAD"])
+@router.get("/file-assets/{file_asset_id}/content")
+@router.head("/file-assets/{file_asset_id}/content")
 def read_file_content(
     request: Request,
     file_asset_id: str,

@@ -12,7 +12,6 @@ from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, re
 from app.career.application.interview_invitation_operations import (
     InterviewInvitationOperationError,
     confirm_interview_invitation,
-    get_interview_invitation_handoff,
     reject_interview_invitation_candidate,
 )
 from app.career.application.invitation_interaction import (
@@ -20,8 +19,6 @@ from app.career.application.invitation_interaction import (
     fact_confirmation_for_tool_call,
 )
 from app.db.database import SessionLocal
-from app.models.conversation_turn import ConversationTurn
-from app.schemas.client_action import InterviewPreparationOpenPayload
 from app.schemas.interview_invitation import (
     CandidateConfirmationBasis,
     ConfirmInterviewInvitation,
@@ -38,14 +35,6 @@ from app.conversation.application.current_turn_source import CurrentTurnSourceEr
 from app.conversation.application.current_turn_source import (
     require_current_turn_user_message,
 )
-from app.conversation.application.client_action_service import ClientActionConflictError
-from app.conversation.application.client_action_service import (
-    ClientActionUnavailableError,
-)
-from app.conversation.application.client_action_service import action_resolution
-from app.conversation.application.client_action_service import create_client_action
-from app.conversation.application.client_action_service import find_client_action
-from app.conversation.application.client_action_service import latest_handoff_client
 
 
 class ConfirmAssertedInterviewInvitationArgs(BaseModel):
@@ -66,15 +55,6 @@ class ReviewInterviewInvitationCandidateArgs(BaseModel):
 
     candidate_id: str = Field(min_length=1, max_length=36)
     expected_candidate_version: PositiveInt
-
-
-class OpenInterviewPreparationArgs(BaseModel):
-    """Open one already-verified Interview in the initiating product client."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    interview_id: str = Field(min_length=1, max_length=128)
-    expected_interview_version: PositiveInt
 
 
 def _runtime_scope(ctx: AgentToolContext) -> tuple[int, str, str, str]:
@@ -140,7 +120,6 @@ def _confirm_asserted_sync(
         return {
             "operation": result.model_dump(mode="json"),
             "verified": result.verification.conclusion == "verified",
-            "preparation_handoff_available": True,
         }
     except Exception as exc:
         db.rollback()
@@ -271,7 +250,6 @@ def _review_candidate_sync(
             "operation": result.model_dump(mode="json"),
             "decision": resolution.decision,
             "verified": result.verification.conclusion == "verified",
-            "preparation_handoff_available": True,
         }
     except Exception as exc:
         db.rollback()
@@ -285,118 +263,6 @@ async def _review_candidate_handler(
     ctx: AgentToolContext,
 ) -> dict[str, Any]:
     return await asyncio.to_thread(_review_candidate_sync, args, ctx)
-
-
-def _owned_turn(db, ctx: AgentToolContext) -> ConversationTurn | None:
-    if not ctx.turn_id or ctx.user_pk is None:
-        return None
-    turn = db.get(ConversationTurn, ctx.turn_id)
-    if (
-        turn is None
-        or turn.user_id != ctx.user_pk
-        or turn.conversation_id != ctx.session_id
-    ):
-        return None
-    return turn
-
-
-def _open_preparation_sync(
-    args: OpenInterviewPreparationArgs,
-    ctx: AgentToolContext,
-) -> dict[str, Any]:
-    user_pk, _session_id, _turn_id, tool_call_id = _runtime_scope(ctx)
-    db = SessionLocal()
-    try:
-        turn = _owned_turn(db, ctx)
-        if turn is None:
-            return {"error": "client_action_unavailable", "detail": "Turn unavailable"}
-        handoff = get_interview_invitation_handoff(
-            db,
-            user_pk=user_pk,
-            interview_id=args.interview_id,
-        )
-        if handoff.interview.version != args.expected_interview_version:
-            return {
-                "error": "stale_version",
-                "detail": f"interview version is {handoff.interview.version}",
-            }
-
-        existing = find_client_action(
-            db,
-            turn_id=turn.id,
-            tool_call_id=tool_call_id,
-            action="interview.preparation.open",
-        )
-        if existing is None:
-            original_client_id, active_client_id = latest_handoff_client(
-                db,
-                turn=turn,
-                tool_call_id=tool_call_id,
-            )
-            row, request = create_client_action(
-                db,
-                turn=turn,
-                tool_call_id=tool_call_id,
-                action="interview.preparation.open",
-                payload=InterviewPreparationOpenPayload(
-                    interview_id=handoff.interview.id,
-                    opportunity_id=handoff.opportunity.id,
-                    expected_interview_version=args.expected_interview_version,
-                    expected_opportunity_version=handoff.opportunity.version or 1,
-                    source_operation_id=handoff.verification.operation_id,
-                ),
-                original_client_id=original_client_id,
-                bound_client_id=active_client_id,
-            )
-            db.commit()
-            return _waiting_client_action(row, request)
-
-        row, request = existing
-        resolution = action_resolution(row)
-        if resolution is None:
-            return _waiting_client_action(row, request)
-        outcome = str(resolution.get("outcome") or "failed")
-        if outcome != "acknowledged":
-            return {
-                "error": f"client_action_{outcome}",
-                "reason": resolution.get("reason"),
-                "domain_state": "verified",
-                "manual_handoff_available": True,
-                "interview": handoff.interview.model_dump(mode="json"),
-            }
-        return {
-            "client_action_status": "acknowledged",
-            "opened": True,
-            "domain_state": "verified",
-            "interview": handoff.interview.model_dump(mode="json"),
-            "opportunity": handoff.opportunity.model_dump(mode="json"),
-        }
-    except (ClientActionConflictError, ClientActionUnavailableError) as exc:
-        db.rollback()
-        return {"error": "client_action_unavailable", "detail": str(exc)}
-    except Exception as exc:
-        db.rollback()
-        return _operation_error(exc)
-    finally:
-        db.close()
-
-
-def _waiting_client_action(row, request) -> dict[str, Any]:
-    return {
-        "error": "interaction_required",
-        "interaction_type": "client_readiness",
-        "reason": "client_action_required",
-        "action_id": request.action_id,
-        "action": request.action,
-        "interaction": {"id": row.id, "version": row.version, "kind": row.kind},
-    }
-
-
-async def _open_preparation_handler(
-    args: OpenInterviewPreparationArgs,
-    ctx: AgentToolContext,
-) -> dict[str, Any]:
-    return await asyncio.to_thread(_open_preparation_sync, args, ctx)
 
 
 def _task_authorizes_asserted_invitation(
@@ -426,18 +292,6 @@ def _task_authorizes_candidate_review(
     )
 
 
-def _task_authorizes_preparation_open(
-    _arguments: dict[str, Any],
-    _ctx: AgentToolContext,
-    current_task: str,
-) -> bool:
-    task = " ".join(str(current_task or "").casefold().split())
-    refusal = ("不要打开", "先不准备", "do not open", "not now")
-    return any(
-        word in task for word in ("开始准备", "打开准备", "面试准备", "start prep")
-    ) and not any(word in task for word in refusal)
-
-
 def _candidate_resources(
     args: ReviewInterviewInvitationCandidateArgs,
     ctx: AgentToolContext,
@@ -454,13 +308,6 @@ def _asserted_resources(
             f"user:{ctx.user_pk}:job-opportunity:{args.opportunity.opportunity_id}",
         )
     return (f"user:{ctx.user_pk}:interview-invitation:new",)
-
-
-def _preparation_resources(
-    args: OpenInterviewPreparationArgs,
-    ctx: AgentToolContext,
-) -> tuple[str, ...]:
-    return (f"user:{ctx.user_pk}:interview:{args.interview_id}:preparation",)
 
 
 registry.register(
@@ -486,28 +333,6 @@ registry.register(
     )
 )
 
-registry.register(
-    ToolDefinition(
-        name="open_interview_preparation",
-        description=(
-            "Open the verified Interview preparation context in the initiating "
-            "product client. This performs no Career Domain or external write."
-        ),
-        args_model=OpenInterviewPreparationArgs,
-        handler=_open_preparation_handler,
-        effect=ToolEffect.CLIENT_ACTION,
-        task_authorizer=_task_authorizes_preparation_open,
-        resource_resolver=_preparation_resources,
-        reversible=True,
-        concurrency_safe=False,
-        emoji="🧭",
-        prompt=(
-            "Call only after an invitation Operation returned verified=true or when "
-            "the user explicitly asks to open an already verified Interview. A client "
-            "acknowledgement means only that the object context opened."
-        ),
-    )
-)
 
 registry.register(
     ToolDefinition(
@@ -535,6 +360,5 @@ registry.register(
 
 __all__ = [
     "ConfirmAssertedInterviewInvitationArgs",
-    "OpenInterviewPreparationArgs",
     "ReviewInterviewInvitationCandidateArgs",
 ]

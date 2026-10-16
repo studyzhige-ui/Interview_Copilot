@@ -145,7 +145,7 @@ def export_document(result, value):
 
 def convert(value):
     version = importlib.metadata.version("docling")
-    if version != "2.118.1":
+    if version != "2.139.0":
         raise ValueError("document_sdk_version_mismatch")
     artifacts = Path(value["artifacts"])
     if not artifacts.is_dir():

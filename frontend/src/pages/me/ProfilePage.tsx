@@ -1,3 +1,4 @@
+import { Link, useSearchParams } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { extractErr } from '@/api/client';
@@ -14,6 +15,8 @@ import { Avatar } from '@/components/ui/Avatar';
 import { StorageUsagePanel } from './StorageUsagePanel';
 
 export function ProfilePage() {
+  const [params, setParams] = useSearchParams();
+  const storageView = params.get('view') === 'storage';
   const queryClient = useQueryClient();
   const logout = useAuthStore((s) => s.logout);
   const setStoreMe = useAuthStore((s) => s.setMe);
@@ -117,12 +120,16 @@ export function ProfilePage() {
     );
   }
 
-  if (!me) return null;
+  if (!me) return <div className="workspace-page" role="alert"><p>账户信息暂时无法读取。</p><Btn kind="outline" className="mt-3" onClick={refresh}>重新加载</Btn></div>;
 
   const created = me.created_at?.slice(0, 19).replace('T', ' ');
 
   return (
-    <div className="p-6 max-w-3xl mx-auto">
+    <div className="workspace-page space-y-5">
+      <header><h1 className="text-xl font-semibold text-stone-800">账户与存储</h1><p className="mt-1 text-sm text-stone-500">管理登录账户与文件空间。求职经历请在<Link className="text-primary-700" to="/career-profile">个人档案</Link>中编辑。</p></header>
+      <nav aria-label="账户设置分类" className="profile-tabs"><button type="button" aria-pressed={!storageView} onClick={() => setParams({})}>账户信息</button><button type="button" aria-pressed={storageView} onClick={() => setParams({ view: 'storage' })}>文件与存储</button></nav>
+      {storageView ? <StorageUsagePanel /> : <>
+
       <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-xs">
         <div className="flex flex-wrap items-start gap-4">
           <div className="relative group shrink-0">
@@ -202,7 +209,7 @@ export function ProfilePage() {
             value={nickname}
             onChange={setNickname}
             maxLength={64}
-            hint="将显示在 TopBar 和复盘记录中"
+            hint="显示在账户菜单与协作记录中"
           />
           <Field
             label="头像 URL（可选）"
@@ -213,13 +220,13 @@ export function ProfilePage() {
             hint="直接上传图片即可（点击头像）；也可以填一个公开图片地址替换"
           />
           <div className="block mb-3.5">
-            <div className="text-xs font-medium text-stone-700 mb-1.5">个人简介</div>
+            <div className="text-xs font-medium text-stone-700 mb-1.5">账户简介</div>
             <textarea
               value={bio}
               onChange={(e) => setBio(e.target.value)}
               maxLength={2000}
               rows={4}
-              placeholder="一句话介绍你自己（求职方向、技术栈、亮点等）"
+              placeholder="账户备注（可选），求职经历请在个人档案编辑"
               className="w-full bg-stone-50 border border-stone-200 rounded-md outline-none text-sm text-stone-800 placeholder:text-stone-400 focus:border-primary-300 focus:ring-2 focus:ring-primary-300/30 px-3 py-2.5 resize-none"
             />
             <div className="text-[11px] text-stone-400 mt-1 text-right">{bio.length}/2000</div>
@@ -249,7 +256,7 @@ export function ProfilePage() {
           </Btn>
         </div>
       </div>
-      <StorageUsagePanel />
+      </>}
     </div>
   );
 }
