@@ -8,7 +8,10 @@ assert.equal(process.env.IC_DESKTOP_ACCEPTANCE, '1');
 assert.equal(process.env.IC_SUPABASE_URL, 'https://fixture.supabase.co');
 assert.equal(process.env.IC_SUPABASE_PUBLISHABLE_KEY, 'sb_publishable_synthetic_fixture');
 const projectDir = path.resolve(__dirname, '..');
-require('./prepare-runtime.cjs');
+require('./prepare-runtime.cjs').prepareRuntime({
+  root: path.resolve(projectDir, '..'), target: path.join(projectDir, '.runtime'),
+  auth: { provider: 'supabase', url: process.env.IC_SUPABASE_URL, publishableKey: process.env.IC_SUPABASE_PUBLISHABLE_KEY, emailDelivery: process.env.IC_SUPABASE_EMAIL_DELIVERY },
+});
 // Structured builder options avoid PowerShell/npm rewriting dotted CLI flags.
 // The pinned builder merges this override into package.json's build settings.
 build({ projectDir, targets: Platform.WINDOWS.createTarget('nsis', Arch.x64), publish: 'never', config: { artifactName: 'Interview-Copilot-acceptance-fixture.exe' } })
