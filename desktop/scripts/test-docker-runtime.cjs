@@ -13,7 +13,17 @@ async function main() {
   const manifest = JSON.parse(await fs.readFile(path.join(resources, 'desktop-runtime.json'), 'utf8'));
   const runtime = new ComposeRuntime({root, resources, bundle: manifest.bundle,
     auth: manifest.auth,
-    encode: value => Buffer.from(value), decode: value => value.toString()});
+    encode: value => Buffer.from(value), decode: value => value.toString(),
+    run: (executable, args, options) => command(executable, args, {...options,
+      onFailureDiagnostic: diagnostic => {
+        // Only this disposable fixture may expose CLI diagnostics. Never emit
+        // interpolated workspace credentials, even when Docker prints config.
+        for (const key of ['secret', 'databasePassword', 'storageUser', 'storagePassword']) {
+          if (runtime.state?.[key]) diagnostic = diagnostic.replaceAll(runtime.state[key], '[REDACTED]');
+        }
+        console.error(diagnostic);
+      },
+    })});
   let completed = false;
   try {
     const first = await runtime.start();
