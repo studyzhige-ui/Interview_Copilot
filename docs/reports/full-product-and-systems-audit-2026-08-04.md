@@ -1,5 +1,7 @@
 # Interview Copilot 全产品与核心系统审查（2026-08-04）
 
+> 历史快照：本文描述当时的 Milvus 架构，不代表当前 main。现行检索为 PostgreSQL + pgvector 与 PostgreSQL 内 BM25，入口见 `backend/app/rag/hybrid_index.py`；部署说明见 [本地优先部署](../deployment/local-first.md)。
+
 ## 1. 结论先行
 
 这次审查后的项目已经不再是“功能都能点，但边界和运行方式不清楚”的原型。

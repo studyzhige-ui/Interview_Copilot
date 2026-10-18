@@ -1,5 +1,7 @@
 # PostgreSQL + pgvector 混合检索迁移
 
+> 历史迁移记录：下文的模块名、默认索引方式和分词方式属于迁移当时的实现。当前 main 的统一入口为 `backend/app/rag/hybrid_index.py`，默认 `PGVECTOR_DENSE_INDEX_TYPE=exact`，可显式准备并启用 HNSW；词法默认值以 `backend/app/core/config.py` 为准。当前部署见 [本地优先部署](../deployment/local-first.md)。
+
 ## 实现
 
 PostgreSQL + pgvector 是唯一检索后端。后续清理已删除 Milvus 实现、后端选择器、回退分支、旧配置和专用容器服务；不再使用 `RAG_VECTOR_BACKEND`。

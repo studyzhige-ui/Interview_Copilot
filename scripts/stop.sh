@@ -6,7 +6,8 @@
 # this script never scans or kills unrelated processes.
 #
 # Flags:
-#   --volumes   Also delete docker volumes (postgres data, milvus, minio).
+#   --volumes   Also delete declared Compose volumes (PostgreSQL/pgvector,
+#               Redis, local runtime sockets, and the retained legacy MinIO volume).
 #               DESTRUCTIVE — wipes the database.
 
 set -uo pipefail

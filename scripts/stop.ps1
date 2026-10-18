@@ -7,12 +7,13 @@
     there with Ctrl+C; this script never scans or kills unrelated processes.
 
 .PARAMETER Volumes
-    Also delete docker volumes (postgres data, milvus data, minio bucket).
+    Also delete declared Compose volumes (PostgreSQL/pgvector, Redis,
+    local runtime sockets, and the retained legacy MinIO volume).
     DESTRUCTIVE — wipes the database. Use only when intentionally resetting.
 
 .EXAMPLE
     pwsh scripts/stop.ps1
-    pwsh scripts/stop.ps1 -Volumes   # nuke DB / vector store / object store
+    pwsh scripts/stop.ps1 -Volumes   # wipe Compose volumes, including legacy data
 #>
 [CmdletBinding()]
 param(

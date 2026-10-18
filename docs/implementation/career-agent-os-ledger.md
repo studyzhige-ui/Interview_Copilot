@@ -1,5 +1,7 @@
 # Career Agent OS Implementation Ledger
 
+> 阅读边界：本文按时间追加实施记录。早期表格中的“仍使用 Milvus”“待迁移”及分支状态是当时快照，不代表当前 main；当前唯一检索后端为 PostgreSQL + pgvector，入口见 `backend/app/rag/hybrid_index.py`，部署见 [本地优先部署](../deployment/local-first.md)。
+
 > 状态：现行实施账本；工程实现与现行架构收口，按提交验收；不合并 main、不宣称生产发布
 > 日期：2026-09-19
 > 规范来源：[`Career Agent OS Blueprint`](../architecture/career-agent-os-blueprint.md)  
