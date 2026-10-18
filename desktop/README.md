@@ -1,123 +1,28 @@
-# Windows desktop acceptance build
+# Windows 桌面应用使用帮助
 
-This is a Windows x64 Electron launcher for the existing local Docker runtime.
-It keeps PostgreSQL/pgvector, Redis, Celery workers, local files and BYOK.
-New files use the private filesystem provider by default. An explicitly configured
-S3 endpoint remains optional; existing URI schemes keep their original provider.
-Supabase handles identity only. The launcher starts the canonical workspace.
+桌面应用用于启动独立的本地 Docker 工作区。使用实际提供的 Windows x64 安装包时，请先确认其来源；GitHub Actions 中使用合成认证配置的验收安装包仅供测试，不能用于真实账号登录。
 
-## End-user runtime contract
+## 准备和启动
 
-The user installs and starts Docker Desktop themselves, accepts any applicable
-Docker terms, and selects Linux containers. The launcher links to the official
-[Windows installation instructions](https://docs.docker.com/desktop/setup/install/windows-install/);
-it does not install Docker, enable Windows features, accept terms or expose an
-unauthenticated TCP Docker daemon.
+1. 自行安装并启动 Docker Desktop，切换到 Linux 容器。桌面应用不会代为安装 Docker 或修改 Windows 功能。
+2. 安装并打开桌面应用。首次创建工作区前，可以选择资料和缓存的父目录。
+3. 按界面启动本地服务。首次启动需要联网获取镜像和依赖，并构建应用镜像；不是完全离线安装。
+4. 使用发行包所配置的认证服务注册或登录。若没有可用的真实发行安装包，请使用[完整容器启动方式](../docs/getting-started.md)。
 
-The installed app carries the build sources needed by the canonical Compose
-stack. Users do not need a repository checkout, Git, Python or Node. First start
-requires network access to fetch the pinned base images and dependencies and
-build the app images; it is not a fully offline installer. Large local model
-weights are not included or downloaded automatically.
+使用安装包无需另行安装 Git、Python 或 Node.js。大型本地模型权重不包含在安装包内；需要语音或本地模型时，按[模型部署帮助](../docs/deployment/local-first.md)准备。
 
-Before the first workspace is created, the user may choose a local parent folder
-for files and caches. The app creates an exclusive owned child and stores that
-location in protected settings. Existing directories are not silently adopted,
-and existing workspaces cannot be moved by changing this picker. PostgreSQL's
-Docker-managed volume is separate from this file/cache directory.
+## 停止、资料位置和备份
 
-The launcher always targets the local Windows Docker named pipe, ignores an
-ambient remote Docker context, and restricts Compose interpolation to its own
-configuration. It labels its containers and uses an installation-specific project
-and image names. Database and Redis ports are not exposed to the host; the product
-and scoped file API share one loopback origin. Start rejects a port or ownership
-collision. Stop operates only on verified owned container IDs and never deletes
-volumes. It remains available after partial startup or a version mismatch.
+通过界面停止本地服务会保留数据。数据库保存在 Docker 管理的数据卷中；文件和缓存位于首次选择的目录，默认位于应用的用户数据目录。
 
-Application data and protected runtime settings live under Electron's per-user
-`userData/local-workspace`; Docker database volumes retain the project
-identity. Windows protects the runtime settings using Electron safeStorage
-(DPAPI). This does not encrypt PostgreSQL volumes, recordings, or all
-browser session storage. Preserve both the data and original protected settings;
-copying the encrypted settings to a different Windows user/machine is not a
-supported migration method. The app refuses to silently replace unreadable keys.
-First configuration and ownership markers are published atomically; a failed
-first write can clean up only its own temporary file and empty new directory.
+请同时保留资料、数据库和原始受保护设置。受保护设置与 Windows 用户有关，直接复制到另一台机器或另一个 Windows 用户下不是受支持的迁移方式。已创建工作区不能通过重新选择目录直接搬家。
 
-The default stack no longer starts historical MinIO images. Their distribution
-and vendor security advisories prevent acceptance of that deployment. Existing
-MinIO volumes are retained, and legacy S3 reads need an explicitly configured
-endpoint or a separately approved migration. No original data is deleted or
-automatically moved. The S3-compatible test server in CI is a disposable fixture,
-not a shipped replacement or proof of all external S3 providers.
+现有工作区的运行包版本不一致时，应用会拒绝自动替换。升级前应先备份，不要删除配置来绕过版本提示。
 
-This initial launcher refuses automatic runtime-bundle upgrades for an existing
-workspace. A version change needs a separately verified backup/migration path;
-it does not stamp or adopt historical PR #2 data automatically. Existing external
-Compose installations are never adopted implicitly.
+## 常见问题
 
-## Build and inspect
-
-Use Node and the pinned `desktop/package-lock.json` in a build environment:
-
-```sh
-npm ci --prefix desktop
-npm test --prefix desktop
-```
-
-The release operator supplies only the approved public Supabase project origin
-and publishable key through `IC_SUPABASE_URL` and
-`IC_SUPABASE_PUBLISHABLE_KEY`. Never use service-role/secret keys. The staging
-script rejects a non-HTTPS origin or non-publishable key, excludes `.env`, user
-data, caches and dependencies, and records hashes of the bundled runtime sources.
-Keep `IC_SUPABASE_EMAIL_DELIVERY=team_only` until real delivery is verified.
-
-```sh
-npm run package:win --prefix desktop
-```
-
-This creates a per-user NSIS installer and performs no publication. Signing is
-not configured; unsigned acceptance artifacts are not signed release evidence.
-A package built with `https://fixture.supabase.co` and a synthetic publishable key
-is a packaging fixture, unsuitable for real login and not a release artifact.
-The packaged app registers its native return scheme on first launch. Uninstall
-removes that per-user association only if it still names this exact installed
-executable; a handler subsequently assigned to another application is preserved.
-
-## Native account return and acceptance gates
-
-The OS callback uses only the `interview-copilot` scheme, `auth` host and
-`/confirm` or `/recovery` path, with a bounded per-flow `#state=UUID` fragment. The current Supabase Auth
-implementation excludes fragments from redirect allowlist matching and preserves
-them on a successful PKCE return, so the approved hosted entries are exactly
-`interview-copilot://auth/confirm` and `interview-copilot://auth/recovery`. No host,
-path or query wildcard is required. Error returns without state are notices only
-and do not consume an active flow. The hosted project's health endpoint reports
-GoTrue `v2.197.0`; the matching official source confirms fragment stripping in
-[allowlist matching](https://github.com/supabase/auth/blob/v2.197.0/internal/utilities/request.go)
-and preservation on [successful PKCE redirects](https://github.com/supabase/auth/blob/v2.197.0/internal/api/verify.go).
-Real-mail and installed OS transport verification are still required before
-treating this flow as accepted. The native bridge
-only routes a one-time authorization code to the initiating Electron partition.
-The actual pinned Supabase SDK exchanges it with that partition's PKCE verifier;
-only a verified SDK recovery event enables password submission. An expired,
-replaced, cancelled or replayed intent must not consume a newer flow. No callback
-URL is logged and no access/refresh token is accepted through it.
-
-Hosted redirect configuration is a separate, explicitly approved action. Native
-registration, closed-app/warm-app return, real email delivery, microphone consent,
-Docker lifecycle and screenshots must be exercised on an actual Windows host.
-Unit tests, an unpacked build, a Linux browser campaign and a source review do not
-pass those gates. See the repository acceptance ledger for exact evidence.
-
-The staged desktop CI separates three kinds of evidence. The Windows job builds
-and inspects the NSIS fixture, then installs it on a disposable hosted runner and
-uses OS ShellExecute with synthetic pending metadata to check closed/warm launch,
-single-instance delivery, fragment preservation, stale/duplicate/expired rejection,
-and uninstall cleanup. It never calls Supabase or starts Docker Desktop. A Linux
-Docker job starts the real bundled services, pings every Celery lane, writes
-synthetic PostgreSQL/private-file fixtures, and verifies retention and ownership on
-stop/restart. Its temporary settings codec is explicitly a test fixture; it does
-not prove Windows DPAPI. These jobs must run successfully on the exact PR head
-before their checks can be claimed as passed. Neither substitutes for live email,
-Windows Docker Desktop lifecycle, microphone, or a signed release.
+- **Docker 未就绪**：打开 Docker Desktop，等待引擎启动，检查 Linux 容器模式。
+- **端口冲突**：停止占用该端口的应用后重试。
+- **首次启动失败**：检查网络、可用磁盘和 Docker 状态；保留工作区与设置后再重试。
+- **账号登录失败**：确认安装包使用真实可用的认证项目；验收用合成配置不能登录。
+- **配置或密钥无法读取**：保留原文件，不要删除后重新生成；从同一 Windows 用户下的可靠备份恢复。

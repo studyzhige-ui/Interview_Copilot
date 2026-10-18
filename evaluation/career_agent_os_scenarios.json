@@ -1,12 +1,5 @@
 {
   "version": 2,
-  "architecture": "docs/architecture/career-agent-os-blueprint.md",
-  "contracts": [
-    "docs/architecture/contracts/application-operation-contract.md",
-    "docs/architecture/contracts/context-package-contract.md",
-    "docs/architecture/contracts/interaction-event-contract.md",
-    "docs/architecture/contracts/verification-contract.md"
-  ],
   "scenarios": [
     {
       "id": "resume",
@@ -100,6 +93,5 @@
       ],
       "frontend_tests": []
     }
-  ],
-  "test_strategy": "docs/implementation/current-test-baseline.md"
+  ]
 }

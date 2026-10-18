@@ -85,6 +85,9 @@ jobs:
           fi
           ffmpeg -version
 
+      - name: Enforce startup and user-help documentation scope
+        run: python scripts/check_public_docs.py
+
       - name: Compile check
         run: python -m compileall -q backend/app evaluation scripts
 

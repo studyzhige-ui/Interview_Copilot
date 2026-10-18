@@ -1,9 +1,0 @@
-2026-09-22 19:32:52 [req=2898bf21eba3] [interview.copilot.main] INFO http_request method=GET route=/me status=401 response_start_ms=1.96
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-2026-09-22 19:46:41 [req=-] [interview.copilot.main] INFO Draining background tasks before shutdown...
-2026-09-22 19:46:41 [req=-] [app.core.background_tasks] INFO Draining 1 background task(s)...
-2026-09-22 19:46:41 [req=-] [app.core.background_tasks] INFO All background tasks drained.
-2026-09-22 19:46:41 [req=-] [interview.copilot.main] INFO ====== Interview Copilot shutdown sequence complete ======
-INFO:     Application shutdown complete.
-INFO:     Finished server process [9283]

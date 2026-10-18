@@ -74,3 +74,31 @@ exports/
 # Local career redesign verification artifacts and temporary credentials
 .playwright-cli/
 output/career-redesign/
+
+# Publish only startup and user help. Internal notes/reports stay local.
+*.md
+*.rst
+*.doc
+*.docx
+*.pdf
+*.ppt
+*.pptx
+*.odt
+*.adoc
+*.rtf
+/docs/*
+!/README.md
+!/desktop/README.md
+!/docs/README.md
+!/docs/getting-started.md
+!/docs/usage.md
+!/docs/deployment/
+/docs/deployment/*
+!/docs/deployment/community.md
+!/docs/deployment/cloud.md
+!/docs/deployment/local-first.md
+
+# Executable model templates are application resources, not documentation.
+!/backend/app/conversation/context_templates/*.md
+!/third_party/codex-context/prompt.md
+!/third_party/codex-context/summary_prefix.md

@@ -1,126 +1,45 @@
-# Interview Copilot Cloud
+# Cloud 部署配置帮助
 
-Cloud is the hosted Web product. Start from:
+Cloud 需要运营方提供数据库、队列、模型、文件存储、域名和邮件服务。仓库根目录的 Compose 用于 Community 本地运行，不是一键生产 Cloud 部署。
+
+## 配置准备
 
 ```bash
 cp .env.cloud.example .env
 ```
 
-The Cloud backend image uses the lean core dependency set by default:
+按模板填写：
+
+- `ENVIRONMENT=production`、独立且稳定的 `SECRET_KEY`；
+- PostgreSQL 连接和 pgvector 扩展、Redis、私有文件存储或明确配置的 S3；
+- TLS 域名、`CORS_ORIGINS` 和可信代理；
+- 内部模型、Embedding、Reranker 与语音服务的有效凭据；
+- 真实认证与邮件服务配置。
+
+第三方 OAuth 连接需分别填写对应提供商的客户端配置、回调地址和凭据存储。未配置可用凭据存储的连接保持不可用。公开部署不要启用本地 stdio MCP。
+
+## 启动和更新
+
+在部署环境构建后端和前端镜像，配置持久化目录和依赖服务。先备份现有数据，再用相同版本镜像执行：
 
 ```bash
-docker build -f backend/Dockerfile .
+alembic upgrade head
 ```
 
-## Product contract
+启动 API、前端、各 Worker 和调度服务后，通过对外地址检查 `/api/v1/health/ready`，并实际验证登录、资料上传、回答和录音处理。服务环境中的数据库与模型地址必须能够被所有相应进程访问。
 
-End users may configure answer-model providers, personal API keys, one answer
-model, Skills, remote MCP servers, and voice. The operator owns the internal
-router/worker model, embedding, reranking, transcription, diarization, storage,
-queues, quotas, and monitoring.
+## 备份与恢复
 
-Cloud rejects custom LLM endpoints and stdio MCP at the backend even if a client
-forges the request.
-
-## Required operator services
-
-- PostgreSQL
-- Redis and isolated Celery workers for turns, indexing pipelines, voice,
-  background intelligence, and short control jobs
-- PostgreSQL pgvector extension (built into the provided database image)
-- S3-compatible object storage
-- Managed or operator-hosted embedding and reranking
-- Managed or operator-hosted transcription and diarization
-- A deployment `DEEPSEEK_API_KEY` for the internal
-  `deepseek-v4-flash` router/worker
-- At least one answer-model provider for keyless onboarding, if offered
-
-Use managed database and object-storage services in production where possible.
-The root Docker Compose file is the Community development stack, not a complete
-production Cloud topology.
-
-## Release gates
-
-- `ENVIRONMENT=production` and a generated `SECRET_KEY`
-- TLS and an explicit `CORS_ORIGINS`
-- When Gmail is enabled, configure its Google OAuth web client as one complete
-  unit: `GMAIL_GOOGLE_OAUTH_CLIENT_ID`,
-  `GMAIL_GOOGLE_OAUTH_CLIENT_SECRET`, `GMAIL_GOOGLE_OAUTH_REDIRECT_URI`, and
-  `GMAIL_OAUTH_PRODUCT_RETURN_URI`. Both URIs must use HTTPS in production;
-  register the redirect URI exactly in Google Cloud. Cloud must also inject a
-  managed external implementation of the Gmail-specific credential-broker
-  port. The Community encrypted-file store is ignored; without an external
-  broker Gmail remains unavailable.
-- When Canva or Notion is enabled, configure
-  `PLUGIN_OAUTH_PRODUCT_RETURN_URI` plus that provider's client ID, client
-  secret, and exact HTTPS redirect URI. Cloud must inject a managed
-  implementation of `PluginCredentialStore`; the Community encrypted-file
-  store is a local-development fallback and must not become an ephemeral
-  container path. The first Canva capability is read-only design metadata
-  search; the first Notion capability searches only pages explicitly shared in
-  the OAuth page picker. No write scope is implied by connecting an account.
-- Correct `TRUSTED_PROXIES`
-- Rotated database and object-storage credentials
-- Database backup and restore test
-- Alembic migration check
-- Per-user quotas and provider cost monitoring
-- Error/request-id collection
-- Data retention, export, and deletion policy
-- Smoke test with no user API key and with a user-provided key
-
-Do not expose operator model keys to the frontend. User keys remain encrypted in
-the backend credential store.
-
-## Operations
-
-The API exposes process and dependency probes:
-
-- `GET /api/v1/health/live` — process liveness only
-- `GET /api/v1/health/ready` — PostgreSQL and Redis readiness; returns 503 on
-  failure
-
-Every response carries `X-Request-ID`; backend logs carry the same ID. Collect
-stdout/stderr centrally and alert on readiness failures, HTTP 5xx, dead Outbox
-jobs, stale turns and queue age. Enable LangSmith for LLM latency, token usage
-and trace-level diagnosis. User-facing rate limits are keyed by verified JWT
-subject; anonymous/auth traffic falls back to client IP.
-
-Answer-model cost belongs to the user's provider key when BYOK is active.
-Platform cost is the internal DeepSeek router/worker plus managed RAG and speech
-providers. Monitor provider invoices and token traces; set provider-side hard
-budgets as the final circuit breaker. Do not hard-code mutable vendor prices in
-application code.
-
-Create a PostgreSQL backup, optionally including files from the configured filesystem or S3 store:
+停止写入后，按所配置的文件存储备份数据库和资料：
 
 ```bash
 python scripts/backup.py create --output /secure/backups --include-objects
 ```
 
-Stop writers before backup/restore. Restore files into an empty target store using
-the same storage backend; existing objects are never overwritten. PostgreSQL and
-file restoration are separate operations, not one atomic transaction.
-
-Restore only into a pre-created target database, then rebuild the pgvector projection from the
-PostgreSQL chunk source of truth:
+恢复到预先创建的目标数据库和空文件存储：
 
 ```bash
-python scripts/backup.py restore /secure/backups/<timestamp> \
-  --target-database-url postgresql://.../restore_target --restore-objects
-python scripts/reingest_hybrid.py  # read-only, finite batch plan
-python scripts/reingest_hybrid.py --execute  # explicit model work; follow next_cursor
+python scripts/backup.py restore /secure/backups/<timestamp> --target-database-url postgresql://.../restore_target --restore-objects
 ```
 
-Run the non-destructive release drills and deployed smoke flow:
-
-```bash
-python scripts/resilience_drill.py
-python scripts/smoke_test.py --base-url https://host \
-  --username "$SMOKE_USER" --password "$SMOKE_PASSWORD"
-```
-
-The repository automates encryption, tenant isolation, secret masking, backup
-and technical deletion constraints. A public Cloud launch still requires the
-operator to choose and publish retention periods, legal basis, data-export and
-account-deletion service levels, subprocessors and incident contacts; these are
-business/legal decisions and must not be invented by code.
+数据库和文件恢复是分别执行的步骤。保留原始密钥和备份，先验证恢复结果，再切换访问入口。录音、个人资料和服务密钥不要放入镜像或源码仓库。

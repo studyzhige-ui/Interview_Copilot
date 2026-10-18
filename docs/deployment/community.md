@@ -8,9 +8,9 @@ Community is the GitHub self-hosted edition. It has two independent choices:
 All combinations use `.env.community.example` and the same application code,
 database schema, and `data/` layout.
 
-## Host development mode (Linux or WSL2)
+## Linux / WSL2 source startup
 
-Use this mode to read, debug, test, or modify the source inside Linux or WSL2.
+Use this mode to run the source inside Linux or WSL2.
 The backend uses Linux file/process isolation primitives and Celery. Native
 Windows users should use the [desktop launcher](../../desktop/README.md) with
 Docker Desktop or full containers. Use the Bash scripts below for host-backend
@@ -79,8 +79,7 @@ and restart its API, workers and Beat. An internal LLM and the `background` and
 `default` workers must be available. Each user then enables contribution in
 Settings → Personalization; enabling the deployment does not opt users in.
 Eligible completed conversations wait 600 seconds by default, and interactions
-without reusable evidence correctly produce no memory. See the
-[lifecycle and acceptance limits](../architecture/agent-memory-lifecycle.md).
+without reusable evidence correctly produce no memory. See [memory settings in the usage help](../usage.md#记忆设置).
 
 ## Full container mode
 
@@ -235,11 +234,7 @@ network MCP targets require the separate `MCP_ALLOW_PRIVATE_NETWORKS` opt-in.
 
 ## Upgrades
 
-The `0.1` Community release starts from a new migration baseline. Databases
-created by unpublished development revisions (`0001_baseline` through `0051`)
-cannot be upgraded in place: back them up, recreate the PostgreSQL database,
-and re-import any data you intentionally keep. Tagged public releases after
-`0.1` will retain a continuous migration chain.
+Back up existing data and record the current migration version before upgrading. If migration fails, preserve the error and backup; do not reset volumes as a generic repair.
 
 Before upgrading:
 
@@ -252,8 +247,4 @@ Before upgrading:
 Embedding model, revision, dimension or index-contract changes require a new
 semantic generation. `python scripts/reingest_hybrid.py` is a read-only plan;
 pass `--execute` explicitly after checking its scope and follow the returned cursor.
-For existing databases, see [the non-destructive pgvector migration procedure](local-first.md#p3postgresql--pgvector-迁移与完整性2026-09-20).
-
-The optional quality harness is documented in
-[`evaluation/README.md`](../../evaluation/README.md). Its code and example
-schema ship with Community; private corpora and generated reports do not.
+See [local model startup](local-first.md) before changing local providers.

@@ -123,7 +123,7 @@ class Settings(BaseSettings):
     #                 corresponding registry module (5-10 stable choices).
     #   *_MODEL     — any model name that provider exposes. Adding new model
     #                 variants needs ZERO code change; just edit this var.
-    # See docs/providers.md for recommended combinations.
+    # See .env.community.example for recommended combinations.
     #
     # ⚠ EMBEDDING_DIM must match the model's actual output dimension.
     #   Switching to a different-dim model after data is indexed requires

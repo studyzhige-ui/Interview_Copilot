@@ -20,7 +20,7 @@ MANIFEST_PATH = Path(__file__).with_name("career_agent_os_scenarios.json")
 
 
 class CareerAgentOSGateError(RuntimeError):
-    """The target-architecture scenario manifest is structurally invalid."""
+    """The executable scenario manifest is structurally invalid."""
 
 
 def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
@@ -47,19 +47,6 @@ def validate_manifest(
     *,
     project_root: Path = PROJECT_ROOT,
 ) -> dict[str, Any]:
-    expected_architecture = "docs/architecture/career-agent-os-blueprint.md"
-    if manifest.get("architecture") != expected_architecture:
-        raise CareerAgentOSGateError(
-            "manifest must target the approved Career Agent OS Blueprint"
-        )
-    required_documents = [
-        expected_architecture,
-        str(manifest.get("test_strategy") or ""),
-        *[str(item) for item in manifest.get("contracts") or []],
-    ]
-    for relative in required_documents:
-        _contained_file(project_root, relative)
-
     scenarios = manifest.get("scenarios")
     if not isinstance(scenarios, list):
         raise CareerAgentOSGateError("scenarios must be a list")

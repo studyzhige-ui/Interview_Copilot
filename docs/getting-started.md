@@ -1,125 +1,113 @@
-# Getting started
+# 启动指南
 
-## Choose an edition
+## 运行前准备
 
-Use **Community** when you run the repository yourself or learn from the
-implementation. **Cloud** is the hosted product policy and needs an
-operator-managed production topology; the root Compose file is for Community.
+自行运行请选择 Community。安装 Git、Docker 和 Docker Compose v2，并进入克隆后的项目目录。
 
-The two supported local run modes below are alternatives. Do not run both from
-the same checkout at the same time.
+Windows 使用已启动的 Docker Desktop，切换到 Linux 容器。宿主 Python/Celery 模式需在 Linux 或 WSL2 中运行；不要在原生 Windows 上运行后端。
 
-## Mode A: host development
-
-Use this mode when changing or debugging the code. It requires Python
-3.11–3.13, Node.js 20+, Docker Compose v2, and an active Python virtual
-environment.
-
-Run the one-time setup:
-
-```powershell
-pwsh ./scripts/setup.ps1
-```
-
-The script separately asks which Community model profile to use: lightweight
-remote, local/hybrid CPU, or local/hybrid CUDA. For example, unattended CPU
-setup uses `pwsh ./scripts/setup.ps1 -ModelProfile local-cpu`; accepted values
-are `remote`, `local-cpu`, and `local-cuda`.
+先检查：
 
 ```bash
-bash ./scripts/setup.sh
+docker info
+docker compose version
 ```
 
-For example, unattended CPU setup uses
-`COMMUNITY_MODEL_PROFILE=local-cpu bash ./scripts/setup.sh`; the same three
-values are accepted.
+首次启动需联网下载基础镜像、依赖和选定的模型。下载时间和所需磁盘空间取决于使用远程 API 还是本地模型。
 
-Choose Community when prompted. The script creates `.env` when absent,
-installs dependencies, generates a missing `SECRET_KEY`, starts the local
-infrastructure, applies migrations, and installs frontend packages.
+## 方式一：完整容器（推荐）
 
-Start the development processes each day with:
+Windows PowerShell：
 
 ```powershell
-.\scripts\start.ps1
+Copy-Item .env.community.example .env
 ```
 
-```bash
-bash ./scripts/start.sh
-```
-
-The launcher runs Uvicorn, the configured Celery workload queues, Celery Beat,
-and Vite in one console. Open `http://localhost:5173` and press `Ctrl+C` to stop
-the host processes. The default console is concise; complete output is retained
-under `data/logs`. Add `-VerboseLogs` on PowerShell or `--verbose-logs` on Bash
-for live diagnostic output.
-
-## Mode B: full container stack
-
-Use this mode to run the packaged Community application. Copy the template and
-set a strong secret before startup:
+Linux / WSL2：
 
 ```bash
 cp .env.community.example .env
+```
+
+编辑 `.env`，至少确认：
+
+| 配置 | 如何填写 |
+| --- | --- |
+| `SECRET_KEY` | 唯一、稳定的随机密钥，至少 32 个字符；已有数据时不要随意重置 |
+| `POSTGRES_PASSWORD` | 设置自己的数据库密码，并同步修改 `DATABASE_URL` |
+| `DEEPSEEK_API_KEY` | 默认内部模型所用的部署密钥 |
+| `SILICONFLOW_API_KEY` | 默认 Embedding 与 Reranker 所用密钥；改用其他服务时填写对应配置 |
+| `AUTH_PROVIDER` | 默认 `local`；注册后按界面完成验证 |
+
+可以使用已安装的 Python 生成密钥：
+
+```bash
 python scripts/generate_secret.py
 ```
 
-Paste the generated value into `.env` as `SECRET_KEY`, then configure the
-deployment-owned internal LLM credential and any optional providers.
+若宿主没有 Python，也可运行一次临时 Python 容器生成：
 
 ```bash
-docker compose --profile full up -d --wait
+docker run --rm python:3.13-slim python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Open `http://localhost`. The full profile starts the frontend, API, four Worker
-classes, scheduler, PostgreSQL/pgvector, Redis, and MinIO. Its one-shot migrate
-service applies the database schema before runtime services start.
+将生成值写入 `.env`，不要把输出发到公开渠道。启动：
 
-Inspect or stop it with:
+```bash
+docker compose --profile full up -d --build --wait
+```
+
+打开 **http://localhost**。启动过程会等待依赖健康，并通过 `migrate` 服务执行数据库迁移。默认数据库使用 PostgreSQL/pgvector，不需要安装 Milvus；文件默认保存在私有的 `data/storage`。
+
+默认轻量镜像没有 WhisperX、BGE/Pyannote 本地模型依赖。需要录音或本地模型时，先完成[本地模型部署](deployment/local-first.md)。
+
+日常查看及停止：
 
 ```bash
 docker compose --profile full ps
-docker compose --profile full logs -f api worker-turns
+docker compose --profile full logs --tail 100 api worker-turns worker-transcription worker-pipeline migrate
 docker compose --profile full down
 ```
 
-## Models
+`down` 保留数据库卷和本地资料；`down --volumes` 会删除数据卷，不能用于日常停止。
 
-Community can use remote APIs, local models, or a per-capability hybrid. A
-remote profile avoids multi-gigabyte downloads. A local setup profile installs
-the local dependency extra and opens the model wizard automatically. Run it
-again later to change the selection:
+## 方式二：Linux / WSL2 宿主运行
+
+需要 Python 3.11–3.13、Node.js 24、Docker Compose v2 和已激活的 Python 虚拟环境。在 Linux / WSL2 终端执行：
 
 ```bash
-python scripts/init_models.py
+python3 -m venv .venv
+source .venv/bin/activate
+bash scripts/setup.sh
 ```
 
-The wizard can configure and download Embedding, Reranker, Whisper,
-diarization, and Docling independently, including compatible custom Hugging
-Face repositories. It writes the selected providers, model IDs, and embedding
-dimension to `.env`. Use `--non-interactive`, `--only ROLE`, or `--dry-run` in
-automation.
+按提示选择 Community 和模型方案：`remote`、`local-cpu` 或 `local-cuda`。脚本安装依赖、创建配置、启动数据库和 Redis、执行迁移并安装前端依赖。本地模型方案还会进入模型配置向导。
 
-Model weights are kept together in `data/cache/models`; library metadata and
-partial download state remain under `data/cache`. Both launch topologies use
-that managed cache, and the full stack mounts `./data` into its containers.
+以后每天启动：
 
-Cloud defaults to operator-managed remote embedding, reranking, and speech
-providers. Those credentials belong to the Cloud deployment and are not shown
-in ordinary user settings.
+```bash
+source .venv/bin/activate
+bash scripts/start.sh
+```
 
-## First-use checklist
+打开 **http://localhost:5173**。按 `Ctrl+C` 停止前台服务；需要停止数据库和 Redis 时执行 `bash scripts/stop.sh`。完整日志保存在 `data/logs`，实时详细输出使用 `bash scripts/start.sh --verbose-logs`。
 
-1. Register an account and verify its email. If SMTP is intentionally disabled
-   for local development, read the verification code from backend output.
-2. Select an answer model and configure its key if needed; the deployment
-   supplies the internal router/worker model.
-3. Upload a resume and job description.
-4. Run a mock interview and review the result.
-5. Add optional Skills and MCP servers.
-6. Confirm password reset from the login page before relying on the account.
+## 第一次使用
 
-See [Community deployment](deployment/community.md) for persistence, model,
-upgrade, and MCP details. See [Cloud deployment](deployment/cloud.md) for the
-hosted-product boundary, and [Codebase architecture](architecture/codebase.md)
-before changing module ownership.
+1. 注册或登录。默认本地认证未配置 SMTP 时，从 API 日志中读取验证邮件的验证码；真实邮件需配置 SMTP。
+2. 在设置中选择回答模型，填写个人 API Key（如该模型需要）。个人回答模型配置和部署所需的内部模型配置分别填写。
+3. 上传简历或 JD，等待处理完成后再开始提问或模拟面试。
+4. 使用录音前准备语音依赖和模型，并授予浏览器麦克风权限。
+
+更多操作见[使用帮助](usage.md)。
+
+## 常见问题
+
+- **Docker 无法连接**：启动 Docker Desktop 或 Docker 服务，确认 `docker info` 成功；Windows 检查是否为 Linux 容器。
+- **80 或 5173 端口被占用**：先停止占用端口的应用，确认没有同时运行两种启动方式。
+- **首次构建超时**：检查镜像仓库、Python/npm 源和模型下载网络；查看 Compose 日志后重新执行启动命令。
+- **页面打开但无法回答**：检查个人回答模型配置，以及 `.env` 中的内部模型凭据；修改环境配置后重新运行 Compose `up` 命令。
+- **资料处理失败**：查看 `worker-pipeline` 日志，检查检索服务密钥；本地模型用户检查模型文件和推理服务。
+- **语音功能不可用**：检查 `worker-transcription`、本地模型依赖及麦克风权限。远程浏览器录音需 HTTPS 或浏览器允许的本机地址。
+- **没有验证邮件**：默认本地模式先查看 API 日志；使用外部认证服务时按服务配置检查邮件投递。
+- **旧数据库启动失败**：先备份并保留完整错误，核对迁移版本；不要以删除卷或重置密钥作为通用修复。

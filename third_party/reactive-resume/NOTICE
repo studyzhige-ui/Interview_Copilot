@@ -1,0 +1,5 @@
+Reactive Resume attribution
+Source: https://github.com/reactive-resume/reactive-resume
+Revision: 19e0518eb5ea1b2c84d785bc5ea2b6d6c9d7b043 (6.0.3).
+License: MIT; see LICENSE for the copyright and permission notice.
+CSV and iCalendar routines in frontend/src/pages/career/transfer.ts are adapted with local field mappings, validation, UTF-8 folding and formula guarding.

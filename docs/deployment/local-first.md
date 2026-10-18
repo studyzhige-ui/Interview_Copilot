@@ -1,297 +1,68 @@
-# Local-first deployment and verification boundaries
+# 本地模型准备与启动
 
-Status: evaluator, local-asset policy, pgvector and the local RAG inference
-broker are implemented. Real-time audio and all-model scheduling remain open.
-Do not interpret this guide as a tested one-command installation of all future models. No production data is
-migrated and no paid service is invoked by the preflight commands below.
+本页适用于已完成[首次启动配置](../getting-started.md)的 Community 用户。本地模型需要相应依赖、可用权重和足够内存或显存；仅修改模型名称不能完成安装。
 
-> 当前配置（2026-10-02）：检索仅保留 BGE 主线，Qwen 运行适配已删除。下文 2026-09 的 Qwen 章节仅保留为历史记录，其命令不再适用于当前分支。当前 HNSW、WhisperX 与 TTS 范围见 [BGE/HNSW 集成说明](../implementation/bge-hnsw-cleanup-20261002.md)。
+## Linux / WSL2
 
-## Reuse local assets
-
-Merge the values needed from `.env.local-first.example` into your existing `.env`;
-do not replace keys, database settings or paths. With `local_only`, the old online
-edge-tts adapter is intentionally unavailable. Text mode and the existing local
-recorded-audio review path remain the first validation targets. A local streaming
-TTS adapter belongs to the next real-time work package, not an online fallback.
-
-Keep the downloaded BGE embedding/reranker, Whisper, alignment, diarization and
-Docling assets. `MODEL_ROOT_DIR` defaults to `CACHE_DIR/models`; it may instead
-point at the existing read-only weight directory. In WSL a Windows `D:\...` path
-must be translated to the corresponding `/mnt/d/...` path. Set `CACHE_DIR` to a
-writable Linux directory for metadata/locks/Torch caches. Do not share Windows
-and Linux virtual environments or compile caches.
+首次安装时运行 `bash scripts/setup.sh`，选择 `local-cpu` 或 `local-cuda`，按向导准备模型。已有环境可重新运行模型向导：
 
 ```bash
-# No network, model import, inference or writes to model/cache roots.
-python scripts/doctor_local.py --model-root /mnt/d/Models/InterviewCopilot \
-  --cache-dir /home/your-user/copilot-runtime/cache
-
-# Optional full-file hash comparison when a managed download receipt exists.
-python scripts/doctor_local.py --verify-hashes
-
-# Optional read-only nvidia-smi query; NOT a Torch/CUDA kernel acceptance test.
-python scripts/doctor_local.py --probe-gpu
-
-# Local plan only; explicitly add --check-remote to request HF metadata.
-python scripts/init_models.py --dry-run --only embedding
+python scripts/init_models.py
 ```
 
-Replace example paths with your actual locations. The doctor exits 2 for missing
-assets or policy conflicts, 0 when the selected structural checks pass. It always
-reports that GPU/audio/model-quality acceptance was not performed. A custom
-pipeline marked `bundle_requires_loader` still needs its actual offline loader.
-Legacy unpinned weights are not assigned a made-up revision or trusted hash.
-
-Actual `init_models.py --only <role>` is an explicit **online setup** action. It
-resolves a commit, downloads into a separate revision, checks all expected files,
-records hashes and atomically activates only a complete structural candidate.
-Never use this command as an automatic model fallback inside an API request.
-Back up valuable assets; no command here deletes the old model tree.
-
-## Windows / WSL storage
-
-Inspect before installing or moving anything:
-
-```powershell
-wsl --version
-wsl --list --verbose
-```
-
-For a NEW distribution, Microsoft documents `wsl --install --distribution <name>
---location <folder>`. Choose a data-drive location with room for the distribution,
-containers and temporary downloads. For an existing distribution, back up first;
-this project does not run unregister, repartition or automatic destructive moves.
-Keep Linux source/virtualenv/database/container data in the Linux filesystem,
-with its virtual disk on the data drive. Reusing read-only Windows weight files
-is deliberate; copy only a measured bottleneck, with space checks and hashes.
-
-`.wslconfig` applies globally to WSL2. Memory/CPU/swap values are machine-specific
-starting points, not performance claims. Put the swap file on the data drive when
-the system drive is constrained. Do not install a separate Linux display driver
-inside WSL; use the NVIDIA Windows driver path described by NVIDIA. The exact
-Torch/vLLM/audio dependency set for a specific GPU is a later hardware gate.
-
-Official references checked on 2026-09-19:
-- [WSL install location and non-destructive inventory](https://learn.microsoft.com/en-us/windows/wsl/basic-commands).
-- [Windows/Linux filesystem placement](https://learn.microsoft.com/en-us/windows/wsl/filesystems).
-- [WSL memory, processor and swap settings](https://learn.microsoft.com/en-us/windows/wsl/wsl-config).
-- [NVIDIA CUDA on WSL](https://docs.nvidia.com/cuda/wsl-user-guide/index.html).
-
-
-## Explicit local loader/inference probe (P1 continuation)
-
-`doctor_local.py` remains read-only and does not import models. After that
-structural check, the new command below can explicitly load **one existing
-model** in a separate Linux/WSL2 interpreter and run a small synthetic input:
+配置本地 Embedding、Reranker 或说话人分离时，准备并启动本地推理服务。以下 Python 路径和模型目录需要替换为实际 Linux 路径：
 
 ```bash
-python scripts/probe_local_model.py --role embedding \
-  --python /home/your-user/local-ml/.venv/bin/python \
-  --model-root /mnt/d/Models/InterviewCopilot \
-  --cache-dir /home/your-user/copilot-runtime/cache --device cuda
-```
-
-The ML environment must already contain the selected role's dependencies. The
-command does not install or download them, change the production model, use the
-DeepSeek key, or change existing model roots. The existing configured model ID
-is used unless `--model` is explicit. `--timeout` defaults to 180 seconds per
-probe; the child is stopped/reaped before the temporary cache is removed.
-
-Supported probes: `embedding` via SentenceTransformer, `reranking` via
-CrossEncoder, `transcription` via faster-whisper/CT2, and `alignment` via the
-local Transformers CTC model. They consume the synthetic inference result;
-creating a lazy transcription generator is not counted as a successful test.
-This does not certify WhisperX's complete alignment/diarization pipeline,
-Docling bundles, model quality, microphone, real-time voice or single-card
-co-residency. Those acceptance items remain open. CUDA is explicit and does not
-silently fall back to CPU. CPU is the default for an unqualified invocation.
-
-Each process receives only an allowlisted environment, private temporary HOME
-and offline cache roots, and no provider credentials, proxy settings, Python
-path or database URL. SDK offline options plus Python socket audit checks stop
-ordinary downloads/network calls. **They are not an OS security sandbox against
-malicious local model code or native libraries.** Use trusted assets, read-only
-weight mounts and an OS/network-isolated host for stronger containment.
-
-The combined stdout/stderr budget is bounded. Logs are not included in the JSON
-report; request ID, role, protocol and exit status must agree. Deadline, output
-flood, repeated cancellation and descendants holding a pipe are tested using
-real subprocesses. POSIX process groups are used; Windows-native execution is
-rejected instead of pretending that `Process.kill()` kills an entire tree.
-The GPU is initialized only in the fresh interpreter, not before a Celery fork.
-
-A success means one synthetic loader smoke completed in the selected environment.
-It is not P2's shared GPU scheduler and does not make P3–P9 complete. Missing
-weights/dependencies or failed inference exit nonzero, never `skipped=passed`.
-
-Official references checked 2026-09-20:
-- [Python subprocess lifecycle and pipes](https://docs.python.org/3.13/library/asyncio-subprocess.html).
-- [PyTorch accelerator/fork limitations](https://docs.pytorch.org/docs/stable/notes/multiprocessing.html).
-- [SentenceTransformer local loading](https://sbert.net/docs/package_reference/sentence_transformer/model.html).
-- [CrossEncoder loading and inference](https://sbert.net/docs/package_reference/cross_encoder/model.html).
-- [faster-whisper local models and lazy transcription](https://github.com/SYSTRAN/faster-whisper).
-
-
-## P3：PostgreSQL + pgvector 迁移与完整性（2026-09-20）
-
-生产检索默认只有 PostgreSQL/pgvector，一个数据库保存权威资料与可重建投影。
-`retrieval_generations` 保存完整语义身份，`retrieval_entries` 保存向量、词频和范围。
-不是仅比较维数；同维模型、切分、解析、前缀或词法合同变化会产生新代次。
-发布替换、块状态及文档索引指纹同事务提交；模型调用发生在事务外。
-源资料在解析/Embedding期间改变时，旧任务不能发布；删除与替换按文档行锁串行。
-查询在排名与BM25语料统计之前复核文档、块和文件的用户、状态与代次；
-私有会话附件不进入共享索引。召回后的正文授权复核继续保留。
-
-### 搜索质量和资源边界
-
-稠密检索先采用**有界精确搜索**，不是给小型单机默认叠加HNSW参数。
-词法路径使用版本化中文单字/双字和保留技术标识符的BM25；它不是PostgreSQL
-`ts_rank`冒充BM25，也不声称与原Milvus/jieba分词等价。范围内统计不混入其他用户。
-保留既有BGE Embedding/重排作为对照；本次模型权重与阈值不变。
-语义质量是否无回退必须用原有带证据标注的数据集对照，数据库正确性测试不能代替它。
-`RAG_INDEX_STATEMENT_TIMEOUT_MS`、`RAG_INDEX_LOCK_TIMEOUT_MS`、文档块数、查询字节和
-返回条数都有边界；超过容量明确报不可用，不把未完成查询当作没有资料。
-
-### 现有数据库与旧索引
-
-Compose的数据库基于原 `postgres:15.18-alpine`，只添加从官方精确提交
-`8ee86c96f0fd72390f890aa8a336fda6d3ab4c6c` 构建的pgvector0.8.6。保留原 `pgdata`
-卷和PostgreSQL主版本/系统库家族，不自动搬到Debian或新空卷。
-升级前备份PostgreSQL和原始文件；暂停API/Worker/Beat后统一升级代码与数据库，
-不支持旧Milvus Worker和新Worker混跑。`0056`不调用模型、不清空原始资料，也不读取
-或删除旧Milvus卷；旧outbox行只改分派类型，保留身份和幂等键。
-移除的是Milvus/etcd/专用MinIO的默认运行服务，不是用户旧磁盘数据。
-不要使用 `docker compose down -v` 当作升级命令。
-
-已发布的旧索引不会因为迁移建表就冒称可查询；后台代次对账会将可重建资料送入
-既有outbox。操作员也可先运行只读计划：
-
-```bash
-python scripts/reingest_hybrid.py --limit 100
-python scripts/reingest_hybrid.py --user 1 --limit 100
-# 核对范围后才明确执行；这会加载本地Embedding，或按当前配置调用远端模型。
-python scripts/reingest_hybrid.py --user 1 --limit 100 --execute
-# 使用计划返回的游标继续有限批次；不支持清空全部索引的 --drop。
-python scripts/reingest_hybrid.py --user 1 --after <document-id> --limit 100 --execute
-python scripts/consistency_scan.py
-```
-
-手动重建适用于已有规范块；没有任何解析块的资料仍通过正常导入流程重试，
-不把空资料伪装成一次成功恢复。旧外部索引与快照保留到质量对照和回退验收之后。
-已有投影数据时降级迁移要求先备份，不自动销毁；迁移失败保持原始资料。
-
-官方依据：pgvector的精确距离、不同维数列、Docker和构建说明
-https://github.com/pgvector/pgvector ；Python/SQLAlchemy类型
-https://github.com/pgvector/pgvector-python ；事务与行锁
-https://www.postgresql.org/docs/current/explicit-locking.html 。
-
-
-## P2：共享本地 RAG 推理服务（2026-09-20）
-
-本批把本地 Embedding 和重排从 API/Celery 进程移到一个独立服务；
-`EMBEDDING_PROVIDER=local` 和 `RERANKER_PROVIDER=local` 不再在应用中加载权重。
-现有模型目录只读复用，不下载新模型、不启用远端 fallback。普通 CPU tokenizer
-仍可本地加载，但强制 `local_files_only`，不加载 Embedding 权重。
-
-当前接入 SentenceTransformer / CrossEncoder（BGE 基线）和 Pyannote Community-1
-说话人观察。WhisperX 负责 ASR、字词对齐与窗口编排；Pyannote 只在 broker 子进程执行。
-Qwen 分支没有恢复；Docling 和实时媒体不属于这个 broker 合同。
-缺少模型不会妨碍代码回归；实际权重、GPU内核、精度和显存峰值在用户实机另验。
-
-### 明确准备、启动与诊断
-
-业务环境与本地 RAG ML 环境分开。ML 环境需要与模型相容的 Torch、Transformers、
-SentenceTransformers；不要把 WhisperX/Qwen/vLLM 的不同依赖强行装进同一个环境。
-可复用已有本地模型与已验证的 ML 环境。这里不声称当前旧 `[local]` extra 可作为
-将来所有音频模型的统一安装锁；完整环境锁与语音安装入口仍是后续交付项。
-
-```bash
-# 使用业务 Python 做结构/哈希检查，只写一个新的 owner-only config.json；不加载权重。
-# 运行目录选 Linux 文件系统，保持 Unix socket 路径短于 100 字节。
-python scripts/prepare_local_inference.py \
-  --python /home/your-user/venvs/local-rag/bin/python --device cuda \
-  --diarization-python /home/your-user/venvs/whisperx/bin/python \
-  --runtime-dir /home/your-user/.ic-inference \
-  --model-root /mnt/d/Projects/Python/Interview_Copilot/data/cache/models
-
-# 将命令输出的 LOCAL_INFERENCE_SOCKET 合并到原 .env，不替换密钥/数据库配置。
-# 前台运行独立 broker；模型由它按需启动，在独立解释器中驻留。
+python scripts/prepare_local_inference.py --python /home/your-user/venvs/local-ml/bin/python --device cpu --runtime-dir /home/your-user/.ic-inference --model-root /path/to/Interview_Copilot/data/cache/models
 python scripts/run_local_inference.py --config /home/your-user/.ic-inference/config.json
+```
 
-# 另一个终端：只读取队列/驻留/聚合计数，不加载模型、不返回输入文本。
+将准备命令输出的 `LOCAL_INFERENCE_SOCKET` 合并到现有 `.env`，不要覆盖原密钥和数据库设置。需要单独语音环境时，准备命令可用 `--diarization-python` 指定它。
+
+运行目录应在 Linux 文件系统中；不要把 Unix socket 放到 Windows 挂载目录。准备命令拒绝覆盖已有配置。更换模型前停止服务，准备新的配置并核对后切换。
+
+检查状态：
+
+```bash
 python scripts/run_local_inference.py --config /home/your-user/.ic-inference/config.json --status
 ```
 
-准备命令拒绝覆盖已有配置；改变模型需停止旧服务、核对生成的新配置再切换。
-Unix socket 与父目录要求 owner-only；两端检查同 OS UID。应用账户权限和账本仍在
-现有应用层，这个 socket 不向浏览器开放，不接受任意 Python 模块名或模型路径。
-容器部署要将同一 socket 目录挂载到调用者，并匹配 UID；未配置时明确不可用，
-不会偷偷创建一套进程或云端调用。默认 Compose 不会替用户自动安装 ML 环境。
+另一个终端使用已激活的业务环境执行 `bash scripts/start.sh`。
 
-### 生命周期、资源与错误
+## 完整容器 CPU 模式
 
-一个确定性调度 lane 串行执行请求；交互查询优先，后台任务通过等待老化获得机会。
-当前队列最多 16 个未完成任务，连接最多 24 个，文本与消息大小、加载、执行、
-读取、写入和关闭均有边界。模型可在多个请求间复用，空闲到期或预约容量不足时，
-先停止并回收旧进程，再释放预约。默认 CUDA 预约总额 12000 MiB，Embedding 5000、
-重排 3000。**这些是准入估算，不是硬件测量、硬显存隔离或“16GB一定够用”的承诺。**
-CPU模型不占CUDA预约；系统外的GPU程序与尚未接入的模型不受这个调度器控制。
+在 `.env` 中设置：
 
-取消排队任务不会执行；取消已开始的任务会清理整个已拥有的进程组，回收后才调度下一项。
-父服务突然死亡时，Linux parent-death signal终止直接模型子进程；这不是对任意
-第三方子孙进程或恶意native代码的安全沙箱。不得将当前直接模型进程合同冒用到
-尚未集成的vLLM多进程执行。网络关闭由SDK离线选项和Python审计辅助，强隔离需OS配置。
+```dotenv
+APP_EXTRAS=local
+EMBEDDING_PROVIDER=local
+RERANKER_PROVIDER=local
+TRANSCRIPTION_PROVIDER=local_whisperx
+LOCAL_INFERENCE_SOCKET=/app/data/runtime/local-inference/worker.sock
+```
 
-连接前失败/明确未开始与发送后未知分开；应用账本只对明确拒绝释放额度。
-重排分批时，首批已运行后下一批被拒绝，也不会退还整次操作或静默切换。
-连接关闭不表示“没有计算过”；服务不提供持久响应回放或跨重启exactly-once承诺。
-主程序仍使用原消费作用域，broker不接收DeepSeek密钥、数据库地址、代理和调用者PYTHONPATH。
+准备镜像、权重与推理配置：
 
-### 输入与索引语义
+```bash
+docker compose build api
+docker compose run --rm api python scripts/init_models.py
+docker compose run --rm --no-deps local-inference python scripts/prepare_local_inference.py --python /opt/venv/bin/python --device cpu --runtime-dir /app/data/runtime/local-inference
+docker compose --profile local up -d --wait local-inference
+docker compose --profile full --profile local up -d --build --wait
+```
 
-Embedding 使用显式查询/文本前缀、归一化向量和真实 tokenizer 长度检查；
-超长输入拒绝，不让库的隐式截断吞掉证据。模型维数和响应身份必须匹配。
-重排返回模型原始相关性分数，**不是用户十分制成绩**，不会夹紧到0–10。
-适配合同、前缀、token上限和已知模型revision进入索引身份；旧代次保留，但要使用
-P3的有界重建路径生成新代次，不能把不同向量语义混写。旧未固定revision的资产
-仍明确属于未固定来源，不伪造权重身份；正式质量对照需固定资产版本。
+首次创建的配置应保持稳定，不要对运行中的推理服务重复执行准备命令。CUDA 需要匹配的 NVIDIA 驱动、容器 GPU 访问权限和本地 CUDA 依赖，不能只把 `--device` 改为 `cuda`。
 
-### 已验证与尚未验证
+## 语音和模型故障
 
-新增测试执行了真实Unix连接和真实新Python进程，模型使用测试专属协议替身，
-生产代码没有测试模型开关。测试覆盖复用、私密环境、错误/过大输出、日志洪泛、
-断连/重复取消、队列期限、后台老化、驻留回收、父进程强制退出及RAG工厂实际接入。
-SDK模型逻辑另外用小型替身检查前缀、长度和结果形状。没有真实权重、准确率或GPU成绩。
+语音功能需保持 `worker-transcription` 运行。CPU 长录音处理可能较慢；先查看原任务状态，不要重复上传。缺少权重、模型依赖或推理服务时，按日志提示准备后重试。
 
-官方接口参考（2026-09-20复核）：
-- Python asyncio streams / subprocess：https://docs.python.org/3.13/library/asyncio-stream.html
-- PyTorch CUDA进程限制：https://docs.pytorch.org/docs/stable/notes/multiprocessing.html
-- SentenceTransformer：https://sbert.net/docs/package_reference/sentence_transformer/model.html
-- CrossEncoder：https://sbert.net/docs/package_reference/cross_encoder/model.html
-- Linux parent-death语义：https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html
+模型权重位于 `data/cache/models`，下载中间状态位于 `data/cache`。删除缓存前停止相关服务，只删除确认不再使用的模型目录。
 
-## 当前音频主线
+更换 Embedding 模型或维度后，需要重新处理资料索引。现有资料的索引操作可先查看有限批次计划：
 
-本地转写统一由 WhisperX 执行，面试证据使用有界分窗、词级对齐和 Community-1 说话人连续性。
-模型通过 `scripts/init_models.py` 准备；不要安装退役 Qwen ASR/TTS 环境或配置其提供者。
-长录音实现、验证与限制见 [主线收敛记录](../implementation/mainline-convergence-20261011.md#whisperx-长录音补齐)。
-本地 TTS/实时合成目前仍未补齐；Edge TTS 只可显式启用，不能视为本地功能替代。
+```bash
+python scripts/reingest_hybrid.py
+```
 
-
-### 2026-10-11 说话人主线接入
-
-准备脚本复用 WhisperX 的启用判定：`auto` + 本地 WhisperX 或显式 `pyannote`
-加入 diarization 角色；远端 ASR 的 `auto` 不额外要求本地语音权重。可用
-`--diarization-python` 指向已有 Pyannote 环境，否则复用 `--python`。模型 ID 取
-`DIARIZATION_MODEL_ID`（默认 `pyannote-community/speaker-diarization-community-1`）。
-仅使用 RAG 且不装语音模型时明确设置 `DIARIZATION_MODE=none`。
-
-当前音频 wire 合同为 `pyannote-community-pcm16-speaker-vectors-v2`，请求显式携带
-`max_speakers`，每个观察窗口最多 30 秒 PCM16。窗口局部标签经现有 SpeakerIdentity
-合并成整段身份。旧 broker 配置应停止后重新准备、切换；不保留 v1 兼容分支。
-说话人 CUDA 预约 3000 MiB，同样只是调度估算；WhisperX ASR/对齐仍不受 broker 显存预算控制。
-本轮真实 CPU 121.617375 秒录音通过 6 次 broker 请求，393 字无漏识别/重复，仍有两处同音字错误。
-
-简历分段需迁移 `0074`。已有简历保留原文、候选和版本；主动调用现有重新解析入口后生成
-对应当前版本的分段，不会悄悄触发历史简历的付费模型调用。新上传使用同一次解析请求生成分段。
+确认范围及模型调用成本后，才添加 `--execute` 执行，并使用返回的游标继续。不要通过删除用户原始资料来重建检索。

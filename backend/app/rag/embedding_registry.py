@@ -70,7 +70,7 @@ class EmbeddingProvider:
 
 # Small + stable provider catalog. Each new entry needs an API base + the
 # env var name that holds the key. Curated suggestions for which models
-# work where live in docs/providers.md, NOT in code.
+# work where live in .env.community.example, NOT in code.
 PROVIDERS: dict[str, EmbeddingProvider] = {
     "local": EmbeddingProvider(
         kind="local_huggingface",

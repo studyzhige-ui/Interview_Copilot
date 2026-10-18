@@ -1,193 +1,42 @@
 # Interview Copilot
 
-Interview Copilot is a local-first career copilot. It combines job-search
-tracking, mock interviews, recording analysis, resume/JD retrieval, durable
-artifacts, user Skills, and MCP tools. Automatic long-term memory production is disabled by default behind an
-evaluation gate. Recall of existing active memories is controlled separately
-by account and conversation settings.
+本地运行的求职与面试助手，支持岗位管理、简历与 JD 资料、模拟面试、录音复盘和对话助手。
 
-The repository ships one shared product core in two editions:
+## 启动方式
 
-- **Interview Copilot Cloud** — a hosted Web product. Users choose their answer
-  LLM, Skills, remote MCP servers, and voice; the operator manages internal
-  routing, background models, retrieval, and speech infrastructure.
-- **Interview Copilot Community** — the GitHub self-hosted edition. Developers
-  can replace providers, run local models, use custom endpoints, and enable
-  local stdio MCP.
+首次使用建议选择完整 Docker 容器模式。Windows 使用 Docker Desktop 的 Linux 容器；宿主运行模式使用 Linux 或 WSL2。
 
-[中文说明](docs/zh/README.md) ·
-[Documentation system](docs/README.md) ·
-[Career Agent OS blueprint](docs/architecture/career-agent-os-blueprint.md) ·
-[Architecture document status](docs/architecture/README.md) ·
-[Edition architecture](docs/architecture/editions.md)
-· [Codebase architecture](docs/architecture/codebase.md) ·
-[Product and systems audit](docs/reports/full-product-and-systems-audit-2026-08-04.md)
-
-## Verification status
-
-See the [current Web/Docker acceptance record](docs/implementation/web-release-acceptance-2026-10-12.md)
-for tested workflows, fixes and remaining limitations. Passing contract tests
-does not certify external OAuth connections, live speech quality or vendor
-billing. Model weights are downloaded by the operator and are not distributed
-with this repository. No Windows installer is provided for this release scope.
-
-## Core features
-
-- Mock interviews grounded in a resume and job description
-- Audio transcription, speaker-aware review, scoring, and skill radar
-- Hybrid RAG with PostgreSQL/pgvector, reranking, citations, and document lifecycle support
-- Per-user credentials and one answer-model preference shared by chat, Agent,
-  and mock interview
-- Long-running agent turns with reconnectable event streams and cancellation
-- User-scoped Skills and MCP servers with concrete Tool discovery, execution records, and current policy controls
-- PostgreSQL/pgvector, Redis/Celery, private local file storage, and optional S3
-
-## Quick start
-
-Choose one run mode and do not mix them in the same checkout.
-
-### Host development (Linux or WSL2)
-
-Native Windows users should use the [desktop launcher](desktop/README.md) with
-Docker Desktop or the full container stack below. The backend and Celery run in
-Linux. Use the Bash launchers below for host-backend development.
-
-Requirements: Python 3.11–3.13, Node.js 24 LTS, Docker, and an active Python
-virtual environment. The setup script installs dependencies, starts the local
-infrastructure, applies migrations, and installs the frontend packages.
-
-```bash
-bash ./scripts/setup.sh
-```
-
-The setup script asks which edition to configure. Community then asks for a
-model profile: lightweight remote, local/hybrid CPU, or local/hybrid CUDA. A
-local profile opens a per-capability model wizard and stores the selection in
-`.env`. Then use the matching daily launcher:
-
-```bash
-bash ./scripts/start.sh
-```
-
-Open `http://localhost:5173`.
-
-### Full container stack
-
-Copy the Community template, set a generated `SECRET_KEY` and the required
-provider keys, then start the Web services. Database migrations are built into
-this path. The lightweight image alone does not provide WhisperX speech;
-follow [local model deployment](docs/deployment/community.md#local-model-containers)
-for the local dependencies, weights and broker before testing audio.
-
-```bash
-cp .env.community.example .env
-docker compose --profile full up -d --wait
-```
-
-Open `http://localhost`. Runtime data and model caches are stored under
-`data/`; PostgreSQL/pgvector and Redis use Docker volumes. New files use
-`data/storage` by default. Optional S3 needs an explicit endpoint and credentials;
-existing S3 assets retain their original provider. Old MinIO volumes are not
-automatically migrated or deleted.
-
-See [Community deployment](docs/deployment/community.md) or
-[Cloud deployment](docs/deployment/cloud.md) for the complete contract.
-
-## Configuration
-
-Use one explicit edition template:
-
-```bash
-cp .env.community.example .env
-# or
-cp .env.cloud.example .env
-```
-
-`APP_EDITION` controls product permissions, not model location. A Community
-deployment may use cloud APIs; a Cloud operator may host models on its own
-servers. The edition decides what end users are allowed to configure.
-
-## Development
-
-Python dependencies have one source of truth in `pyproject.toml`:
-
-```bash
-# Cloud development
-python -m pip install -e ".[dev]"
-
-# Community development (lightweight remote-provider mode)
-python -m pip install -e ".[dev]"
-
-# Optional local embedding, parsing, reranking and speech stack
-python -m pip install -e ".[local,dev]"
-
-# Optional NVIDIA CUDA runtime
-python -m pip install --extra-index-url https://download.pytorch.org/whl/cu129 -e ".[local,cuda,dev]"
-
-# Optional quality evaluation
-python -m pip install -e ".[evaluation]"
-```
-
-```bash
-python -m pytest -q
-ruff format --check backend/app backend/tests evaluation scripts
-ruff check backend/app backend/tests evaluation scripts
-cd frontend
-npm run typecheck
-npm run lint
-npm run test:run
-npm run build
-```
-
-Release validation must not compete with locally running model services for
-GPU memory. Run broad backend groups serially with CUDA hidden, or use the
-current contract gate. Set the environment explicitly for its child processes:
+1. 安装 Git、Docker 和 Docker Compose v2，克隆仓库并进入项目目录。
+2. 复制配置模板。Windows PowerShell：
 
 ```powershell
-$env:CUDA_VISIBLE_DEVICES = "-1"
-$env:TOKENIZERS_PARALLELISM = "false"
-python evaluation/career_agent_os_eval.py
+Copy-Item .env.community.example .env
 ```
+
+Linux / WSL2：
 
 ```bash
-CUDA_VISIBLE_DEVICES=-1 TOKENIZERS_PARALLELISM=false \
-  python evaluation/career_agent_os_eval.py
+cp .env.community.example .env
 ```
 
-Do not launch overlapping full-suite `pytest` commands in the same checkout.
-Protocol-faithful provider tests do not require a GPU.
-The rebuilt coverage and explicit fixture requirements are listed in
-[the current test baseline](docs/implementation/current-test-baseline.md); it does
-not claim all historical Stage 0-5 or VS01 scenarios are covered.
-
-Database schema changes use Alembic:
+3. 编辑 `.env`：生成并填写稳定的 `SECRET_KEY`，修改 `POSTGRES_PASSWORD` 并同步 `DATABASE_URL`；填写 `DEEPSEEK_API_KEY`，以及默认检索服务需要的 `SILICONFLOW_API_KEY`。
+4. 启动：
 
 ```bash
-alembic upgrade head
+docker compose --profile full up -d --build --wait
 ```
 
-## Repository layout
+打开 **http://localhost**。首次构建需要联网下载镜像和依赖；默认轻量镜像不包含本地语音模型，录音功能需按部署指南另行准备。
 
-```text
-backend/app/       FastAPI application, domain services, and agent runtime
-backend/tests/     Backend test suite
-frontend/src/      React application
-alembic/           Database migrations
-evaluation/        Reproducible RAG/interview datasets, runners, and quality gates
-docs/              Product, experience, architecture, delivery, and user documentation
-scripts/           Setup, launch, maintenance, and model utilities
-pyproject.toml     Python dependencies, package metadata, and tool configuration
-docker-compose.yml Community infrastructure and full local stack
-```
+## 使用帮助
 
-See [Codebase architecture](docs/architecture/codebase.md) for module ownership
-and dependency direction.
+- [完整启动指南与常见故障](docs/getting-started.md)
+- [功能使用说明](docs/usage.md)
+- [Community 配置、模型、数据备份与升级](docs/deployment/community.md)
+- [本地模型安装和启动](docs/deployment/local-first.md)
+- [Windows 桌面应用帮助](desktop/README.md)
+- [Cloud 部署配置](docs/deployment/cloud.md)
 
-## Security boundary
+停止服务使用 `docker compose --profile full down`，此命令保留数据卷。不要用 `down --volumes` 代替日常停止。
 
-Cloud accepts remote Streamable HTTP MCP only and ignores stored custom provider
-endpoints. Community can expose local processes only when the operator
-explicitly enables `MCP_ALLOW_STDIO`. User credentials are encrypted at rest
-and are never returned by read APIs.
-
-Do not commit `.env`, production credentials, recordings, or user documents.
+`.env`、密钥、录音和用户资料只保存在本地，不要提交。开发、架构、评测与实施记录不随 main 分发；程序运行模板和第三方许可仍随源码保留。

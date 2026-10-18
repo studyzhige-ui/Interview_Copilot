@@ -1,2 +1,0 @@
-npm notice run interview-copilot-frontend@0.1.0 typecheck
-npm notice run tsc -b --noEmit
